@@ -21,7 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { UserAccount } from "@/modules/hr/accounts";
 import type { Position } from "@/modules/hr/roles";
 import { isWorkerPosition, positions } from "@/modules/hr/roles";
-import { attendanceSlots, getSlotWindow, isSlotOpen } from "@/modules/attendance/compensationRules";
+import { attendanceSlots, getSlotWindow, isSlotOpen, getRequiredApprovals } from "@/modules/attendance/compensationRules";
 import type { AttendanceSlot } from "@/modules/attendance/types";
 import {
   buildOrder,
@@ -73,16 +73,28 @@ export function OrderDashboard({
   accounts, 
   position, 
   currentUserName,
+  currentAccountId,
+  currentAccountLevel,
   orders,
   setOrders,
-  overtimeRequests = []
+  overtimeRequests = [],
+  compensationRequests = [],
+  onCompensationRequestsChange,
+  attendance = {},
+  onAttendanceChange
 }: { 
   accounts: UserAccount[]; 
   position: Position; 
   currentUserName: string;
+  currentAccountId: string;
+  currentAccountLevel: any;
   orders: Order[];
   setOrders: Dispatch<SetStateAction<Order[]>>;
   overtimeRequests: any[];
+  compensationRequests: any[];
+  onCompensationRequestsChange: (reqs: any[]) => void;
+  attendance: Record<string, string>;
+  onAttendanceChange: (att: Record<string, string>) => void;
 }) {
   const [showArchived, setShowArchived] = useState(false);
   const visibleOrders = useMemo(() => {
@@ -102,10 +114,16 @@ export function OrderDashboard({
   if (isWorkerPosition(position.id)) {
     return (
       <WorkerWorkspace 
-        currentUserName={currentUserName} 
+        currentUserName={currentUserName}
+        currentAccountId={currentAccountId}
+        currentAccountLevel={currentAccountLevel}
         orders={visibleOrders} 
         setOrders={setOrders} 
         overtimeRequests={overtimeRequests}
+        compensationRequests={compensationRequests}
+        onCompensationRequestsChange={onCompensationRequestsChange}
+        attendance={attendance}
+        onAttendanceChange={onAttendanceChange}
       />
     );
   }
@@ -843,14 +861,26 @@ function TransitionSummary({ order }: { order: Order }) {
 
 function WorkerWorkspace({ 
   currentUserName, 
+  currentAccountId,
+  currentAccountLevel,
   orders, 
   setOrders,
-  overtimeRequests 
+  overtimeRequests,
+  compensationRequests = [],
+  onCompensationRequestsChange,
+  attendance,
+  onAttendanceChange
 }: { 
   currentUserName: string; 
+  currentAccountId: string;
+  currentAccountLevel: any;
   orders: Order[]; 
   setOrders: Dispatch<SetStateAction<Order[]>>;
   overtimeRequests: any[];
+  compensationRequests: any[];
+  onCompensationRequestsChange: (reqs: any[]) => void;
+  attendance: Record<string, string>;
+  onAttendanceChange: (att: Record<string, string>) => void;
 }) {
   const [mounted, setMounted] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
@@ -868,7 +898,21 @@ function WorkerWorkspace({
   const [cameraReady, setCameraReady] = useState(false);
   const [reportedDoneIds, setReportedDoneIds] = useState<string[]>([]);
   const monthDays = useMemo(() => getCurrentMonthDaysForWorker(), []);
-  const [attendance, setAttendance] = useState<Record<string, WorkerAttendanceKind>>(() => buildWorkerAttendance(monthDays));
+  
+  const workerAttendance = useMemo(() => {
+    const data: Record<string, WorkerAttendanceKind> = {};
+    monthDays.forEach((day) => {
+      const d = day.getDate();
+      attendanceSlots.forEach((slot) => {
+        const key = `${currentAccountId}-${d}-${slot}`;
+        if (attendance[key]) {
+          data[`${d}-${slot}`] = attendance[key] as WorkerAttendanceKind;
+        }
+      });
+    });
+    return data;
+  }, [attendance, currentAccountId, monthDays]);
+
   const [clockMessage, setClockMessage] = useState("");
   const workerOrders = orders;
   const selectedOrder = workerOrders.find((order) => order.id === selectedOrderId) ?? workerOrders[0];
@@ -891,8 +935,8 @@ function WorkerWorkspace({
 
   const today = new Date().getDate();
   const hasClockedInCurrentSlot = useMemo(() => {
-    return attendance[`${today}-${currentSlot}`] === "normal" || attendance[`${today}-${currentSlot}`] === "compensated";
-  }, [attendance, today, currentSlot]);
+    return workerAttendance[`${today}-${currentSlot}`] === "normal" || workerAttendance[`${today}-${currentSlot}`] === "compensated";
+  }, [workerAttendance, today, currentSlot]);
 
   // Lọc các mốc thiếu công thông minh (không giới hạn 3 ngày nữa)
   const missingSlots = useMemo(() => {
@@ -904,7 +948,7 @@ function WorkerWorkspace({
       attendanceSlots.forEach((slot) => {
         const key = `${day.getDate()}-${slot}`;
         // Nếu chưa chấm công thành công (normal) hoặc chấm công bù (compensated)
-        if (!attendance[key]) {
+        if (!workerAttendance[key]) {
           const isIgnored = false; // Bỏ giới hạn khóa 3 ngày
           list.push({
             date: `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`,
@@ -915,12 +959,11 @@ function WorkerWorkspace({
       });
     });
     return list;
-  }, [monthDays, attendance]);
+  }, [monthDays, workerAttendance]);
 
-  const hasMissingAndClockedIn = useMemo(() => {
-    const actualMissingCount = missingSlots.filter(item => !item.isIgnored).length;
-    return actualMissingCount > 0 && hasClockedInCurrentSlot;
-  }, [missingSlots, hasClockedInCurrentSlot]);
+  const hasMissing = useMemo(() => {
+    return missingSlots.filter(item => !item.isIgnored).length > 0;
+  }, [missingSlots]);
 
   // Quản lý Modal Chấm Công Bù Thông Minh
   const [compOpen, setCompOpen] = useState(false);
@@ -928,39 +971,59 @@ function WorkerWorkspace({
   const [selectedCompSlots, setSelectedCompSlots] = useState<Array<{ date: string; slot: AttendanceSlot }>>([]);
 
   function markAttendance(kind: WorkerAttendanceKind, day = new Date().getDate(), slot = currentSlot) {
-    setAttendance((current) => ({ ...current, [`${day}-${slot}`]: kind }));
+    const key = `${currentAccountId}-${day}-${slot}`;
+    onAttendanceChange({ ...attendance, [key]: kind });
   }
 
   function submitCompensations() {
     if (selectedCompSlots.length === 0 || !compReason.trim()) return;
 
-    // Ghi nhận chấm công bù
-    setAttendance(current => {
-      const next = { ...current };
-      selectedCompSlots.forEach(item => {
-        const day = Number(item.date.split("-")[2]);
-        next[`${day}-${item.slot}`] = "compensated";
-      });
-      return next;
+    // Group selected slots by date
+    const grouped: Record<string, AttendanceSlot[]> = {};
+    selectedCompSlots.forEach(item => {
+      if (!grouped[item.date]) {
+        grouped[item.date] = [];
+      }
+      grouped[item.date].push(item.slot);
     });
+
+    const submissionSize = selectedCompSlots.length;
+    const requiredApprovals = getRequiredApprovals(currentAccountLevel, submissionSize);
+
+    const newRequests = Object.entries(grouped).map(([date, slots], idx) => {
+      return {
+        id: `comp-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`,
+        employeeId: currentAccountId,
+        employeeName: currentUserName,
+        employeePositionLevel: currentAccountLevel,
+        date,
+        slots,
+        reason: compReason.trim(),
+        missingCountInMonth: submissionSize,
+        requiredApprovals,
+        approvals: [],
+        status: "pending",
+        createdAt: new Date().toISOString()
+      };
+    });
+
+    onCompensationRequestsChange([...newRequests, ...compensationRequests]);
 
     setCompOpen(false);
     setSelectedCompSlots([]);
     setCompReason("");
 
-    // Tính toán cấp phê duyệt
-    const totalMissing = missingSlots.length;
     let approvalText = "Nhân sự xác nhận";
-    if (totalMissing > 8) {
-      approvalText = "Nhân sự, Quản lý và Giám đốc xác nhận (do trên 8 mốc thiếu)";
-    } else if (totalMissing >= 4) {
-      approvalText = "Nhân sự và Quản lý xác nhận (do từ 4-8 mốc thiếu)";
+    if (submissionSize > 8) {
+      approvalText = "Nhân sự, Quản lý và Giám đốc xác nhận (do trên 8 mốc trong đơn này)";
+    } else if (submissionSize >= 4) {
+      approvalText = "Nhân sự và Quản lý xác nhận (do từ 4-8 mốc trong đơn này)";
     }
 
     // Hiển thị chính xác thông báo thành công theo mẫu
     alert(
       `Yêu cầu chấm công bù của bạn đã được gửi đi.\n` +
-      `● Số mốc đăng ký bù: ${selectedCompSlots.length} mốc\n` +
+      `● Số mốc đăng ký bù: ${submissionSize} mốc\n` +
       `● Cấp phê duyệt cần thiết: ${approvalText}\n\n` +
       `Nếu không được xác nhận, liên hệ với nhân sự và quản lý để được xác nhận nhé.\n` +
       `Sau bạn nhớ chấm công đúng giờ để đảm bảo quyền lợi của mình.\n` +
@@ -1155,7 +1218,7 @@ function WorkerWorkspace({
               <LegendDot color="bg-slate-300" label="Thiếu công" />
             </div>
           </div>
-          {hasMissingAndClockedIn && (
+          {hasMissing && (
             <button 
               className="min-h-10 rounded-lg border border-blue-300 bg-blue-50 px-4 text-sm font-black text-blue-700 hover:bg-blue-100 transition animate-pulse" 
               onClick={() => setCompOpen(true)} 
@@ -1165,7 +1228,7 @@ function WorkerWorkspace({
             </button>
           )}
         </div>
-        <WorkerAttendanceGrid monthDays={monthDays} attendance={attendance} />
+        <WorkerAttendanceGrid monthDays={monthDays} attendance={workerAttendance} />
       </div>
 
       {flowIndex !== null ? (

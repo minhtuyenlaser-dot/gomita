@@ -55,6 +55,37 @@ export default function HomePage() {
   const [toast, setToast] = useState("");
   const [currentSystemTime, setCurrentSystemTime] = useState(() => new Date());
 
+  // Khôi phục phiên đăng nhập từ localStorage khi F5
+  useEffect(() => {
+    const savedSession = localStorage.getItem("gomita_web_session_v3");
+    if (savedSession) {
+      try {
+        const session = JSON.parse(savedSession);
+        setCurrentAccount(session.account);
+        setPositionId(session.positionId);
+        setActiveModule(session.activeModule || "orders");
+      } catch (e) {
+        console.error("Lỗi khôi phục phiên đăng nhập:", e);
+      }
+    }
+  }, []);
+
+  // Tự động ghi nhớ phiên làm việc vào localStorage khi thay đổi
+  useEffect(() => {
+    if (currentAccount) {
+      localStorage.setItem(
+        "gomita_web_session_v3",
+        JSON.stringify({ 
+          account: currentAccount, 
+          positionId, 
+          activeModule 
+        })
+      );
+    } else {
+      localStorage.removeItem("gomita_web_session_v3");
+    }
+  }, [currentAccount, positionId, activeModule]);
+
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentSystemTime(new Date());
@@ -206,14 +237,20 @@ export default function HomePage() {
         <OrderDashboard 
           accounts={accounts} 
           currentUserName={currentAccount.displayName} 
+          currentAccountId={currentAccount.id}
+          currentAccountLevel={currentPosition.level}
           position={currentPosition} 
           orders={orders}
           setOrders={setOrders}
           overtimeRequests={overtimeRequests}
+          compensationRequests={compensationRequests}
+          onCompensationRequestsChange={setCompensationRequests}
+          attendance={attendance}
+          onAttendanceChange={setAttendance}
         />
       )}
-      {activeModule === "profile" && <ProfileDashboard account={currentAccount} accounts={accounts} position={currentPosition} overtimeRequests={overtimeRequests} />}
-      {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} />}
+      {activeModule === "profile" && <ProfileDashboard account={currentAccount} accounts={accounts} position={currentPosition} overtimeRequests={overtimeRequests} attendance={attendance} />}
+      {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} attendance={attendance} />}
       {activeModule === "attendance" && (
         <AttendanceDashboard 
           position={currentPosition}

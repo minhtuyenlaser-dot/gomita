@@ -5,35 +5,61 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
 import type { Position } from "../roles";
-import { attendanceSlots, isSlotOpen } from "@/modules/attendance/compensationRules";
 
-type AttendanceKind = "normal" | "compensated";
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
-
 const slots: Slot[] = ["07:30", "11:30", "13:30", "17:30"];
 
 export function ProfileDashboard({ 
   account, 
   position, 
-  overtimeRequests = [] 
+  overtimeRequests = [],
+  attendance = {}
 }: { 
   account: UserAccount; 
   accounts?: UserAccount[]; 
   position: Position; 
   overtimeRequests?: any[]; 
+  attendance?: Record<string, string>;
 }) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const [accountOpen, setAccountOpen] = useState(false);
   const [username, setUsername] = useState(account.username);
   const [password, setPassword] = useState(account.password);
-  const [attendance, setAttendance] = useState<Record<string, AttendanceKind>>(() => buildInitialAttendance(monthDays));
   const [message, setMessage] = useState("");
   const today = new Date().getDate();
-  const expectedDays = monthDays.filter((day) => day.getDay() !== 0 && day.getDate() <= today).length;
-  const workDays = countCompleteDays(monthDays, attendance);
+
+  // Số ngày công tối đa trong tháng (Loại trừ Chủ Nhật)
+  const maxWorkDays = useMemo(() => {
+    return monthDays.filter((day) => day.getDay() !== 0).length;
+  }, [monthDays]);
+
+  // Số ngày cần làm việc đến hôm nay (Loại trừ Chủ Nhật)
+  const expectedDays = useMemo(() => {
+    return monthDays.filter((day) => day.getDay() !== 0 && day.getDate() <= today).length;
+  }, [monthDays, today]);
+
+  // Đếm ngày công thực tế từ Database chấm công thật (4 mốc = 1.0 công, 2-3 mốc = 0.5 công, 0-1 mốc = 0 công)
+  const workDays = useMemo(() => {
+    let total = 0;
+    monthDays.forEach((day) => {
+      if (day.getDay() === 0 || day.getDate() > today) return;
+      const dayNum = day.getDate();
+      let checkedCount = 0;
+      slots.forEach((slot) => {
+        const key = `${account.id}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          checkedCount++;
+        }
+      });
+      if (checkedCount === 4) total += 1.0;
+      else if (checkedCount >= 2) total += 0.5;
+    });
+    return total;
+  }, [monthDays, attendance, account.id, today]);
+
   const totalHours = workDays * 8;
   
-  // Tính tổng giờ tăng ca thực tế đã duyệt của tháng này
+  // Tính tổng giờ tăng ca thực tế đã duyệt của tháng này từ Database
   const overtime = useMemo(() => {
     const now = new Date();
     const currentMonth = now.getMonth();
@@ -52,43 +78,19 @@ export function ProfileDashboard({
   const salaryType = account.salaryType ?? "daily";
   const salaryValue = account.salaryValue ?? (position.id === "hr" ? 420000 : position.id === "accountant" ? 400000 : 350000);
 
+  // Thu nhập tạm tính động:
+  // - Lương tháng: Lương tháng / (Số ngày công tối đa) * Số ngày công đã chấm
+  // - Lương ngày: Số ngày công * Lương ngày + Giờ tăng ca * 1.5 * (Lương ngày / 8)
   const estimatedIncome = useMemo(() => {
     if (salaryType === "monthly") {
-      return salaryValue;
+      return maxWorkDays ? (salaryValue / maxWorkDays) * workDays : 0;
     }
     const base = workDays * salaryValue;
     const otPay = overtime * 1.5 * (salaryValue / 8);
     return base + otPay;
-  }, [salaryType, salaryValue, workDays, overtime]);
+  }, [salaryType, salaryValue, workDays, overtime, maxWorkDays]);
 
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
-
-  // Tính số lượng mốc thiếu công trong tháng thực tế
-  const missingSlotsCount = useMemo(() => {
-    let count = 0;
-    monthDays.forEach((day) => {
-      if (day.getDay() === 0 || day.getDate() > today) return;
-      slots.forEach((slot) => {
-        if (!attendance[`${day.getDate()}-${slot}`]) count++;
-      });
-    });
-    return count;
-  }, [monthDays, attendance, today]);
-
-  // Kiểm tra xem đã chấm công cho mốc hiện tại chưa
-  const currentSlot = useMemo(() => attendanceSlots.find((slot) => isSlotOpen(slot)), []);
-  const hasClockedInCurrentSlot = useMemo(() => {
-    if (!currentSlot) return true; // Ngoài khung giờ thì mặc định cho phép hiện nút
-    return attendance[`${today}-${currentSlot}`] === "normal" || attendance[`${today}-${currentSlot}`] === "compensated";
-  }, [attendance, today, currentSlot]);
-
-  function clockIn(slot: Slot) {
-    const key = `${today}-${slot}`;
-    setAttendance((current) => ({ ...current, [key]: "normal" }));
-    setMessage(`Đã chấm công mốc ${slot} hôm nay và cập nhật vào bảng công.`);
-  }
-
-
 
   return (
     <section className="grid gap-5">
@@ -125,7 +127,7 @@ export function ProfileDashboard({
         <Metric title="Tổng công trong tháng" value={`${workDays} / ${expectedDays}`} sub={`${workRate}%`} tone="green" />
         <Metric title="Số giờ làm việc" value={totalHours.toString()} sub="giờ" tone="violet" />
         <Metric title="Tăng ca (OT)" value={overtime.toString()} sub="giờ" tone="orange" />
-        <Metric title="Thu nhập tạm tính" value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} sub={salaryType === "monthly" ? "Lương tháng cố định" : "Lương ngày + Tăng ca"} tone="green" />
+        <Metric title="Thu nhập tạm tính" value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} sub={salaryType === "monthly" ? "Tạm tính (Lương tháng / ngày công)" : "Tạm tính (Lương ngày + Tăng ca)"} tone="green" />
         <Metric title="Nghỉ phép" value="1" sub="ngày" tone="blue" />
       </div>
 
@@ -134,21 +136,16 @@ export function ProfileDashboard({
           <div>
             <h2 className="text-xl font-black">Bảng chấm công tháng {new Date().getMonth() + 1} năm {new Date().getFullYear()}</h2>
             <div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-slate-500">
-              <Legend color="bg-green-500" label="Đã chấm" />
+              <Legend color="bg-green-500" label="Đã chấm thành công" />
               <Legend color="bg-blue-500" label="Chấm công bù" />
-              <Legend color="bg-slate-300" label="Chưa chấm" />
+              <Legend color="bg-slate-300" label="Chưa chấm / Thiếu công" />
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {slots.map((slot) => (
-              <button key={slot} className="min-h-10 rounded-lg bg-orange-500 px-3 text-sm font-black text-white" onClick={() => clockIn(slot)} type="button">
-                Chấm {slot}
-              </button>
-            ))}
             <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black" type="button"><Download className="h-4 w-4" />Tải bảng công</button>
           </div>
         </div>
-        <AttendanceGrid monthDays={monthDays} attendance={attendance} />
+        <AttendanceGrid monthDays={monthDays} attendance={attendance} accountId={account.id} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
@@ -188,18 +185,42 @@ export function ProfileDashboard({
 
 export function CompanyPayrollDashboard({ 
   accounts, 
-  overtimeRequests = [] 
+  overtimeRequests = [],
+  attendance = {}
 }: { 
   accounts: UserAccount[]; 
   overtimeRequests?: any[]; 
+  attendance?: Record<string, string>;
 }) {
-  const monthDays = getCurrentMonthDays();
+  const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const now = new Date();
   const currentMonth = now.getMonth();
   const currentYear = now.getFullYear();
 
-  const rows = accounts.filter((account) => account.status === "active" && !account.positionIds.includes("director")).map((account, index) => {
-    const marks = monthDays.map((day) => day.getDay() === 0 ? "" : (day.getDate() + index) % 7 === 0 ? "/" : "X");
+  // Tổng số ngày công tối đa trong tháng (Loại trừ Chủ Nhật)
+  const maxWorkDays = useMemo(() => {
+    return monthDays.filter((day) => day.getDay() !== 0).length;
+  }, [monthDays]);
+
+  const rows = accounts.filter((account) => account.status === "active" && !account.positionIds.includes("director")).map((account) => {
+    // Đọc công thật 100% từ database, loại bỏ hoàn toàn dấu công fake của bản cũ
+    const marks = monthDays.map((day) => {
+      if (day.getDay() === 0) return ""; // Chủ Nhật không tính
+      
+      const dayNum = day.getDate();
+      let checkedCount = 0;
+      slots.forEach(slot => {
+        const key = `${account.id}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          checkedCount++;
+        }
+      });
+
+      if (checkedCount === 4) return "X";  // Đủ 4 mốc = 1 công
+      if (checkedCount >= 2) return "/";   // Chấm 2 hoặc 3 mốc = 0.5 công
+      return "";                           // Thiếu mốc = 0 công
+    });
+
     const work = marks.reduce((total, mark) => total + (mark === "X" ? 1 : mark === "/" ? 0.5 : 0), 0);
     
     // Giờ tăng ca (OT) trong tháng hiện tại
@@ -215,9 +236,12 @@ export function CompanyPayrollDashboard({
     const salaryType = account.salaryType ?? "daily";
     const salaryValue = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);
     
+    // Thu nhập tạm tính động:
+    // - Lương tháng: Lương tháng / (Số ngày công tối đa) * Số ngày công đã chấm
+    // - Lương ngày: Số ngày công * Lương ngày + Giờ tăng ca * 1.5 * (Lương ngày / 8)
     let totalIncome = 0;
     if (salaryType === "monthly") {
-      totalIncome = salaryValue;
+      totalIncome = maxWorkDays ? (salaryValue / maxWorkDays) * work : 0;
     } else {
       totalIncome = (work * salaryValue) + (otHours * 1.5 * (salaryValue / 8));
     }
@@ -229,7 +253,7 @@ export function CompanyPayrollDashboard({
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-5 py-4">
         <h2 className="text-xl font-black">Bảng lương công ty</h2>
-        <p className="text-sm text-slate-500">Công từng ngày, tổng công, giờ tăng ca, hình thức, mức lương và tổng thu nhập thực nhận.</p>
+        <p className="text-sm text-slate-500">Tính toán động từ mốc chấm công thật: Đủ 4 mốc = 1.0 công (X); 2 hoặc 3 mốc = 0.5 công (/); Dưới 2 mốc = 0.0 công.</p>
       </div>
       <div className="overflow-x-auto">
         <div className="min-w-[1980px]">
@@ -264,7 +288,15 @@ export function CompanyPayrollDashboard({
   );
 }
 
-function AttendanceGrid({ monthDays, attendance }: { monthDays: Date[]; attendance: Record<string, AttendanceKind> }) {
+function AttendanceGrid({ 
+  monthDays, 
+  attendance, 
+  accountId 
+}: { 
+  monthDays: Date[]; 
+  attendance: Record<string, string>; 
+  accountId: string;
+}) {
   return (
     <div className="overflow-x-auto">
       <div className="min-w-[1240px]">
@@ -276,8 +308,13 @@ function AttendanceGrid({ monthDays, attendance }: { monthDays: Date[]; attendan
           <div key={slot} className="grid items-center border-b border-slate-100 px-4 py-3 text-sm" style={{ gridTemplateColumns: `110px repeat(${monthDays.length}, 36px)` }}>
             <div className="font-black">{slot}</div>
             {monthDays.map((day) => {
-              const kind = attendance[`${day.getDate()}-${slot}`];
-              return <div key={`${day.toISOString()}-${slot}`} className="grid place-items-center"><span className={`h-3 w-3 rounded-full ${kind === "normal" ? "bg-green-500" : kind === "compensated" ? "bg-blue-500" : "bg-slate-300"}`} /></div>;
+              const key = `${accountId}-${day.getDate()}-${slot}`;
+              const kind = attendance[key];
+              return (
+                <div key={`${day.toISOString()}-${slot}`} className="grid place-items-center">
+                  <span className={`h-3 w-3 rounded-full ${kind === "normal" ? "bg-green-500" : kind === "compensated" ? "bg-blue-500" : "bg-slate-300"}`} />
+                </div>
+              );
             })}
           </div>
         ))}
@@ -285,24 +322,6 @@ function AttendanceGrid({ monthDays, attendance }: { monthDays: Date[]; attendan
     </div>
   );
 }
-
-function buildInitialAttendance(days: Date[]) {
-  const data: Record<string, AttendanceKind> = {};
-  const today = new Date().getDate();
-  days.forEach((day) => {
-    if (day.getDay() === 0 || day.getDate() > today) return;
-    slots.forEach((slot) => {
-      if ((day.getDate() + slot.length) % 9 !== 0) data[`${day.getDate()}-${slot}`] = "normal";
-    });
-  });
-  return data;
-}
-
-function countCompleteDays(days: Date[], attendance: Record<string, AttendanceKind>) {
-  return days.filter((day) => day.getDay() !== 0 && day.getDate() <= new Date().getDate() && slots.every((slot) => attendance[`${day.getDate()}-${slot}`])).length;
-}
-
-
 
 function getCurrentMonthDays() {
   const now = new Date();
