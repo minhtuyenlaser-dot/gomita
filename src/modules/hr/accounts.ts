@@ -8,6 +8,8 @@ export type UserAccount = {
   department: string;
   positionIds: string[];
   status: AccountStatus;
+  salaryType?: "daily" | "monthly";
+  salaryValue?: number;
 };
 
 export const demoAccounts: UserAccount[] = [

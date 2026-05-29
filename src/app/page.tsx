@@ -130,8 +130,8 @@ export default function HomePage() {
           overtimeRequests={overtimeRequests}
         />
       )}
-      {activeModule === "profile" && <ProfileDashboard account={currentAccount} accounts={accounts} position={currentPosition} />}
-      {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} />}
+      {activeModule === "profile" && <ProfileDashboard account={currentAccount} accounts={accounts} position={currentPosition} overtimeRequests={overtimeRequests} />}
+      {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} />}
       {activeModule === "finance" && (
         <FinanceDashboard 
           orders={orders} 

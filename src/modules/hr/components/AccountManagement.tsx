@@ -6,7 +6,7 @@ import type { UserAccount } from "../accounts";
 import { hasDuplicateUsername, validateAccount } from "../accounts";
 import { positions } from "../roles";
 
-type Draft = Pick<UserAccount, "displayName" | "username" | "password" | "department" | "positionIds">;
+type Draft = Pick<UserAccount, "displayName" | "username" | "password" | "department" | "positionIds" | "salaryType" | "salaryValue">;
 
 const departments = ["Giám đốc", "Phòng Sale", "Phòng Thiết kế", "Xưởng", "Giám sát", "Kế toán", "Nhân sự"];
 
@@ -15,7 +15,9 @@ const emptyDraft: Draft = {
   username: "",
   password: "",
   department: "Nhân sự",
-  positionIds: []
+  positionIds: [],
+  salaryType: "daily",
+  salaryValue: 350000
 };
 
 export function AccountManagement({
@@ -40,6 +42,9 @@ export function AccountManagement({
     if (hasDuplicateUsername(accounts, draft.username, editingId)) {
       issues.push("Tên đăng nhập đã tồn tại. Vui lòng chọn tên khác.");
     }
+    if (draft.salaryValue === undefined || isNaN(draft.salaryValue) || draft.salaryValue <= 0) {
+      issues.push("Mức lương phải là một số lớn hơn 0.");
+    }
     if (issues.length) {
       setMessage(issues.join(" "));
       return;
@@ -49,7 +54,8 @@ export function AccountManagement({
       ...draft,
       displayName: draft.displayName.trim(),
       username: draft.username.trim().toLowerCase(),
-      password: draft.password.trim()
+      password: draft.password.trim(),
+      salaryValue: Number(draft.salaryValue)
     };
 
     if (editingId) {
@@ -79,7 +85,9 @@ export function AccountManagement({
       username: account.username,
       password: account.password,
       department: account.department,
-      positionIds: account.positionIds
+      positionIds: account.positionIds,
+      salaryType: account.salaryType ?? "daily",
+      salaryValue: account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000)
     });
     setMessage(`Đang sửa tài khoản ${account.displayName}.`);
   }
@@ -124,13 +132,18 @@ export function AccountManagement({
 
         {canEdit ? (
           <>
-            <div className="grid gap-3 md:grid-cols-5">
+            <div className="grid gap-3 md:grid-cols-7">
               <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" placeholder="Tên hiển thị *" value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} />
               <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" placeholder="Tên đăng nhập *" value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} />
               <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" placeholder="Mật khẩu *" value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} />
-              <select className="h-11 rounded-lg border border-slate-200 px-3" value={draft.department} onChange={(event) => setDraft({ ...draft, department: event.target.value })}>
+              <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white" value={draft.department} onChange={(event) => setDraft({ ...draft, department: event.target.value })}>
                 {departments.map((department) => <option key={department}>{department}</option>)}
               </select>
+              <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold text-slate-700" value={draft.salaryType || "daily"} onChange={(event) => setDraft({ ...draft, salaryType: event.target.value as "daily" | "monthly" })}>
+                <option value="daily">Lương ngày</option>
+                <option value="monthly">Lương tháng</option>
+              </select>
+              <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400 font-bold" type="number" placeholder="Mức lương (VNĐ) *" value={draft.salaryValue ?? ""} onChange={(event) => setDraft({ ...draft, salaryValue: event.target.value === "" ? undefined : Number(event.target.value) })} />
               <button className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 font-black text-white" onClick={saveAccount} type="button">
                 {editingId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
                 {editingId ? "Lưu sửa" : "Tạo tài khoản"}
@@ -173,51 +186,60 @@ export function AccountManagement({
 
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="min-w-[920px]">
-        <div className="grid grid-cols-[1.2fr_1fr_1.4fr_0.8fr_1.4fr] bg-slate-50 px-4 py-3 text-sm font-black text-slate-600">
+        <div className="grid grid-cols-[1.2fr_0.9fr_1.1fr_1.2fr_0.8fr_1.4fr] bg-slate-50 px-4 py-3 text-sm font-black text-slate-600">
           <div>Nhân sự</div>
           <div>Đăng nhập</div>
+          <div>Lương</div>
           <div>Chức vụ</div>
           <div>Trạng thái</div>
           <div>Thao tác</div>
         </div>
-        {accounts.map((account) => (
-          <div key={account.id} className="grid grid-cols-[1.2fr_1fr_1.4fr_0.8fr_1.4fr] items-center border-t border-slate-200 px-4 py-4 text-sm">
-            <div>
-              <div className="font-black">{account.displayName}</div>
-              <div className="text-slate-500">{account.department}</div>
-            </div>
-            <div>
-              <div>{account.username}</div>
-              <div className="text-slate-500">Mật khẩu có thể đổi</div>
-            </div>
-            <div>{account.positionIds.map((id) => positions.find((position) => position.id === id)?.name ?? id).join(", ")}</div>
-            <div className="font-bold">{account.status === "active" ? "Hoạt động" : account.status === "locked" ? "Đã khóa" : "Chờ Giám đốc"}</div>
-            <div className="flex flex-wrap gap-2">
-              {account.status === "pending_admin" && canApprove ? (
-                <button className="flex min-h-10 items-center gap-2 rounded-lg border border-green-500 px-3 font-bold text-green-600" onClick={() => approve(account.id)} type="button">
-                  <Save className="h-4 w-4" />
-                  Duyệt
-                </button>
-              ) : null}
-              {canEdit ? (
-                <>
-                  <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 font-bold" onClick={() => startEdit(account)} type="button">
-                    <Edit3 className="h-4 w-4" />
-                    Sửa
+        {accounts.map((account) => {
+          const typeLabel = account.salaryType === "monthly" ? "Lương tháng" : "Lương ngày";
+          const fallbackVal = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);
+          return (
+            <div key={account.id} className="grid grid-cols-[1.2fr_0.9fr_1.1fr_1.2fr_0.8fr_1.4fr] items-center border-t border-slate-200 px-4 py-4 text-sm">
+              <div>
+                <div className="font-black">{account.displayName}</div>
+                <div className="text-slate-500">{account.department}</div>
+              </div>
+              <div>
+                <div>{account.username}</div>
+                <div className="text-slate-500">Mật khẩu có thể đổi</div>
+              </div>
+              <div>
+                <div className="font-bold text-slate-900">{fallbackVal.toLocaleString("vi-VN")} đ</div>
+                <div className="text-xs text-slate-500 font-bold">{typeLabel}</div>
+              </div>
+              <div>{account.positionIds.map((id) => positions.find((position) => position.id === id)?.name ?? id).join(", ")}</div>
+              <div className="font-bold">{account.status === "active" ? "Hoạt động" : account.status === "locked" ? "Đã khóa" : "Chờ Giám đốc"}</div>
+              <div className="flex flex-wrap gap-2">
+                {account.status === "pending_admin" && canApprove ? (
+                  <button className="flex min-h-10 items-center gap-2 rounded-lg border border-green-500 px-3 font-bold text-green-600" onClick={() => approve(account.id)} type="button">
+                    <Save className="h-4 w-4" />
+                    Duyệt
                   </button>
-                  <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 font-bold" onClick={() => toggleLock(account.id)} type="button">
-                    {account.status === "locked" ? <Lock className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
-                    {account.status === "locked" ? "Mở khóa" : "Khóa"}
-                  </button>
-                  <button className="flex min-h-10 items-center gap-2 rounded-lg border border-red-200 px-3 font-bold text-red-600 disabled:cursor-not-allowed disabled:opacity-50" disabled={account.id === currentAccountId || account.positionIds.includes("director")} onClick={() => deleteAccount(account)} type="button">
-                    <Trash2 className="h-4 w-4" />
-                    Xóa
-                  </button>
-                </>
-              ) : null}
+                ) : null}
+                {canEdit ? (
+                  <>
+                    <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 font-bold" onClick={() => startEdit(account)} type="button">
+                      <Edit3 className="h-4 w-4" />
+                      Sửa
+                    </button>
+                    <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 font-bold" onClick={() => toggleLock(account.id)} type="button">
+                      {account.status === "locked" ? <Lock className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                      {account.status === "locked" ? "Mở khóa" : "Khóa"}
+                    </button>
+                    <button className="flex min-h-10 items-center gap-2 rounded-lg border border-red-200 px-3 font-bold text-red-600 disabled:cursor-not-allowed disabled:opacity-50" disabled={account.id === currentAccountId || account.positionIds.includes("director")} onClick={() => deleteAccount(account)} type="button">
+                      <Trash2 className="h-4 w-4" />
+                      Xóa
+                    </button>
+                  </>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         </div>
       </div>
     </section>

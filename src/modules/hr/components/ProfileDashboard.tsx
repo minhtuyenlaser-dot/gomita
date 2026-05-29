@@ -12,7 +12,16 @@ type Slot = "07:30" | "11:30" | "13:30" | "17:30";
 
 const slots: Slot[] = ["07:30", "11:30", "13:30", "17:30"];
 
-export function ProfileDashboard({ account, position }: { account: UserAccount; accounts: UserAccount[]; position: Position }) {
+export function ProfileDashboard({ 
+  account, 
+  position, 
+  overtimeRequests = [] 
+}: { 
+  account: UserAccount; 
+  accounts?: UserAccount[]; 
+  position: Position; 
+  overtimeRequests?: any[]; 
+}) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const [accountOpen, setAccountOpen] = useState(false);
   const [username, setUsername] = useState(account.username);
@@ -24,7 +33,35 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
   const workDays = countCompleteDays(monthDays, attendance);
   const missing = findMissingSlot(monthDays, attendance);
   const totalHours = workDays * 8;
-  const overtime = position.id === "hr" ? 12.5 : 8;
+  
+  // Tính tổng giờ tăng ca thực tế đã duyệt của tháng này
+  const overtime = useMemo(() => {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    return overtimeRequests
+      .filter((req) => {
+        if (req.userId !== account.id) return false;
+        if (req.status !== "approved") return false;
+        const reqDate = new Date(req.createdAt || req.id.replace("ot-", ""));
+        return reqDate.getMonth() === currentMonth && reqDate.getFullYear() === currentYear;
+      })
+      .reduce((sum, req) => sum + (Number(req.hours) || 0), 0);
+  }, [overtimeRequests, account.id]);
+
+  const salaryType = account.salaryType ?? "daily";
+  const salaryValue = account.salaryValue ?? (position.id === "hr" ? 420000 : position.id === "accountant" ? 400000 : 350000);
+
+  const estimatedIncome = useMemo(() => {
+    if (salaryType === "monthly") {
+      return salaryValue;
+    }
+    const base = workDays * salaryValue;
+    const otPay = overtime * 1.5 * (salaryValue / 8);
+    return base + otPay;
+  }, [salaryType, salaryValue, workDays, overtime]);
+
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
 
   // Tính số lượng mốc thiếu công trong tháng thực tế
@@ -84,7 +121,7 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
         <p className="mt-1 text-sm text-slate-500">Chúc bạn một ngày làm việc hiệu quả.</p>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(280px,1.4fr)_repeat(4,minmax(170px,1fr))]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(280px,1.2fr)_repeat(5,minmax(150px,1fr))]">
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-4">
             <div className="relative grid h-24 w-24 shrink-0 place-items-center rounded-full bg-slate-100">
@@ -109,7 +146,8 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
 
         <Metric title="Tổng công trong tháng" value={`${workDays} / ${expectedDays}`} sub={`${workRate}%`} tone="green" />
         <Metric title="Số giờ làm việc" value={totalHours.toString()} sub="giờ" tone="violet" />
-        <Metric title="Tăng ca" value={overtime.toString()} sub="giờ" tone="orange" />
+        <Metric title="Tăng ca (OT)" value={overtime.toString()} sub="giờ" tone="orange" />
+        <Metric title="Thu nhập tạm tính" value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} sub={salaryType === "monthly" ? "Lương tháng cố định" : "Lương ngày + Tăng ca"} tone="green" />
         <Metric title="Nghỉ phép" value="1" sub="ngày" tone="blue" />
       </div>
 
@@ -171,41 +209,78 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
   );
 }
 
-export function CompanyPayrollDashboard({ accounts }: { accounts: UserAccount[] }) {
+export function CompanyPayrollDashboard({ 
+  accounts, 
+  overtimeRequests = [] 
+}: { 
+  accounts: UserAccount[]; 
+  overtimeRequests?: any[]; 
+}) {
   const monthDays = getCurrentMonthDays();
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+
   const rows = accounts.filter((account) => account.status === "active" && !account.positionIds.includes("director")).map((account, index) => {
     const marks = monthDays.map((day) => day.getDay() === 0 ? "" : (day.getDate() + index) % 7 === 0 ? "/" : "X");
     const work = marks.reduce((total, mark) => total + (mark === "X" ? 1 : mark === "/" ? 0.5 : 0), 0);
-    const daySalary = account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000;
-    return { account, marks, work, daySalary, salary: work * daySalary };
+    
+    // Giờ tăng ca (OT) trong tháng hiện tại
+    const otHours = overtimeRequests
+      .filter((req) => {
+        if (req.userId !== account.id) return false;
+        if (req.status !== "approved") return false;
+        const reqDate = new Date(req.createdAt || req.id.replace("ot-", ""));
+        return reqDate.getMonth() === currentMonth && reqDate.getFullYear() === currentYear;
+      })
+      .reduce((sum, req) => sum + (Number(req.hours) || 0), 0);
+
+    const salaryType = account.salaryType ?? "daily";
+    const salaryValue = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);
+    
+    let totalIncome = 0;
+    if (salaryType === "monthly") {
+      totalIncome = salaryValue;
+    } else {
+      totalIncome = (work * salaryValue) + (otHours * 1.5 * (salaryValue / 8));
+    }
+
+    return { account, marks, work, otHours, salaryType, salaryValue, totalIncome };
   });
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-5 py-4">
         <h2 className="text-xl font-black">Bảng lương công ty</h2>
-        <p className="text-sm text-slate-500">Công từng ngày, tổng công, lương ngày và lương tháng của toàn công ty.</p>
+        <p className="text-sm text-slate-500">Công từng ngày, tổng công, giờ tăng ca, hình thức, mức lương và tổng thu nhập thực nhận.</p>
       </div>
       <div className="overflow-x-auto">
-        <div className="min-w-[1480px]">
-          <div className="grid bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `180px 140px repeat(${monthDays.length}, 38px) 80px 120px 140px` }}>
+        <div className="min-w-[1980px]">
+          <div className="grid bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `180px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
             <div>Nhân sự</div>
             <div>Bộ phận</div>
             {monthDays.map((day) => <div key={day.toISOString()} className="text-center">{day.getDate()}</div>)}
             <div className="text-center">Công</div>
-            <div className="text-right">Lương ngày</div>
-            <div className="text-right">Lương tháng</div>
+            <div className="text-center">Tăng ca</div>
+            <div>Hình thức</div>
+            <div className="text-right">Mức lương</div>
+            <div className="text-right text-orange-600">Tổng thu nhập</div>
           </div>
-          {rows.map((row) => (
-            <div key={row.account.id} className="grid items-center border-t border-slate-200 px-4 py-3 text-sm" style={{ gridTemplateColumns: `180px 140px repeat(${monthDays.length}, 38px) 80px 120px 140px` }}>
-              <div className="font-black">{row.account.displayName}</div>
-              <div className="text-slate-500">{row.account.department}</div>
-              {row.marks.map((mark, index) => <div key={`${row.account.id}-${index}`} className="text-center font-black">{mark}</div>)}
-              <div className="text-center font-bold">{row.work}</div>
-              <div className="text-right font-bold">{row.daySalary.toLocaleString("vi-VN")} đ</div>
-              <div className="text-right font-black">{row.salary.toLocaleString("vi-VN")} đ</div>
-            </div>
-          ))}
+          {rows.map((row) => {
+            const displayType = row.salaryType === "monthly" ? "Tháng" : "Ngày";
+            return (
+              <div key={row.account.id} className="grid items-center border-t border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 transition" style={{ gridTemplateColumns: `180px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
+                <div className="font-black">{row.account.displayName}</div>
+                <div className="text-slate-500">{row.account.department}</div>
+                {row.marks.map((mark, index) => <div key={`${row.account.id}-${index}`} className="text-center font-black">{mark}</div>)}
+                <div className="text-center font-bold text-slate-700">{row.work}</div>
+                <div className="text-center font-bold text-orange-600">{row.otHours}h</div>
+                <div className="font-bold text-slate-600">{displayType}</div>
+                <div className="text-right font-bold">{row.salaryValue.toLocaleString("vi-VN")} đ</div>
+                <div className="text-right font-black text-green-600">{Math.round(row.totalIncome).toLocaleString("vi-VN")} đ</div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
