@@ -6,6 +6,7 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  Clock,
   Eye,
   FileImage,
   MessageSquare,
@@ -852,8 +853,14 @@ function WorkerWorkspace({
   overtimeRequests: any[];
 }) {
   const [mounted, setMounted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
   useEffect(() => {
     setMounted(true);
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
   }, []);
 
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id ?? "");
@@ -865,9 +872,17 @@ function WorkerWorkspace({
   const [clockMessage, setClockMessage] = useState("");
   const workerOrders = orders;
   const selectedOrder = workerOrders.find((order) => order.id === selectedOrderId) ?? workerOrders[0];
-  const currentSlot = useMemo(() => attendanceSlots.find((slot) => isSlotOpen(slot)) ?? "07:30", []);
+  
+  const currentSlot = useMemo(() => {
+    return attendanceSlots.find((slot) => isSlotOpen(slot, currentTime)) ?? "07:30";
+  }, [currentTime]);
+
   const slotWindow = getSlotWindow(currentSlot);
   const needsEndOfShiftQuestion = currentSlot === "11:30" || currentSlot === "17:30";
+
+  const isSlotCurrentlyOpen = useMemo(() => {
+    return attendanceSlots.some((slot) => isSlotOpen(slot, currentTime));
+  }, [currentTime]);
 
   // Lọc các đơn thợ thực tế đang làm việc
   const activeWorkingOrders = useMemo(() => {
@@ -1008,38 +1023,73 @@ function WorkerWorkspace({
           </div>
         </div>
 
-        <ClockCard 
-          currentSlot={currentSlot} 
-          windowText={`${formatTime(slotWindow.opensAt)} - ${formatTime(slotWindow.closesAt)}`} 
-          cameraReady={cameraReady} 
-          needsQuestion={needsEndOfShiftQuestion} 
-          onStart={() => {
-            if (needsEndOfShiftQuestion && activeWorkingOrders.length) setFlowIndex(0);
-            else setCameraReady(true);
-          }} 
-          onCapture={() => {
-            markAttendance("normal");
-            setClockMessage(`Đã chấm công mốc ${currentSlot} và cập nhật vào bảng công tháng.`);
-            setCameraReady(false);
-            setOrders((current) => current.map((order) => reportedDoneIds.includes(order.id) ? { ...order, finalNote: `${order.finalNote} (Thợ đã báo xong khi chấm công)` } : order));
+        {isSlotCurrentlyOpen ? (
+          <ClockCard 
+            currentSlot={currentSlot} 
+            windowText={`${formatTime(slotWindow.opensAt)} - ${formatTime(slotWindow.closesAt)}`} 
+            cameraReady={cameraReady} 
+            needsQuestion={needsEndOfShiftQuestion} 
+            onStart={() => {
+              if (needsEndOfShiftQuestion && activeWorkingOrders.length) setFlowIndex(0);
+              else setCameraReady(true);
+            }} 
+            onCapture={() => {
+              markAttendance("normal");
+              setClockMessage(`Đã chấm công mốc ${currentSlot} và cập nhật vào bảng công tháng.`);
+              setCameraReady(false);
+              setOrders((current) => current.map((order) => reportedDoneIds.includes(order.id) ? { ...order, finalNote: `${order.finalNote} (Thợ đã báo xong khi chấm công)` } : order));
+              
+              // Luồng chấm công bù chủ động
+              const actualMissing = missingSlots.filter(item => !item.isIgnored);
+              if (actualMissing.length > 0) {
+                setTimeout(() => {
+                  const wishComp = globalThis.confirm(
+                    `Bạn đang thiếu ${actualMissing.length} mốc chấm công từ đầu tháng.\n` +
+                    `Bạn có muốn thực hiện đăng ký chấm công bù ngay bây giờ không?`
+                  );
+                  if (wishComp) {
+                    setCompOpen(true);
+                  }
+                }, 600);
+              }
+            }} 
+            selectedOrder={selectedOrder}
+            onReportDone={handleReportDone}
+          />
+        ) : (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center shadow-sm flex flex-col justify-center items-center text-slate-500 w-full min-h-[220px]">
+            <Clock className="h-10 w-10 text-slate-400 mb-3" />
+            <h3 className="font-black text-slate-700 text-lg">Ngoài khung giờ chấm công</h3>
+            <p className="text-xs text-slate-400 mt-2 max-w-xs leading-relaxed">
+              Mỗi mốc chấm công chỉ mở trước 15 phút và đóng sau 1 tiếng của các khung giờ quy định:
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2 justify-center text-xs font-bold text-slate-500">
+              <span className="bg-slate-200/80 px-2.5 py-1 rounded-md">07:30</span>
+              <span className="bg-slate-200/80 px-2.5 py-1 rounded-md">11:30</span>
+              <span className="bg-slate-200/80 px-2.5 py-1 rounded-md">13:30</span>
+              <span className="bg-slate-200/80 px-2.5 py-1 rounded-md">17:30</span>
+            </div>
             
-            // Luồng chấm công bù chủ động
-            const actualMissing = missingSlots.filter(item => !item.isIgnored);
-            if (actualMissing.length > 0) {
-              setTimeout(() => {
-                const wishComp = globalThis.confirm(
-                  `Bạn đang thiếu ${actualMissing.length} mốc chấm công từ đầu tháng.\n` +
-                  `Bạn có muốn thực hiện đăng ký chấm công bù ngay bây giờ không?`
-                );
-                if (wishComp) {
-                  setCompOpen(true);
-                }
-              }, 600);
-            }
-          }} 
-          selectedOrder={selectedOrder}
-          onReportDone={handleReportDone}
-        />
+            {/* Vẫn cho phép thợ báo cáo hoàn thành đơn hàng độc lập */}
+            {selectedOrder && (
+              <button 
+                className={`mt-5 flex min-h-11 w-full max-w-xs items-center justify-center gap-2 rounded-xl font-black transition text-xs ${
+                  selectedOrder.workStatus === "pending_confirmation"
+                    ? "bg-amber-100 text-amber-700 border border-amber-300 cursor-not-allowed"
+                    : "bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-600"
+                }`}
+                disabled={selectedOrder.workStatus === "pending_confirmation"}
+                onClick={handleReportDone}
+                type="button"
+              >
+                <Check className="h-4 w-4" />
+                {selectedOrder.workStatus === "pending_confirmation" 
+                  ? "ĐÃ BÁO CÁO XONG (CHỜ DUYỆT)" 
+                  : "BÁO CÁO HOÀN THÀNH CÔNG VIỆC"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Danh sách công việc đang làm */}

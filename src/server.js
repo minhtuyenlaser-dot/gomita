@@ -7,6 +7,7 @@ const DB_FILE = path.join(__dirname, "gomita_db.json");
 
 // Khởi tạo cơ sở dữ liệu mẫu mặc định
 const initialData = {
+  compensationRequests: [],
   accounts: [
     {
       id: "u-director",
@@ -152,6 +153,7 @@ const server = http.createServer((req, res) => {
         if (patch.accounts) db.accounts = patch.accounts;
         if (patch.orders) db.orders = patch.orders;
         if (patch.overtimeRequests) db.overtimeRequests = patch.overtimeRequests;
+        if (patch.compensationRequests) db.compensationRequests = patch.compensationRequests;
         if (patch.attendance) db.attendance = patch.attendance;
         writeDB(db);
         res.writeHead(200, { "Content-Type": "application/json" });

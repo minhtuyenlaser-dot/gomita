@@ -106,6 +106,19 @@ export function WorkerDashboard({
     return "07:30"; // Mặc định hiển thị mốc 07:30 nếu ngoài giờ
   }, [currentTime]);
 
+  const isSlotCurrentlyOpen = useMemo(() => {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMin = now.getMinutes();
+    const currentVal = currentHour * 60 + currentMin;
+
+    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return true;
+    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return true;
+    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return true;
+    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return true;
+    return false;
+  }, [currentTime]);
+
   const today = new Date().getDate();
   const monthDaysCount = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const monthDays = Array.from({ length: monthDaysCount }, (_, idx) => idx + 1);
@@ -329,32 +342,45 @@ export function WorkerDashboard({
 
       {/* DUY NHẤT 1 NÚT CHẤM CÔNG LỚN */}
       <View style={styles.clockInCenter}>
-        <TouchableOpacity 
-          style={[
-            styles.clockInButton,
-            hasClockedInCurrentSlot ? styles.clockedInBtnBg : styles.clockInBtnBg
-          ]}
-          onClick={handleClockInPress}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator size="large" color="#ffffff" />
-          ) : hasClockedInCurrentSlot ? (
-            <View style={styles.centerBtnContent}>
-              <CheckCircle size={44} color="#ffffff" />
-              <Text style={styles.clockInBtnText}>ĐÃ CHẤM XONG</Text>
-            </View>
-          ) : (
-            <View style={styles.centerBtnContent}>
-              <Camera size={44} color="#ffffff" />
-              <Text style={styles.clockInBtnText}>BẤM CHẤM CÔNG</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        {isSlotCurrentlyOpen ? (
+          <TouchableOpacity 
+            style={[
+              styles.clockInButton,
+              hasClockedInCurrentSlot ? styles.clockedInBtnBg : styles.clockInBtnBg
+            ]}
+            onPress={handleClockInPress}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="large" color="#ffffff" />
+            ) : hasClockedInCurrentSlot ? (
+              <View style={styles.centerBtnContent}>
+                <CheckCircle size={44} color="#ffffff" />
+                <Text style={styles.clockInBtnText}>ĐÃ CHẤM XONG</Text>
+              </View>
+            ) : (
+              <View style={styles.centerBtnContent}>
+                <Camera size={44} color="#ffffff" />
+                <Text style={styles.clockInBtnText}>BẤM CHẤM CÔNG</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.outsideSlotCard}>
+            <Clock size={36} color="#94a3b8" />
+            <Text style={styles.outsideSlotTitle}>Ngoài khung giờ chấm công</Text>
+            <Text style={styles.outsideSlotDesc}>
+              Mốc quy định: 07:30 · 11:30 · 13:30 · 17:30 {"\n"}
+              (Mở trước 15 phút, đóng sau mốc 1 tiếng)
+            </Text>
+          </View>
+        )}
         <Text style={styles.clockInHelp}>
           {hasClockedInCurrentSlot 
             ? `Chúc bạn một ngày làm việc hiệu quả!` 
-            : `Mở camera chụp ảnh selfie + gửi GPS định vị mốc ${currentSlot}`}
+            : isSlotCurrentlyOpen
+              ? `Mở camera chụp ảnh selfie + gửi GPS định vị mốc ${currentSlot}`
+              : `Vui lòng quay lại đúng khung giờ quy định.`}
         </Text>
       </View>
 
@@ -573,6 +599,30 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: "#f8fafc",
     fontWeight: "900",
+  },
+  outsideSlotCard: {
+    width: screenWidth - 32,
+    backgroundColor: "#0f2547",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#1e3a66",
+    padding: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  outsideSlotTitle: {
+    color: "#f8fafc",
+    fontSize: 16,
+    fontWeight: "900",
+    marginTop: 10,
+  },
+  outsideSlotDesc: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 6,
+    lineHeight: 16,
   },
   positionText: {
     fontSize: 13,

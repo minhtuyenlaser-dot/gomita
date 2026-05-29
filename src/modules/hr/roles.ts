@@ -44,10 +44,14 @@ const orderMenu: MenuItem = { id: "orders", label: "Đơn hàng", icon: "orders"
 const profileMenu: MenuItem = { id: "profile", label: "Thông tin cá nhân", icon: "profile" };
 
 export function getMenuForPosition(positionId: string): MenuItem[] {
+  const position = positions.find((p) => p.id === positionId);
+  const isManager = position ? (position.level === "department_head" || position.level === "team_lead") : false;
+
   if (positionId === "director") {
     return [
       orderMenu,
       { id: "hr", label: "Nhân sự", icon: "hr" },
+      { id: "attendance", label: "Duyệt công bù", icon: "reports" },
       { id: "finance", label: "Kế toán", icon: "finance" },
       { id: "reports", label: "Bảng lương công ty", icon: "reports" },
       profileMenu
@@ -57,6 +61,7 @@ export function getMenuForPosition(positionId: string): MenuItem[] {
   if (positionId === "hr") {
     return [
       { id: "hr", label: "Nhân sự", icon: "hr" },
+      { id: "attendance", label: "Duyệt công bù", icon: "reports" },
       { id: "reports", label: "Bảng lương công ty", icon: "reports" },
       profileMenu
     ];
@@ -74,6 +79,14 @@ export function getMenuForPosition(positionId: string): MenuItem[] {
     return [
       orderMenu,
       { id: "admin", label: "Backup/Restore", icon: "admin" },
+      profileMenu
+    ];
+  }
+
+  if (isManager) {
+    return [
+      orderMenu,
+      { id: "attendance", label: "Duyệt công bù", icon: "reports" },
       profileMenu
     ];
   }

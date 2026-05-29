@@ -1,11 +1,10 @@
 "use client";
 
-import { Camera, CalendarDays, CheckCircle2, Clock, Send } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock, Send, UserCheck, AlertCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Position } from "@/modules/hr/roles";
-import { demoOrders } from "@/modules/orders/orderFlow";
 import type { ApprovalRole, AttendanceSlot, CompensationRequest } from "../types";
-import { approveCompensation, attendanceSlots, createCompensationRequest, getDemoMissingAttendance, getSlotWindow, isSlotOpen } from "../compensationRules";
+import { approveCompensation, getRequiredApprovals, attendanceSlots } from "../compensationRules";
 
 const approvalNames: Record<ApprovalRole, string> = {
   hr: "Nhân sự",
@@ -16,314 +15,415 @@ const approvalNames: Record<ApprovalRole, string> = {
 const approverByPosition: Record<string, ApprovalRole | null> = {
   hr: "hr",
   sale_manager: "department_manager",
+  design_manager: "department_manager",
   workshop_manager: "department_manager",
   supervisor_lead: "department_manager",
   director: "director",
   admin: "director"
 };
 
-export function AttendanceDashboard({ position }: { position: Position }) {
-  const [mode, setMode] = useState<"clock" | "compensation">("clock");
-  const [visibleMonth, setVisibleMonth] = useState(() => new Date());
+export function AttendanceDashboard({
+  position,
+  accounts,
+  compensationRequests = [],
+  onCompensationRequestsChange,
+  attendance = {},
+  onAttendanceChange
+}: {
+  position: Position;
+  accounts: any[];
+  compensationRequests: any[];
+  onCompensationRequestsChange: (reqs: any[]) => void;
+  attendance: Record<string, string>;
+  onAttendanceChange: (att: Record<string, string>) => void;
+}) {
+  const [selectedWorkerId, setSelectedWorkerId] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedSlots, setSelectedSlots] = useState<AttendanceSlot[]>([]);
   const [reason, setReason] = useState("");
-  const [requests, setRequests] = useState<CompensationRequest[]>([]);
-  const [attendanceRecords, setAttendanceRecords] = useState<Array<{ slot: AttendanceSlot; checkedAt: string; orderAnswers: Record<string, boolean> }>>([]);
-  const [clockFlow, setClockFlow] = useState<{ slot: AttendanceSlot; orderIndex: number; answers: Record<string, boolean> } | null>(null);
 
-  const missingAttendance = useMemo(() => getDemoMissingAttendance(visibleMonth.getFullYear(), visibleMonth.getMonth()), [visibleMonth]);
-  const pendingRequests = requests.filter((request) => request.status === "pending");
-  const approvedRequests = requests.filter((request) => request.status === "approved");
   const currentApprovalRole = approverByPosition[position.id] ?? null;
-  const workerOrders = demoOrders.filter((order) => ["Sản xuất", "Lắp đặt"].includes(order.step));
+  const isHrOrDirector = position.id === "hr" || position.id === "director";
 
-  const availableDates = missingAttendance.filter((item) => {
-    return item.slots.some((slot) => !requests.some((request) => request.date === item.date && request.slots.includes(slot)));
-  });
+  // Lọc danh sách thợ và nhân viên cần chấm công (không tính Giám đốc)
+  const workers = useMemo(() => {
+    return accounts.filter((acc) => acc.status === "active" && !acc.positionIds.includes("director"));
+  }, [accounts]);
 
-  const selectedMissingItem = missingAttendance.find((item) => item.date === selectedDate);
-  const availableSlots = selectedMissingItem?.slots.filter((slot) => {
-    return !requests.some((request) => request.date === selectedDate && request.slots.includes(slot));
-  }) ?? [];
+  // Tính toán các mốc thiếu công thực tế của thợ được chọn
+  const realMissingAttendance = useMemo(() => {
+    if (!selectedWorkerId) return [];
+    const list: Array<{ date: string; slots: AttendanceSlot[] }> = [];
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const today = now.getDate();
 
+    for (let d = 1; d <= today; d++) {
+      const dateObj = new Date(year, month, d);
+      if (dateObj.getDay() === 0) continue; // Bỏ qua Chủ Nhật
+      
+      const dateString = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const missingSlotsForDay: AttendanceSlot[] = [];
+      
+      attendanceSlots.forEach((slot) => {
+        const key = `${selectedWorkerId}-${d}-${slot}`;
+        // Nếu không có bản ghi chấm công (chưa chấm)
+        if (!attendance[key]) {
+          // Kiểm tra xem đã có yêu cầu công bù nào cho mốc này chưa
+          const hasPendingOrApproved = compensationRequests.some(
+            (req) => req.employeeId === selectedWorkerId && req.date === dateString && req.slots.includes(slot)
+          );
+          if (!hasPendingOrApproved) {
+            missingSlotsForDay.push(slot);
+          }
+        }
+      });
+      
+      if (missingSlotsForDay.length > 0) {
+        list.push({
+          date: dateString,
+          slots: missingSlotsForDay
+        });
+      }
+    }
+    return list;
+  }, [selectedWorkerId, attendance, compensationRequests]);
+
+  const availableDates = realMissingAttendance;
+  const selectedMissingItem = realMissingAttendance.find((item) => item.date === selectedDate);
+  const availableSlots = selectedMissingItem?.slots ?? [];
+
+  const pendingRequests = useMemo(() => {
+    return compensationRequests.filter((req) => req.status === "pending");
+  }, [compensationRequests]);
+
+  const approvedRequests = useMemo(() => {
+    return compensationRequests.filter((req) => req.status === "approved");
+  }, [compensationRequests]);
+
+  // Đăng ký công bù trên giao diện Admin
   function submitCompensation() {
-    if (!selectedDate || selectedSlots.length === 0 || !reason.trim()) return;
+    if (!selectedWorkerId || !selectedDate || selectedSlots.length === 0 || !reason.trim()) return;
 
-    const monthCount = requests.filter((request) => request.date.slice(0, 7) === selectedDate.slice(0, 7)).length + selectedSlots.length;
-    const nextRequest = createCompensationRequest({
-      employeeName: "Người lao động GOMITA",
-      employeePositionLevel: position.level,
+    const worker = accounts.find((acc) => acc.id === selectedWorkerId);
+    if (!worker) return;
+
+    // Tính số lần bù trong tháng hiện tại của thợ này
+    const monthPrefix = selectedDate.slice(0, 7);
+    const prevCount = compensationRequests.filter(
+      (req) => req.employeeId === selectedWorkerId && req.date.slice(0, 7) === monthPrefix
+    ).length;
+    const monthCount = prevCount + selectedSlots.length;
+
+    // Xác định PositionLevel của thợ
+    const workerPosition = worker.positionIds[0] ?? "production_worker";
+    const level = worker.positionIds.includes("hr") ? "department_head" : "staff";
+
+    const nextRequest: CompensationRequest = {
+      id: `comp-${Date.now()}`,
+      employeeId: selectedWorkerId,
+      employeeName: worker.displayName,
+      employeePositionLevel: level,
       date: selectedDate,
       slots: selectedSlots,
       reason: reason.trim(),
-      missingCountInMonth: monthCount
-    });
+      missingCountInMonth: monthCount,
+      requiredApprovals: getRequiredApprovals(level, monthCount),
+      approvals: [],
+      status: "pending",
+      createdAt: new Date().toISOString()
+    };
 
-    setRequests((current) => [nextRequest, ...current]);
+    onCompensationRequestsChange([nextRequest, ...compensationRequests]);
     setSelectedDate("");
     setSelectedSlots([]);
     setReason("");
   }
 
-  function approveRequest(requestId: string) {
+  // Duyệt và ghi nhận công bù
+  function handleApprove(requestId: string) {
     if (!currentApprovalRole) return;
-    setRequests((current) => current.map((request) => (request.id === requestId ? approveCompensation(request, currentApprovalRole, position.name) : request)));
-  }
+    
+    const updatedRequests = compensationRequests.map((request) => {
+      if (request.id !== requestId) return request;
+      const nextRequest = approveCompensation(request, currentApprovalRole, position.name);
+      
+      // Nếu đã được duyệt hoàn toàn (hoàn thành tất cả các mốc phê duyệt)
+      if (nextRequest.status === "approved") {
+        const nextAttendance = { ...attendance };
+        const dayNumber = Number(nextRequest.date.split("-")[2]); // Lấy ngày dạng số
+        
+        nextRequest.slots.forEach((slot: string) => {
+          const key = `${nextRequest.employeeId}-${dayNumber}-${slot}`;
+          nextAttendance[key] = "compensated"; // Ghi nhận "Chấm công bù" (blue dot)
+        });
+        onAttendanceChange(nextAttendance);
+      }
+      return nextRequest;
+    });
 
-  function startClockFlow(slot: AttendanceSlot) {
-    if (attendanceRecords.some((record) => record.slot === slot) || !isSlotOpen(slot)) return;
-    setClockFlow({ slot, orderIndex: 0, answers: {} });
-  }
-
-  function answerOrder(done: boolean) {
-    if (!clockFlow) return;
-    const order = workerOrders[clockFlow.orderIndex];
-    const answers = { ...clockFlow.answers, [order.code]: done };
-    const nextIndex = clockFlow.orderIndex + 1;
-
-    if (nextIndex < workerOrders.length) {
-      setClockFlow({ ...clockFlow, orderIndex: nextIndex, answers });
-      return;
-    }
-
-    setAttendanceRecords((current) => [...current, { slot: clockFlow.slot, checkedAt: new Date().toISOString(), orderAnswers: answers }]);
-    setClockFlow(null);
+    onCompensationRequestsChange(updatedRequests);
   }
 
   return (
-    <div className="grid gap-5">
-      <section className="grid gap-3 md:grid-cols-2">
-        <button
-          className={`flex min-h-24 items-center gap-4 rounded-lg border p-4 text-left ${mode === "clock" ? "border-gomita-green bg-emerald-50 text-gomita-green" : "border-gomita-line bg-white text-gomita-ink"}`}
-          onClick={() => setMode("clock")}
-          type="button"
-        >
-          <span className="grid h-14 w-14 place-items-center rounded-lg bg-gomita-green text-white">
-            <Camera className="h-7 w-7" />
-          </span>
-          <span>
-            <span className="block text-xl font-black">Chấm công ngay</span>
-            <span className="mt-1 block text-sm text-gomita-muted">Hỏi tình trạng từng đơn trước, sau đó mới mở camera.</span>
-          </span>
-        </button>
-
-        <button
-          className={`flex min-h-24 items-center gap-4 rounded-lg border p-4 text-left ${mode === "compensation" ? "border-gomita-orange bg-orange-50 text-gomita-orange" : "border-gomita-line bg-white text-gomita-ink"}`}
-          onClick={() => setMode("compensation")}
-          type="button"
-        >
-          <span className="grid h-14 w-14 place-items-center rounded-lg bg-gomita-orange text-white">
-            <CalendarDays className="h-7 w-7" />
-          </span>
-          <span>
-            <span className="block text-xl font-black">Chấm công bù</span>
-            <span className="mt-1 block text-sm text-gomita-muted">Không cần ảnh, chọn ngày thiếu công và nhập lý do.</span>
-          </span>
-        </button>
-      </section>
-
-      {mode === "clock" ? (
-        <section className="grid gap-4 rounded-lg border border-gomita-line bg-white p-4">
-          <div>
-            <h2 className="text-xl font-black">Chấm công hôm nay</h2>
-            <p className="mt-1 text-sm text-gomita-muted">Mỗi mốc mở trước 15 phút và đóng sau 1 tiếng. Ảnh sẽ lưu kèm GPS, thời gian và dấu ngày giờ khi nối Supabase Storage.</p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {attendanceSlots.map((slot) => {
-              const record = attendanceRecords.find((item) => item.slot === slot);
-              const open = isSlotOpen(slot);
-              const window = getSlotWindow(slot);
-              return (
-                <button
-                  key={slot}
-                  className={`min-h-32 rounded-lg border p-4 text-left ${record ? "border-emerald-300 bg-emerald-50" : open ? "border-gomita-green bg-white" : "border-gomita-line bg-slate-50 opacity-70"}`}
-                  disabled={Boolean(record) || !open}
-                  onClick={() => startClockFlow(slot)}
-                  type="button"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-2xl font-black">{slot}</span>
-                    {record ? <CheckCircle2 className="h-6 w-6 text-gomita-green" /> : <Clock className="h-6 w-6 text-gomita-muted" />}
-                  </div>
-                  <div className="mt-3 text-sm font-bold text-gomita-muted">
-                    {record ? `Đã chấm lúc ${formatTime(record.checkedAt)}` : open ? "Bấm để trả lời đơn và chụp ảnh" : `${formatTime(window.opensAt.toISOString())} - ${formatTime(window.closesAt.toISOString())}`}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      {clockFlow ? (
-        <section className="rounded-lg border border-gomita-green bg-emerald-50 p-4">
-          <div className="text-sm font-bold text-gomita-muted">Trước khi mở camera</div>
-          <h2 className="mt-1 text-xl font-black">Bạn đã làm xong đơn {workerOrders[clockFlow.orderIndex]?.code} chưa?</h2>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            <button className="min-h-12 rounded-lg bg-gomita-green px-5 font-black text-white" onClick={() => answerOrder(true)} type="button">Đã xong</button>
-            <button className="min-h-12 rounded-lg border border-gomita-line bg-white px-5 font-black" onClick={() => answerOrder(false)} type="button">Chưa xong</button>
-          </div>
-        </section>
-      ) : null}
-
-      {mode === "compensation" ? (
-        <section className="grid gap-4 rounded-lg border border-gomita-line bg-white p-4 md:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-          <div>
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-black">Chấm công bù</h2>
-                <p className="mt-1 text-sm text-gomita-muted">Người lao động tích ngày thiếu công, chọn mốc giờ và gửi lý do. Không yêu cầu ảnh.</p>
-              </div>
-              <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-bold text-gomita-green">Không cần camera</span>
+    <div className="grid gap-6">
+      {/* GIAO DIỆN TẠO YÊU CẦU CÔNG BÙ (Chỉ HR hoặc Giám đốc được thao tác) */}
+      {isHrOrDirector && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-3">
+            <CalendarDays className="h-6 w-6 text-orange-500" />
+            <div>
+              <h2 className="text-lg font-black text-slate-800">Đăng ký Chấm công bù cho Thợ/Nhân viên</h2>
+              <p className="text-sm text-slate-500">HR thực hiện đăng ký khi thợ quên chấm công. Yêu cầu sẽ được chuyển đến đúng cấp duyệt quy định.</p>
             </div>
+          </div>
 
-            <div className="grid gap-4">
-              <label className="grid gap-2 font-bold">
-                Ngày thiếu công
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-3">
+              <label className="grid gap-1.5 text-sm font-black text-slate-700">
+                1. Chọn nhân viên cần bù công *
                 <select
-                  className="focus-ring rounded-lg border border-gomita-line px-3 py-3"
-                  value={selectedDate}
-                  onChange={(event) => {
-                    setSelectedDate(event.target.value);
+                  className="h-11 rounded-lg border border-slate-200 px-3 bg-white"
+                  value={selectedWorkerId}
+                  onChange={(e) => {
+                    setSelectedWorkerId(e.target.value);
+                    setSelectedDate("");
                     setSelectedSlots([]);
                   }}
                 >
-                  <option value="">Chọn ngày thiếu công</option>
-                  {availableDates.map((item) => (
-                    <option key={item.date} value={item.date}>
-                      {formatDate(item.date)} - còn {item.slots.length} mốc
+                  <option value="">-- Chọn thợ / nhân sự --</option>
+                  {workers.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.displayName} ({w.department} - {w.username})
                     </option>
                   ))}
                 </select>
               </label>
 
-              <div>
-                <div className="mb-2 font-bold">Mốc giờ cần bù</div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {attendanceSlots.map((slot) => {
-                    const disabled = !availableSlots.includes(slot);
-                    const checked = selectedSlots.includes(slot);
-                    return (
-                      <label key={slot} className={`flex min-h-14 items-center justify-center rounded-lg border px-3 font-black ${checked ? "border-gomita-green bg-emerald-50 text-gomita-green" : "border-gomita-line bg-white"} ${disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}>
-                        <input
-                          className="sr-only"
-                          checked={checked}
-                          disabled={disabled}
-                          type="checkbox"
-                          onChange={() => {
-                            setSelectedSlots((current) => (current.includes(slot) ? current.filter((item) => item !== slot) : [...current, slot]));
-                          }}
-                        />
-                        {slot}
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
+              {selectedWorkerId && (
+                <label className="grid gap-1.5 text-sm font-black text-slate-700">
+                  2. Chọn ngày thiếu công trong tháng *
+                  <select
+                    className="h-11 rounded-lg border border-slate-200 px-3 bg-white"
+                    value={selectedDate}
+                    onChange={(e) => {
+                      setSelectedDate(e.target.value);
+                      setSelectedSlots([]);
+                    }}
+                  >
+                    <option value="">-- Chọn ngày thiếu công --</option>
+                    {availableDates.map((item) => (
+                      <option key={item.date} value={item.date}>
+                        Ngày {formatDate(item.date)} (Thiếu {item.slots.length} mốc)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
-              <label className="grid gap-2 font-bold">
-                Lý do
-                <textarea className="focus-ring min-h-28 rounded-lg border border-gomita-line px-3 py-3 font-normal" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Nhập lý do chấm công bù" />
+              {selectedDate && availableSlots.length > 0 && (
+                <div>
+                  <div className="mb-2 text-sm font-black text-slate-700">3. Chọn các mốc giờ cần bù *</div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {attendanceSlots.map((slot) => {
+                      const isMissing = availableSlots.includes(slot);
+                      const checked = selectedSlots.includes(slot);
+                      return (
+                        <label
+                          key={slot}
+                          className={`flex min-h-11 items-center justify-center rounded-lg border px-3 text-xs font-black transition ${
+                            checked 
+                              ? "border-green-500 bg-green-50 text-green-700" 
+                              : isMissing 
+                                ? "border-slate-200 bg-white text-slate-700 hover:border-orange-300 cursor-pointer" 
+                                : "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed opacity-50"
+                          }`}
+                        >
+                          <input
+                            className="sr-only"
+                            type="checkbox"
+                            disabled={!isMissing}
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedSlots((current) =>
+                                current.includes(slot) ? current.filter((item) => item !== slot) : [...current, slot]
+                              );
+                            }}
+                          />
+                          {slot}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-3">
+              <label className="grid gap-1.5 text-sm font-black text-slate-700">
+                4. Lý do bù công *
+                <textarea
+                  className="min-h-[110px] rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-orange-400"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Nhập lý do thợ bị thiếu công (Ví dụ: Thiết bị lỗi, làm ngoài công trình không mạng...)"
+                />
               </label>
 
-              <button className="flex min-h-12 items-center justify-center gap-2 rounded-lg bg-gomita-green px-5 font-black text-white disabled:opacity-40" disabled={!selectedDate || selectedSlots.length === 0 || !reason.trim()} onClick={submitCompensation} type="button">
-                <Send className="h-5 w-5" />
-                Gửi yêu cầu chấm công bù
+              <button
+                className="mt-auto flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-5 font-black text-white hover:bg-orange-600 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition"
+                disabled={!selectedWorkerId || !selectedDate || selectedSlots.length === 0 || !reason.trim()}
+                onClick={submitCompensation}
+                type="button"
+              >
+                <Send className="h-4 w-4" />
+                GỬI YÊU CẦU CHẤM CÔNG BÙ
               </button>
             </div>
           </div>
-
-          <AttendanceMonth approvedRequests={approvedRequests} missingAttendance={missingAttendance} pendingRequests={pendingRequests} visibleMonth={visibleMonth} onMonthChange={setVisibleMonth} />
         </section>
-      ) : null}
+      )}
 
-      <section className="grid gap-4 rounded-lg border border-gomita-line bg-white p-4">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-xl font-black">Danh sách chờ xác nhận</h2>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold text-gomita-muted">{pendingRequests.length} yêu cầu</span>
+      {/* DANH SÁCH CHỜ DUYỆT (Tất cả HR, Quản lý, Giám đốc đều xem được) */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Clock className="h-6 w-6 text-amber-500" />
+            <div>
+              <h2 className="text-lg font-black text-slate-800">Danh sách Yêu cầu công bù chờ Duyệt</h2>
+              <p className="text-sm text-slate-500">Các yêu cầu đang chờ phê duyệt từ bộ phận Nhân sự, Quản lý và Giám đốc.</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-700">
+            {pendingRequests.length} Đang chờ
+          </span>
         </div>
 
         {pendingRequests.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-gomita-line p-6 text-center text-gomita-muted">Không có yêu cầu chờ xác nhận.</div>
+          <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-bold">
+            Hiện tại không có yêu cầu bù công nào đang chờ duyệt. 🎉
+          </div>
         ) : (
-          <div className="grid gap-3">
+          <div className="grid gap-4 md:grid-cols-2">
             {pendingRequests.map((request) => {
-              const nextRole = request.requiredApprovals.find((role) => !request.approvals.some((approval) => approval.role === role));
+              // Tìm cấp duyệt tiếp theo
+              const nextRole = (request.requiredApprovals as ApprovalRole[]).find(
+                (role: ApprovalRole) => !request.approvals.some((app: any) => app.role === role)
+              );
               const canApprove = Boolean(currentApprovalRole && nextRole === currentApprovalRole);
+
               return (
-                <article key={request.id} className="rounded-lg border border-gomita-line p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="font-black">{formatDate(request.date)} · {request.slots.join(", ")}</div>
-                      <div className="mt-1 text-sm text-gomita-muted">Thiếu lần {request.missingCountInMonth} trong tháng · {request.reason}</div>
+                <article key={request.id} className="rounded-xl border border-slate-200 p-4 hover:border-slate-300 transition flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-black text-base text-slate-900">{request.employeeName}</h4>
+                        <div className="text-xs text-orange-500 font-bold mt-0.5">
+                          Thiếu ngày {formatDate(request.date)} · Mốc: {request.slots.join(", ")}
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-600">
+                        Chờ {nextRole ? approvalNames[nextRole as ApprovalRole] : "Duyệt"}
+                      </span>
                     </div>
-                    <span className="rounded-full bg-amber-50 px-3 py-1 text-sm font-bold text-amber-700">Chờ {nextRole ? approvalNames[nextRole] : "duyệt"}</span>
+
+                    <p className="mt-3 text-xs text-slate-600 font-semibold bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                      <strong>Lý do:</strong> {request.reason} (Lần thứ {request.missingCountInMonth} trong tháng)
+                    </p>
+
+                    {/* Tiến độ các cấp duyệt */}
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-bold mr-1">Các cấp duyệt:</span>
+                      {(request.requiredApprovals as ApprovalRole[]).map((role: ApprovalRole) => {
+                        const approval = request.approvals.find((app: any) => app.role === role);
+                        return (
+                          <span
+                            key={role}
+                            className={`rounded-full border px-2.5 py-0.5 text-[10px] font-black transition ${
+                              approval 
+                                ? "border-green-300 bg-green-50 text-green-700" 
+                                : "border-slate-200 text-slate-400 bg-white"
+                            }`}
+                          >
+                            {approvalNames[role as ApprovalRole]} {approval ? "✓" : ""}
+                          </span>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {request.requiredApprovals.map((role) => {
-                      const done = request.approvals.some((approval) => approval.role === role);
-                      return <span key={role} className={`rounded-full border px-3 py-1 text-sm font-bold ${done ? "border-emerald-300 bg-emerald-50 text-gomita-green" : "border-gomita-line text-gomita-muted"}`}>{approvalNames[role]}</span>;
-                    })}
+
+                  <div className="mt-5 border-t border-slate-100 pt-4 flex gap-2">
+                    {canApprove ? (
+                      <button
+                        className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 text-xs font-black text-white hover:bg-green-700 shadow-md shadow-green-600/10 transition"
+                        onClick={() => handleApprove(request.id)}
+                        type="button"
+                      >
+                        <UserCheck className="h-4 w-4" />
+                        XÁC NHẬN DUYỆT CÔNG BÙ
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-400 font-bold bg-slate-50 border border-slate-100 rounded-lg p-2.5 w-full justify-center">
+                        <AlertCircle className="h-3.5 w-3.5" />
+                        {currentApprovalRole 
+                          ? `Cần cấp ${nextRole ? approvalNames[nextRole as ApprovalRole] : "khác"} duyệt trước` 
+                          : "Tài khoản của bạn không có thẩm quyền duyệt"}
+                      </div>
+                    )}
                   </div>
-                  <button className="mt-4 min-h-11 w-full rounded-lg bg-gomita-green font-black text-white disabled:bg-slate-300" disabled={!canApprove} onClick={() => approveRequest(request.id)} type="button">
-                    {canApprove ? "Xác nhận" : currentApprovalRole ? "Chưa đến lượt xác nhận" : "Vị trí này không có quyền xác nhận"}
-                  </button>
                 </article>
               );
             })}
           </div>
         )}
       </section>
-    </div>
-  );
-}
 
-function AttendanceMonth({
-  approvedRequests,
-  missingAttendance,
-  pendingRequests,
-  visibleMonth,
-  onMonthChange
-}: {
-  approvedRequests: CompensationRequest[];
-  missingAttendance: Array<{ date: string; slots: AttendanceSlot[] }>;
-  pendingRequests: CompensationRequest[];
-  visibleMonth: Date;
-  onMonthChange: (date: Date) => void;
-}) {
-  const year = visibleMonth.getFullYear();
-  const month = visibleMonth.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const startOffset = (new Date(year, month, 1).getDay() + 6) % 7;
-  const cells = Array.from({ length: startOffset + daysInMonth }, (_, index) => (index < startOffset ? 0 : index - startOffset + 1));
+      {/* DANH SÁCH LỊCH SỬ ĐÃ DUYỆT */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-3">
+          <CheckCircle2 className="h-6 w-6 text-green-500" />
+          <div>
+            <h2 className="text-lg font-black text-slate-800">Lịch sử Chấm công bù đã Duyệt</h2>
+            <p className="text-sm text-slate-500">Các yêu cầu công bù đã được duyệt thành công 100% và ghi nhận xanh vào bảng công.</p>
+          </div>
+        </div>
 
-  return (
-    <div className="rounded-lg border border-gomita-line bg-slate-50 p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <button className="rounded-lg border border-gomita-line bg-white px-3 py-2 font-black" onClick={() => onMonthChange(new Date(year, month - 1, 1))} type="button">‹</button>
-        <div className="font-black">Tháng {month + 1}/{year}</div>
-        <button className="rounded-lg border border-gomita-line bg-white px-3 py-2 font-black" onClick={() => onMonthChange(new Date(year, month + 1, 1))} type="button">›</button>
-      </div>
-      <div className="grid grid-cols-7 gap-1 text-center text-xs font-black text-gomita-muted">
-        {["T2", "T3", "T4", "T5", "T6", "T7", "CN"].map((day) => <div key={day}>{day}</div>)}
-      </div>
-      <div className="mt-2 grid grid-cols-7 gap-1">
-        {cells.map((day, index) => {
-          if (!day) return <div key={index} className="min-h-14" />;
-          const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-          const missing = missingAttendance.find((item) => item.date === date);
-          const pending = pendingRequests.some((request) => request.date === date);
-          const approved = approvedRequests.some((request) => request.date === date);
-          return (
-            <div key={date} className={`flex min-h-14 flex-col items-center justify-center rounded-lg border text-sm ${approved ? "border-emerald-300 bg-emerald-50 text-gomita-green" : pending ? "border-amber-300 bg-amber-50 text-amber-800" : missing ? "border-orange-300 bg-orange-50 text-orange-800" : "border-gomita-line bg-white"}`}>
-              <span className="font-black">{day}</span>
-              {approved ? <small>Đã bù</small> : pending ? <small>Chờ duyệt</small> : missing ? <small>{missing.slots.length} mốc</small> : null}
-            </div>
-          );
-        })}
-      </div>
+        {approvedRequests.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-bold">
+            Chưa có yêu cầu nào được duyệt trong tháng này.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm border-collapse">
+              <thead>
+                <tr className="bg-slate-50 text-slate-600 font-black border-b border-slate-200">
+                  <th className="p-3">Nhân viên</th>
+                  <th className="p-3">Ngày bù công</th>
+                  <th className="p-3">Mốc giờ</th>
+                  <th className="p-3">Lý do</th>
+                  <th className="p-3">Trạng thái</th>
+                </tr>
+              </thead>
+              <tbody>
+                {approvedRequests.map((req) => (
+                  <tr key={req.id} className="border-b border-slate-100 hover:bg-slate-50 transition font-bold">
+                    <td className="p-3 text-slate-900">{req.employeeName}</td>
+                    <td className="p-3 text-orange-500">{formatDate(req.date)}</td>
+                    <td className="p-3 text-slate-700">{req.slots.join(", ")}</td>
+                    <td className="p-3 text-slate-500 font-normal">{req.reason}</td>
+                    <td className="p-3">
+                      <span className="inline-flex items-center gap-1 text-xs font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
+                        Đã duyệt thành công
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -1,56 +1,126 @@
 {
+  "compensationRequests": [],
   "accounts": [
+    {
+      "id": "u-1780065922620",
+      "displayName": "Dong",
+      "username": "dong",
+      "password": "123456",
+      "department": "Phòng Thiết kế",
+      "positionIds": [
+        "designer"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 15000000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065876381",
+      "displayName": "Thao",
+      "username": "thao",
+      "password": "123456",
+      "department": "Phòng Sale",
+      "positionIds": [
+        "sale_manager"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 15000000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065846428",
+      "displayName": "Trang",
+      "username": "trang",
+      "password": "123456",
+      "department": "Kế toán",
+      "positionIds": [
+        "accountant",
+        "hr"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 10000000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065815486",
+      "displayName": "Tue",
+      "username": "tue",
+      "password": "123456",
+      "department": "Phòng Thiết kế",
+      "positionIds": [
+        "design_manager",
+        "workshop_manager"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 30000000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065787902",
+      "displayName": "Huynh",
+      "username": "huynh",
+      "password": "123456",
+      "department": "Nhân sự",
+      "positionIds": [
+        "sale_manager",
+        "sale"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 22000000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065741762",
+      "displayName": "Doan",
+      "username": "doan",
+      "password": "123456",
+      "department": "Xưởng",
+      "positionIds": [
+        "production_worker",
+        "installer"
+      ],
+      "salaryType": "daily",
+      "salaryValue": 640000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065670986",
+      "displayName": "Dat",
+      "username": "dat",
+      "password": "123456",
+      "department": "Xưởng",
+      "positionIds": [
+        "file_operator"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 15000000,
+      "status": "active"
+    },
+    {
+      "id": "u-1780065565332",
+      "displayName": "Tuyen",
+      "username": "tuyen",
+      "password": "123456",
+      "department": "Giám sát",
+      "positionIds": [
+        "supervisor_lead"
+      ],
+      "salaryType": "monthly",
+      "salaryValue": 20000000,
+      "status": "active"
+    },
     {
       "id": "u-director",
       "displayName": "Giám đốc GOMITA",
       "username": "giamdoc",
-      "password": "123",
+      "password": "123456",
       "department": "Giám đốc",
       "positionIds": [
         "director"
       ],
       "status": "active",
       "salaryType": "monthly",
-      "salaryValue": 20000000
-    },
-    {
-      "id": "u-hr",
-      "displayName": "Nhân sự GOMITA",
-      "username": "nhansu",
-      "password": "123",
-      "department": "Nhân sự",
-      "positionIds": [
-        "hr"
-      ],
-      "status": "active",
-      "salaryType": "daily",
-      "salaryValue": 420000
-    },
-    {
-      "id": "u-tuan",
-      "displayName": "Tuấn sản xuất",
-      "username": "tuan",
-      "password": "123",
-      "department": "Xưởng",
-      "positionIds": [
-        "production_worker"
-      ],
-      "status": "active",
-      "salaryType": "daily",
-      "salaryValue": 350000
-    },
-    {
-      "id": "u-hoa",
-      "displayName": "Hoa lắp đặt",
-      "username": "hoa",
-      "password": "123",
-      "department": "Giám sát",
-      "positionIds": [
-        "installer"
-      ],
-      "status": "active",
-      "salaryType": "daily",
-      "salaryValue": 350000
+      "salaryValue": 25000000
     }
   ],
   "orders": [

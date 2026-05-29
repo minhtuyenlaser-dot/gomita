@@ -28,6 +28,8 @@ import { getMenuForPosition, isWorkerPosition, mustClockIn, positions } from "@/
 import { FinanceDashboard } from "@/modules/finance/components/FinanceDashboard";
 import { OrderDashboard } from "@/modules/orders/components/OrderDashboard";
 import { demoOrders, type Order, getAssignedNames } from "@/modules/orders/orderFlow";
+import { AttendanceDashboard } from "@/modules/attendance/components/AttendanceDashboard";
+import { isSlotOpen } from "@/modules/attendance/compensationRules";
 
 const iconMap = {
   orders: BriefcaseBusiness,
@@ -51,9 +53,32 @@ export default function HomePage() {
   const [overtimeOpen, setOvertimeOpen] = useState(false);
   const [clockOpen, setClockOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const [currentSystemTime, setCurrentSystemTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentSystemTime(new Date());
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const isAnyClockInSlotOpen = useMemo(() => {
+    return ["07:30", "11:30", "13:30", "17:30"].some((slot) => {
+      const [hour, minute] = slot.split(":").map(Number);
+      const slotTime = new Date(currentSystemTime);
+      slotTime.setHours(hour, minute, 0, 0);
+      const opensAt = new Date(slotTime);
+      opensAt.setMinutes(opensAt.getMinutes() - 15);
+      const closesAt = new Date(slotTime);
+      closesAt.setHours(closesAt.getHours() + 1);
+      return currentSystemTime >= opensAt && currentSystemTime <= closesAt;
+    });
+  }, [currentSystemTime]);
 
   const [orders, setOrders] = useState<Order[]>(demoOrders);
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
+  const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
+  const [attendance, setAttendance] = useState<Record<string, string>>({});
 
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
@@ -64,6 +89,8 @@ export default function HomePage() {
           if (data.accounts) setAccounts(data.accounts);
           if (data.orders) setOrders(data.orders);
           if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
+          if (data.compensationRequests) setCompensationRequests(data.compensationRequests);
+          if (data.attendance) setAttendance(data.attendance);
         })
         .catch((err) => {
           console.warn("API Server offline, sử dụng dữ liệu offline.", err);
@@ -76,6 +103,12 @@ export default function HomePage() {
 
           const savedOt = localStorage.getItem("gomita_web_ot_v2");
           if (savedOt) setOvertimeRequests(JSON.parse(savedOt));
+
+          const savedComp = localStorage.getItem("gomita_web_comp_v3");
+          if (savedComp) setCompensationRequests(JSON.parse(savedComp));
+
+          const savedAttendance = localStorage.getItem("gomita_web_attendance_v3");
+          if (savedAttendance) setAttendance(JSON.parse(savedAttendance));
         });
     }
 
@@ -84,7 +117,7 @@ export default function HomePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay đổi dữ liệu
+  // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay dữ liệu
   useEffect(() => {
     if (accounts === demoAccounts) return;
     fetch("http://localhost:3001/api/sync", {
@@ -114,6 +147,26 @@ export default function HomePage() {
     }).catch(() => {});
     localStorage.setItem("gomita_web_ot_v2", JSON.stringify(overtimeRequests));
   }, [overtimeRequests]);
+
+  useEffect(() => {
+    if (compensationRequests.length === 0) return;
+    fetch("http://localhost:3001/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ compensationRequests })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_comp_v3", JSON.stringify(compensationRequests));
+  }, [compensationRequests]);
+
+  useEffect(() => {
+    if (Object.keys(attendance).length === 0) return;
+    fetch("http://localhost:3001/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attendance })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_attendance_v3", JSON.stringify(attendance));
+  }, [attendance]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds.includes(position.id)) : [], [currentAccount]);
   const currentPosition = positions.find((position) => position.id === positionId) ?? allowedPositions[0] ?? positions[0];
@@ -161,6 +214,16 @@ export default function HomePage() {
       )}
       {activeModule === "profile" && <ProfileDashboard account={currentAccount} accounts={accounts} position={currentPosition} overtimeRequests={overtimeRequests} />}
       {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} />}
+      {activeModule === "attendance" && (
+        <AttendanceDashboard 
+          position={currentPosition}
+          accounts={accounts}
+          compensationRequests={compensationRequests}
+          onCompensationRequestsChange={setCompensationRequests}
+          attendance={attendance}
+          onAttendanceChange={setAttendance}
+        />
+      )}
       {activeModule === "finance" && (
         <FinanceDashboard 
           orders={orders} 
@@ -171,7 +234,7 @@ export default function HomePage() {
       )}
       {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} />}
       {activeModule === "admin" && <Placeholder title="Backup/Restore" />}
-      {!["orders", "profile", "reports", "finance", "hr", "admin"].includes(activeModule) && <Placeholder title={menu.find((item) => item.id === activeModule)?.label ?? "Module"} />}
+      {!["orders", "profile", "reports", "finance", "hr", "admin", "attendance"].includes(activeModule) && <Placeholder title={menu.find((item) => item.id === activeModule)?.label ?? "Module"} />}
     </>
   );
 
@@ -226,7 +289,7 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-4">
-            {mustClockIn(currentPosition.id) && !isWorkerPosition(currentPosition.id) ? (
+            {mustClockIn(currentPosition.id) && !isWorkerPosition(currentPosition.id) && isAnyClockInSlotOpen ? (
               <button className="min-h-10 rounded-lg bg-orange-500 px-4 text-xs font-black text-white hover:bg-orange-600 transition" onClick={() => setClockOpen(true)} type="button">CHẤM CÔNG</button>
             ) : null}
             <RoleSelect allowedPositions={allowedPositions} value={currentPosition.id} onChange={changePosition} />
@@ -304,6 +367,20 @@ function SidebarClock({ onClock, onOvertime }: { onClock: () => void; onOvertime
     return () => clearInterval(interval);
   }, []);
 
+  const isAnySlotOpen = useMemo(() => {
+    const now = new Date();
+    return ["07:30", "11:30", "13:30", "17:30"].some((slot) => {
+      const [hour, minute] = slot.split(":").map(Number);
+      const slotTime = new Date(now);
+      slotTime.setHours(hour, minute, 0, 0);
+      const opensAt = new Date(slotTime);
+      opensAt.setMinutes(opensAt.getMinutes() - 15);
+      const closesAt = new Date(slotTime);
+      closesAt.setHours(closesAt.getHours() + 1);
+      return now >= opensAt && now <= closesAt;
+    });
+  }, [timeStr]);
+
   if (!mounted) {
     return (
       <div className="mt-auto p-4">
@@ -322,9 +399,19 @@ function SidebarClock({ onClock, onOvertime }: { onClock: () => void; onOvertime
       <div className="rounded-lg border border-white/15 bg-white/5 p-4 text-center">
         <div className="text-3xl font-black text-orange-400">{timeStr}</div>
         <div className="mt-1 text-sm text-slate-300">{dateStr}</div>
-        <button className="mt-4 min-h-12 w-full rounded-lg bg-orange-500 font-black" onClick={onClock} type="button">CHẤM CÔNG</button>
-        <button className="mt-2 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
-        <div className="mt-3 text-sm text-slate-300">● Trong khung giờ</div>
+        
+        {isAnySlotOpen ? (
+          <button className="mt-4 min-h-12 w-full rounded-lg bg-orange-500 font-black hover:bg-orange-600 transition" onClick={onClock} type="button">CHẤM CÔNG</button>
+        ) : (
+          <div className="mt-4 p-3 rounded-lg bg-white/5 border border-white/10 text-xs font-bold text-slate-400">
+            Ngoài khung giờ chấm công quy định (07:30, 11:30, 13:30, 17:30)
+          </div>
+        )}
+        
+        <button className="mt-2 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
+        <div className="mt-3 text-xs text-slate-300">
+          {isAnySlotOpen ? "● Đang trong khung giờ chấm công" : "○ Ngoài khung giờ chấm công"}
+        </div>
       </div>
     </div>
   );

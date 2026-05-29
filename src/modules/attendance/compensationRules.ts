@@ -70,6 +70,7 @@ export function approveCompensation(request: CompensationRequest, role: Approval
 }
 
 export function createCompensationRequest(input: {
+  employeeId: string;
   employeeName: string;
   employeePositionLevel: PositionLevel;
   date: string;
@@ -79,6 +80,7 @@ export function createCompensationRequest(input: {
 }): CompensationRequest {
   return {
     id: crypto.randomUUID(),
+    employeeId: input.employeeId,
     employeeName: input.employeeName,
     employeePositionLevel: input.employeePositionLevel,
     date: input.date,

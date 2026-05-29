@@ -11,6 +11,7 @@ export type MissingAttendanceItem = {
 
 export type CompensationRequest = {
   id: string;
+  employeeId: string;
   employeeName: string;
   employeePositionLevel: PositionLevel;
   date: string;
