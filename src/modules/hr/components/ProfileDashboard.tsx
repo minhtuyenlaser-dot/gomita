@@ -1,6 +1,6 @@
 "use client";
 
-import { BriefcaseBusiness, Camera, Clock3, Download, FileText, IdCard, Lock, UserRound } from "lucide-react";
+import { BriefcaseBusiness, Camera, Clock3, Download, FileText, IdCard, Lock, UserRound, Image } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
@@ -92,6 +92,130 @@ export function ProfileDashboard({
 
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
 
+  function downloadAttendanceAsImage() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1350;
+    canvas.height = 450;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // 1. Background
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Border
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(5, 5, canvas.width - 10, canvas.height - 10);
+
+    // 2. Title & Header
+    ctx.fillStyle = "#071a38"; // Dark Navy GOMITA
+    ctx.fillRect(5, 5, canvas.width - 10, 80);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 22px Arial, sans-serif";
+    const currentMonthText = `BANG CHAM CONG THANG ${new Date().getMonth() + 1}/${new Date().getFullYear()}`;
+    ctx.fillText(currentMonthText, 30, 48);
+
+    ctx.font = "bold 14px Arial, sans-serif";
+    ctx.fillText(`Nhan vien: ${account.displayName.toUpperCase()}   |   Bo phan: ${account.department || "Xuong"}   |   Vi tri: ${position.name.toUpperCase()}`, 30, 70);
+
+    // 3. Grid Drawing
+    const startX = 130;
+    const startY = 150;
+    const colWidth = 38;
+    const rowHeight = 50;
+
+    // Draw Column Headers (Days)
+    ctx.fillStyle = "#475569";
+    ctx.font = "bold 13px Arial, sans-serif";
+    ctx.fillText("Moc gio", 30, startY - 15);
+
+    monthDays.forEach((day, index) => {
+      const x = startX + index * colWidth;
+      ctx.fillStyle = day.getDay() === 0 ? "#ef4444" : "#475569"; // Red for Sunday
+      ctx.fillText(String(day.getDate()), x + 10, startY - 15);
+    });
+
+    // Draw Grid Lines & Data
+    slots.forEach((slot, rowIndex) => {
+      const y = startY + rowIndex * rowHeight;
+      
+      // Row Name
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "bold 13px Arial, sans-serif";
+      ctx.fillText(slot, 30, y + 6);
+
+      // Horizontal line
+      ctx.strokeStyle = "#f1f5f9";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(15, y + 18);
+      ctx.lineTo(canvas.width - 15, y + 18);
+      ctx.stroke();
+
+      monthDays.forEach((day, colIndex) => {
+        const x = startX + colIndex * colWidth;
+        const key = `${account.id}-${day.getDate()}-${slot}`;
+        const kind = attendance[key];
+
+        // Draw Circle
+        ctx.beginPath();
+        ctx.arc(x + 15, y, 7, 0, 2 * Math.PI);
+        if (kind === "normal") {
+          ctx.fillStyle = "#22c55e"; // Green
+        } else if (kind === "compensated") {
+          ctx.fillStyle = "#3b82f6"; // Blue
+        } else {
+          ctx.fillStyle = "#cbd5e1"; // Gray
+        }
+        ctx.fill();
+      });
+    });
+
+    // 4. Legend at bottom
+    const legendY = 380;
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 13px Arial, sans-serif";
+    ctx.fillText("Chu thich:", 30, legendY);
+
+    // Green Dot
+    ctx.beginPath();
+    ctx.arc(130, legendY - 4, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = "#22c55e";
+    ctx.fill();
+    ctx.fillStyle = "#475569";
+    ctx.fillText("Da cham cong", 145, legendY);
+
+    // Blue Dot
+    ctx.beginPath();
+    ctx.arc(280, legendY - 4, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = "#3b82f6";
+    ctx.fill();
+    ctx.fillStyle = "#475569";
+    ctx.fillText("Cham cong bu", 295, legendY);
+
+    // Gray Dot
+    ctx.beginPath();
+    ctx.arc(430, legendY - 4, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fill();
+    ctx.fillStyle = "#475569";
+    ctx.fillText("Thieu cong", 445, legendY);
+
+    // Brand mark
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "italic 11px Arial, sans-serif";
+    ctx.fillText("He thong quan tri doanh nghiep GOMITA - Tu dong dong bo online", canvas.width - 380, legendY);
+
+    // Trigger download
+    const url = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Bang-cong-${account.displayName}-${new Date().getMonth() + 1}.png`;
+    a.click();
+  }
+
   return (
     <section className="grid gap-5">
       {message ? <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm font-bold text-green-700">{message}</div> : null}
@@ -101,7 +225,7 @@ export function ProfileDashboard({
         <p className="mt-1 text-sm text-slate-500">Chúc bạn một ngày làm việc hiệu quả.</p>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(280px,1.2fr)_repeat(5,minmax(150px,1fr))]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(280px,1.2fr)_repeat(4,minmax(150px,1fr))]">
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-4">
             <div className="relative grid h-24 w-24 shrink-0 place-items-center rounded-full bg-slate-100">
@@ -128,7 +252,6 @@ export function ProfileDashboard({
         <Metric title="Số giờ làm việc" value={totalHours.toString()} sub="giờ" tone="violet" />
         <Metric title="Tăng ca (OT)" value={overtime.toString()} sub="giờ" tone="orange" />
         <Metric title="Thu nhập tạm tính" value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} sub={salaryType === "monthly" ? "Tạm tính (Lương tháng / ngày công)" : "Tạm tính (Lương ngày + Tăng ca)"} tone="green" />
-        <Metric title="Nghỉ phép" value="1" sub="ngày" tone="blue" />
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -142,7 +265,14 @@ export function ProfileDashboard({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black" type="button"><Download className="h-4 w-4" />Tải bảng công</button>
+            <button 
+              className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black bg-white hover:bg-slate-50 text-slate-700 transition" 
+              onClick={downloadAttendanceAsImage}
+              type="button"
+            >
+              <Image className="h-4 w-4" />
+              Tải ảnh bảng công
+            </button>
           </div>
         </div>
         <AttendanceGrid monthDays={monthDays} attendance={attendance} accountId={account.id} />
