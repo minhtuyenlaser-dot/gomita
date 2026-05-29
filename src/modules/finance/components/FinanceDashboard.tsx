@@ -135,7 +135,7 @@ export function FinanceDashboard({
     const loader = selectedOrder.installationCosts?.loader || 0;
 
     // 5. Lợi nhuận
-    const revenue = selectedOrder.quotation.quoteValue + accessorySales;
+    const revenue = (selectedOrder.quotation?.quoteValue || 0) + accessorySales;
     const totalExpenses = laborCost + materialCost + accessoryCost + transport + loader;
     const profit = revenue - totalExpenses;
 
@@ -157,7 +157,7 @@ export function FinanceDashboard({
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="text-sm font-bold text-slate-500">Doanh thu dự kiến</div>
           <div className="mt-2 text-2xl font-black text-blue-600">
-            {selectedOrder ? ((selectedOrder.quotation.quoteValue + financeStats.accessorySales).toLocaleString("vi-VN") + " đ") : "0 đ"}
+            {selectedOrder ? (((selectedOrder.quotation?.quoteValue || 0) + financeStats.accessorySales).toLocaleString("vi-VN") + " đ") : "0 đ"}
           </div>
           <div className="mt-1 text-xs text-slate-400">Gồm giá báo và phụ kiện ngoài</div>
         </div>
