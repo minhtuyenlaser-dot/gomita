@@ -1324,7 +1324,7 @@ function ClockCard({
           }
         })
         .catch((err) => {
-          console.error("Camera error:", err);
+          console.warn("Camera warning:", err);
           setCameraError(true);
         });
     } else {

@@ -465,7 +465,7 @@ function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: strin
         if (videoRef.current) videoRef.current.srcObject = s;
       })
       .catch((err) => {
-        console.error("Camera error:", err);
+        console.warn("Camera warning:", err);
         setCameraError(true);
       });
 
