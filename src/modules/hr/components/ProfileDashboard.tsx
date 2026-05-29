@@ -31,7 +31,6 @@ export function ProfileDashboard({
   const today = new Date().getDate();
   const expectedDays = monthDays.filter((day) => day.getDay() !== 0 && day.getDate() <= today).length;
   const workDays = countCompleteDays(monthDays, attendance);
-  const missing = findMissingSlot(monthDays, attendance);
   const totalHours = workDays * 8;
   
   // Tính tổng giờ tăng ca thực tế đã duyệt của tháng này
@@ -89,28 +88,7 @@ export function ProfileDashboard({
     setMessage(`Đã chấm công mốc ${slot} hôm nay và cập nhật vào bảng công.`);
   }
 
-  function compensate() {
-    if (!missing) return;
 
-    let approvalText = "Nhân sự xác nhận";
-    if (missingSlotsCount > 8) {
-      approvalText = "Nhân sự, Quản lý và Giám đốc xác nhận (do trên 8 mốc thiếu)";
-    } else if (missingSlotsCount >= 4) {
-      approvalText = "Nhân sự và Quản lý xác nhận (do từ 4-8 mốc thiếu)";
-    }
-
-    const confirmed = globalThis.confirm(
-      `Đăng ký chấm công bù cho:\n` +
-      `● Ngày: ${missing.day}/${new Date().getMonth() + 1}/${new Date().getFullYear()}\n` +
-      `● Mốc giờ: ${missing.slot}\n` +
-      `● Phê duyệt: ${approvalText}\n\n` +
-      `Bạn có chắc chắn muốn gửi yêu cầu không?`
-    );
-    if (!confirmed) return;
-
-    setAttendance((current) => ({ ...current, [`${missing.day}-${missing.slot}`]: "compensated" }));
-    setMessage(`Đã gửi yêu cầu chấm công bù Ngày ${missing.day}, Mốc ${missing.slot} thành công. Cấp duyệt: ${approvalText}.`);
-  }
 
   return (
     <section className="grid gap-5">
@@ -167,7 +145,6 @@ export function ProfileDashboard({
                 Chấm {slot}
               </button>
             ))}
-            {missing && hasClockedInCurrentSlot ? <button className="min-h-10 rounded-lg border border-blue-300 bg-blue-50 px-3 text-sm font-black text-blue-700" onClick={compensate} type="button">Chấm công bù</button> : null}
             <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black" type="button"><Download className="h-4 w-4" />Tải bảng công</button>
           </div>
         </div>
@@ -325,16 +302,7 @@ function countCompleteDays(days: Date[], attendance: Record<string, AttendanceKi
   return days.filter((day) => day.getDay() !== 0 && day.getDate() <= new Date().getDate() && slots.every((slot) => attendance[`${day.getDate()}-${slot}`])).length;
 }
 
-function findMissingSlot(days: Date[], attendance: Record<string, AttendanceKind>) {
-  const today = new Date().getDate();
-  for (const day of days) {
-    if (day.getDay() === 0 || day.getDate() > today) continue;
-    for (const slot of slots) {
-      if (!attendance[`${day.getDate()}-${slot}`]) return { day: day.getDate(), slot };
-    }
-  }
-  return null;
-}
+
 
 function getCurrentMonthDays() {
   const now = new Date();
