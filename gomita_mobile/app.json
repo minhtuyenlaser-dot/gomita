@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "GOMITA Chấm Công",
+    "slug": "gomita-chamcong",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#071a38"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gomita.chamcong",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ứng dụng cần quyền sử dụng máy ảnh trước để chụp ảnh thợ khi chấm công.",
+        "NSLocationWhenInUseUsageDescription": "Ứng dụng cần quyền sử dụng định vị GPS để xác nhận địa điểm thợ đang chấm công."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#071a38"
+      },
+      "package": "com.gomita.chamcong",
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

@@ -55,35 +55,64 @@ export default function HomePage() {
   const [orders, setOrders] = useState<Order[]>(demoOrders);
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
 
-  // Tự động khôi phục dữ liệu từ localStorage khi tải trang
+  // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
-    const savedAccounts = localStorage.getItem("gomita_web_accounts_v2");
-    if (savedAccounts) setAccounts(JSON.parse(savedAccounts));
+    function fetchData() {
+      fetch("http://localhost:3001/api/data")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.accounts) setAccounts(data.accounts);
+          if (data.orders) setOrders(data.orders);
+          if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
+        })
+        .catch((err) => {
+          console.warn("API Server offline, sử dụng dữ liệu offline.", err);
+          // Cơ chế Fallback offline lấy từ localStorage
+          const savedAccounts = localStorage.getItem("gomita_web_accounts_v2");
+          if (savedAccounts) setAccounts(JSON.parse(savedAccounts));
 
-    const savedOrders = localStorage.getItem("gomita_web_orders_v2");
-    if (savedOrders) setOrders(JSON.parse(savedOrders));
+          const savedOrders = localStorage.getItem("gomita_web_orders_v2");
+          if (savedOrders) setOrders(JSON.parse(savedOrders));
 
-    const savedOt = localStorage.getItem("gomita_web_ot_v2");
-    if (savedOt) setOvertimeRequests(JSON.parse(savedOt));
+          const savedOt = localStorage.getItem("gomita_web_ot_v2");
+          if (savedOt) setOvertimeRequests(JSON.parse(savedOt));
+        });
+    }
+
+    fetchData();
+    const interval = setInterval(fetchData, 2000); // Polling mỗi 2 giây
+    return () => clearInterval(interval);
   }, []);
 
-  // Tự động lưu dữ liệu vào localStorage khi có thay đổi
+  // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay đổi dữ liệu
   useEffect(() => {
-    if (accounts !== demoAccounts) {
-      localStorage.setItem("gomita_web_accounts_v2", JSON.stringify(accounts));
-    }
+    if (accounts === demoAccounts) return;
+    fetch("http://localhost:3001/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accounts })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_accounts_v2", JSON.stringify(accounts));
   }, [accounts]);
 
   useEffect(() => {
-    if (orders !== demoOrders) {
-      localStorage.setItem("gomita_web_orders_v2", JSON.stringify(orders));
-    }
+    if (orders === demoOrders) return;
+    fetch("http://localhost:3001/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orders })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_orders_v2", JSON.stringify(orders));
   }, [orders]);
 
   useEffect(() => {
-    if (overtimeRequests.length > 0) {
-      localStorage.setItem("gomita_web_ot_v2", JSON.stringify(overtimeRequests));
-    }
+    if (overtimeRequests.length === 0) return;
+    fetch("http://localhost:3001/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overtimeRequests })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_ot_v2", JSON.stringify(overtimeRequests));
   }, [overtimeRequests]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds.includes(position.id)) : [], [currentAccount]);

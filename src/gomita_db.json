@@ -1,0 +1,104 @@
+{
+  "accounts": [
+    {
+      "id": "u-director",
+      "displayName": "Giám đốc GOMITA",
+      "username": "giamdoc",
+      "password": "123",
+      "department": "Giám đốc",
+      "positionIds": [
+        "director"
+      ],
+      "status": "active",
+      "salaryType": "monthly",
+      "salaryValue": 20000000
+    },
+    {
+      "id": "u-hr",
+      "displayName": "Nhân sự GOMITA",
+      "username": "nhansu",
+      "password": "123",
+      "department": "Nhân sự",
+      "positionIds": [
+        "hr"
+      ],
+      "status": "active",
+      "salaryType": "daily",
+      "salaryValue": 420000
+    },
+    {
+      "id": "u-tuan",
+      "displayName": "Tuấn sản xuất",
+      "username": "tuan",
+      "password": "123",
+      "department": "Xưởng",
+      "positionIds": [
+        "production_worker"
+      ],
+      "status": "active",
+      "salaryType": "daily",
+      "salaryValue": 350000
+    },
+    {
+      "id": "u-hoa",
+      "displayName": "Hoa lắp đặt",
+      "username": "hoa",
+      "password": "123",
+      "department": "Giám sát",
+      "positionIds": [
+        "installer"
+      ],
+      "status": "active",
+      "salaryType": "daily",
+      "salaryValue": 350000
+    }
+  ],
+  "orders": [
+    {
+      "id": "o-1",
+      "code": "TUAN-LECHAN-759",
+      "customerName": "Anh Tuấn Lê Chân",
+      "area": "Hải Phòng",
+      "phone": "0912***456",
+      "address": "123 Lạch Tray, Ngô Quyền",
+      "step": "Sản xuất",
+      "progressPercent": 60,
+      "deadline": "2026-06-05",
+      "workStatus": "working",
+      "productionWorkerName": "Tuấn sản xuất",
+      "productionWorkerNames": [
+        "Tuấn sản xuất"
+      ]
+    },
+    {
+      "id": "o-2",
+      "code": "HOA-THUYNGUYEN-258",
+      "customerName": "Chị Hoa Thủy Nguyên",
+      "area": "Hải Phòng",
+      "phone": "0904***789",
+      "address": "Đường Đà Nẵng, Thủy Nguyên",
+      "step": "Lắp đặt",
+      "progressPercent": 40,
+      "deadline": "2026-06-08",
+      "workStatus": "working",
+      "installerName": "Hoa lắp đặt",
+      "installerNames": [
+        "Hoa lắp đặt"
+      ]
+    }
+  ],
+  "overtimeRequests": [
+    {
+      "id": "ot-mock-1",
+      "userId": "u-tuan",
+      "userDisplayName": "Tuấn sản xuất",
+      "from": "18:00",
+      "to": "20:00",
+      "hours": 2,
+      "reason": "Tăng ca lắp ráp tủ CNC gấp",
+      "status": "approved",
+      "createdAt": "2026-05-29T15:01:27.388Z"
+    }
+  ],
+  "attendance": {}
+}
