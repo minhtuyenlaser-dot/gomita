@@ -21,6 +21,7 @@ import type { UserAccount } from "@/modules/hr/accounts";
 import type { Position } from "@/modules/hr/roles";
 import { isWorkerPosition, positions } from "@/modules/hr/roles";
 import { attendanceSlots, getSlotWindow, isSlotOpen } from "@/modules/attendance/compensationRules";
+import type { AttendanceSlot } from "@/modules/attendance/types";
 import {
   buildOrder,
   canApproveStep,
