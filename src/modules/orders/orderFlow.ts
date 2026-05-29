@@ -201,29 +201,7 @@ function makeDemoOrder(input: {
   };
 }
 
-export const demoOrders: Order[] = [
-  {
-    ...makeDemoOrder({
-      id: "gomita-001",
-      code: "MINH-NGOQUYEN-001",
-      customerName: "Lê Minh",
-      area: "Ngô Quyền",
-      phone: "0912345678",
-      address: "123 Lạch Tray, Ngô Quyền, Hải Phòng",
-      step: "Hoàn công",
-      deadline: "15/06/2026",
-      progressPercent: 100,
-      paymentCollected: true
-    }),
-    finalNote: "Đơn hàng giả lập chạy đầy đủ các bước từ Tiếp nhận đến Hoàn công.",
-    quotation: {
-      estimateValue: 350000000,
-      quoteValue: 340000000,
-      estimatePhotoUploaded: true,
-      quotePhotoUploaded: true
-    }
-  }
-];
+export const demoOrders: Order[] = [];
 
 export function createOrderCode(customerName: string, area: string, phone: string, existingCodes: string[]) {
   const base = `${normalizeCodePart(customerName)}-${normalizeCodePart(area)}-${phone.replace(/\D/g, "").slice(-3)}`;

@@ -57,32 +57,32 @@ export default function HomePage() {
 
   // Tự động khôi phục dữ liệu từ localStorage khi tải trang
   useEffect(() => {
-    const savedAccounts = localStorage.getItem("gomita_web_accounts");
+    const savedAccounts = localStorage.getItem("gomita_web_accounts_v2");
     if (savedAccounts) setAccounts(JSON.parse(savedAccounts));
 
-    const savedOrders = localStorage.getItem("gomita_web_orders");
+    const savedOrders = localStorage.getItem("gomita_web_orders_v2");
     if (savedOrders) setOrders(JSON.parse(savedOrders));
 
-    const savedOt = localStorage.getItem("gomita_web_ot");
+    const savedOt = localStorage.getItem("gomita_web_ot_v2");
     if (savedOt) setOvertimeRequests(JSON.parse(savedOt));
   }, []);
 
   // Tự động lưu dữ liệu vào localStorage khi có thay đổi
   useEffect(() => {
     if (accounts !== demoAccounts) {
-      localStorage.setItem("gomita_web_accounts", JSON.stringify(accounts));
+      localStorage.setItem("gomita_web_accounts_v2", JSON.stringify(accounts));
     }
   }, [accounts]);
 
   useEffect(() => {
     if (orders !== demoOrders) {
-      localStorage.setItem("gomita_web_orders", JSON.stringify(orders));
+      localStorage.setItem("gomita_web_orders_v2", JSON.stringify(orders));
     }
   }, [orders]);
 
   useEffect(() => {
     if (overtimeRequests.length > 0) {
-      localStorage.setItem("gomita_web_ot", JSON.stringify(overtimeRequests));
+      localStorage.setItem("gomita_web_ot_v2", JSON.stringify(overtimeRequests));
     }
   }, [overtimeRequests]);
 
