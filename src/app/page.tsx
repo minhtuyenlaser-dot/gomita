@@ -19,7 +19,7 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { demoAccounts, type UserAccount } from "@/modules/hr/accounts";
 import { AccountManagement } from "@/modules/hr/components/AccountManagement";
 import { LoginScreen } from "@/modules/hr/components/LoginScreen";
@@ -249,11 +249,50 @@ export default function HomePage() {
 }
 
 function SidebarClock({ onClock, onOvertime }: { onClock: () => void; onOvertime: () => void }) {
+  const [mounted, setMounted] = useState(false);
+  const [timeStr, setTimeStr] = useState("07:30:00");
+  const [dateStr, setDateStr] = useState("Thứ 6, 24/05/2024");
+
+  useEffect(() => {
+    setMounted(true);
+    function updateClock() {
+      const now = new Date();
+      const hours = String(now.getHours()).padStart(2, "0");
+      const minutes = String(now.getMinutes()).padStart(2, "0");
+      const seconds = String(now.getSeconds()).padStart(2, "0");
+      setTimeStr(`${hours}:${minutes}:${seconds}`);
+      
+      const daysOfWeek = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
+      const dayName = daysOfWeek[now.getDay()];
+      const day = String(now.getDate()).padStart(2, "0");
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const year = now.getFullYear();
+      setDateStr(`${dayName}, ${day}/${month}/${year}`);
+    }
+    
+    updateClock();
+    const interval = setInterval(updateClock, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div className="mt-auto p-4">
+        <div className="rounded-lg border border-white/15 bg-white/5 p-4 text-center animate-pulse">
+          <div className="h-8 bg-white/10 rounded w-3/4 mx-auto mb-2"></div>
+          <div className="h-4 bg-white/10 rounded w-1/2 mx-auto mb-4"></div>
+          <div className="h-12 bg-white/10 rounded w-full mb-2"></div>
+          <div className="h-10 bg-white/10 rounded w-full"></div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-auto p-4">
       <div className="rounded-lg border border-white/15 bg-white/5 p-4 text-center">
-        <div className="text-3xl font-black text-orange-400">07:30:00</div>
-        <div className="mt-1 text-sm text-slate-300">Thứ 6, 24/05/2024</div>
+        <div className="text-3xl font-black text-orange-400">{timeStr}</div>
+        <div className="mt-1 text-sm text-slate-300">{dateStr}</div>
         <button className="mt-4 min-h-12 w-full rounded-lg bg-orange-500 font-black" onClick={onClock} type="button">CHẤM CÔNG</button>
         <button className="mt-2 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
         <div className="mt-3 text-sm text-slate-300">● Trong khung giờ</div>
@@ -403,17 +442,38 @@ function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: strin
   const [answers, setAnswers] = useState<Record<string, boolean>>({});
   const [cameraReady, setCameraReady] = useState(activeJobs.length === 0);
   const [gpsText, setGpsText] = useState("Đang lấy định vị...");
+  
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState(false);
 
   useEffect(() => {
     if (!cameraReady) return;
     if (!navigator.geolocation) {
       setGpsText("Không hỗ trợ GPS trên thiết bị này");
-      return;
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        (position) => setGpsText(`Vị trí hiện tại: Hải Phòng (${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)})`),
+        () => setGpsText("Không lấy được GPS, cần cấp quyền định vị")
+      );
     }
-    navigator.geolocation.getCurrentPosition(
-      (position) => setGpsText(`Vị trí hiện tại: Hải Phòng (${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)})`),
-      () => setGpsText("Không lấy được GPS, cần cấp quyền định vị")
-    );
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+      .then((s) => {
+        setStream(s);
+        setCameraError(false);
+        if (videoRef.current) videoRef.current.srcObject = s;
+      })
+      .catch((err) => {
+        console.error("Camera error:", err);
+        setCameraError(true);
+      });
+
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
   }, [cameraReady]);
 
   function answer(done: boolean) {
@@ -432,7 +492,10 @@ function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: strin
       <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-xl font-black">Chấm công</h2>
-          <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" onClick={onClose} type="button"><X className="h-5 w-5" /></button>
+          <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" onClick={() => {
+            if (stream) stream.getTracks().forEach((track) => track.stop());
+            onClose();
+          }} type="button"><X className="h-5 w-5" /></button>
         </div>
         {!cameraReady ? (
           <div className="grid gap-4 text-center">
@@ -446,17 +509,26 @@ function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: strin
           </div>
         ) : (
           <div className="grid gap-4">
-            <div className="rounded-lg bg-slate-100 p-6 text-center">
-              <Camera className="mx-auto h-14 w-14 text-slate-600" />
-              <div className="mt-2 font-bold">Camera chấm công</div>
-              <div className="mt-1 text-sm text-slate-500">Khi nối thiết bị thật sẽ mở camera, chụp ảnh và đóng ngày giờ lên ảnh.</div>
+            <div className="rounded-lg bg-slate-100 p-2 overflow-hidden aspect-[4/3] relative flex items-center justify-center border">
+              {cameraError ? (
+                <div className="text-center p-4">
+                  <Camera className="mx-auto h-14 w-14 text-slate-400" />
+                  <div className="mt-2 font-bold text-red-500">Không mở được camera</div>
+                  <div className="mt-1 text-xs text-slate-500">Vui lòng kiểm tra quyền camera của trình duyệt.</div>
+                </div>
+              ) : (
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover rounded scale-x-[-1]" />
+              )}
             </div>
             <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-700">
               <div>Nhân viên: {employeeName}</div>
               <div>Thời gian: {new Date().toLocaleString("vi-VN")}</div>
               <div>{gpsText}</div>
             </div>
-            <button className="min-h-12 rounded-lg bg-green-600 font-black text-white" onClick={() => onSubmit(`Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và câu trả lời công việc.`)} type="button">
+            <button className="min-h-12 rounded-lg bg-green-600 font-black text-white" onClick={() => {
+              if (stream) stream.getTracks().forEach((track) => track.stop());
+              onSubmit(`Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và chụp ảnh thành công.`);
+            }} type="button">
               Chụp ảnh và lưu chấm công
             </button>
           </div>

@@ -16,7 +16,7 @@ import {
   X
 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UserAccount } from "@/modules/hr/accounts";
 import type { Position } from "@/modules/hr/roles";
 import { isWorkerPosition, positions } from "@/modules/hr/roles";
@@ -59,11 +59,12 @@ const stepStyles = [
 ];
 
 export function canManagerAssign(positionId: string, step: OrderStep): boolean {
+  if (step === "Nghiệm thu") return false; // Nghiệm thu không giao việc!
   if (positionId === "admin" || positionId === "director") return true;
   if (positionId === "sale_manager") return ["Tiếp nhận", "Báo giá"].includes(step);
   if (positionId === "design_manager") return step === "Thiết kế";
   if (positionId === "workshop_manager") return ["Ra file", "Sản xuất"].includes(step);
-  if (positionId === "supervisor_lead") return ["Lắp đặt", "Nghiệm thu"].includes(step);
+  if (positionId === "supervisor_lead") return step === "Lắp đặt"; // (Bỏ Nghiệm thu!)
   return false;
 }
 
@@ -634,9 +635,24 @@ function OrderSidePanel({
                 Quản lý xác nhận chuyển bước
               </button>
             ) : null}
-            <button className="min-h-11 rounded-lg bg-orange-500 font-black text-white disabled:bg-slate-300" disabled={!canHandle || order.workStatus === "pending_confirmation" || orderSteps.indexOf(order.step) === orderSteps.length - 1} onClick={() => onMove(order)} type="button">
-              {requiresManagerConfirmation(position.id, order) ? "Gửi quản lý xác nhận" : "Chuyển bước"}
-            </button>
+            {order.step === "Nghiệm thu" ? (
+              canHandle ? (
+                <button 
+                  className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition animate-pulse" 
+                  onClick={() => {
+                    const confirmed = globalThis.confirm(`Xác nhận nghiệm thu xong cho đơn hàng ${order.code} và chuyển sang Hoàn công?`);
+                    if (confirmed) onApprove(order);
+                  }} 
+                  type="button"
+                >
+                  Đã nghiệm thu xong (Chuyển sang Hoàn công)
+                </button>
+              ) : null
+            ) : (
+              <button className="min-h-11 rounded-lg bg-orange-500 font-black text-white disabled:bg-slate-300" disabled={!canHandle || order.workStatus === "pending_confirmation" || orderSteps.indexOf(order.step) === orderSteps.length - 1} onClick={() => onMove(order)} type="button">
+                {requiresManagerConfirmation(position.id, order) ? "Gửi quản lý xác nhận" : "Chuyển bước"}
+              </button>
+            )}
             {canAssign ? (
               <button className="min-h-11 rounded-lg border border-blue-200 bg-blue-50 font-black text-blue-700" onClick={() => onAssign(order)} type="button">
                 Giao việc
@@ -835,6 +851,11 @@ function WorkerWorkspace({
   setOrders: Dispatch<SetStateAction<Order[]>>;
   overtimeRequests: any[];
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id ?? "");
   const [flowIndex, setFlowIndex] = useState<number | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
@@ -848,12 +869,17 @@ function WorkerWorkspace({
   const slotWindow = getSlotWindow(currentSlot);
   const needsEndOfShiftQuestion = currentSlot === "11:30" || currentSlot === "17:30";
 
-  // Quản lý Modal Chấm Công Bù Thông Minh
-  const [compOpen, setCompOpen] = useState(false);
-  const [compReason, setCompReason] = useState("");
-  const [selectedCompSlots, setSelectedCompSlots] = useState<Array<{ date: string; slot: AttendanceSlot }>>([]);
+  // Lọc các đơn thợ thực tế đang làm việc
+  const activeWorkingOrders = useMemo(() => {
+    return workerOrders.filter(o => o.workStatus === "working");
+  }, [workerOrders]);
 
-  // Lọc các mốc thiếu công thông minh
+  const today = new Date().getDate();
+  const hasClockedInCurrentSlot = useMemo(() => {
+    return attendance[`${today}-${currentSlot}`] === "normal" || attendance[`${today}-${currentSlot}`] === "compensated";
+  }, [attendance, today, currentSlot]);
+
+  // Lọc các mốc thiếu công thông minh (không giới hạn 3 ngày nữa)
   const missingSlots = useMemo(() => {
     const list: Array<{ date: string; slot: AttendanceSlot; isIgnored: boolean }> = [];
     const today = new Date().getDate();
@@ -864,8 +890,7 @@ function WorkerWorkspace({
         const key = `${day.getDate()}-${slot}`;
         // Nếu chưa chấm công thành công (normal) hoặc chấm công bù (compensated)
         if (!attendance[key]) {
-          // Bị coi là bỏ qua nếu quá hạn 3 ngày tính từ hôm nay (đủ số lần nhắc nhở)
-          const isIgnored = (today - day.getDate()) > 3;
+          const isIgnored = false; // Bỏ giới hạn khóa 3 ngày
           list.push({
             date: `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`,
             slot,
@@ -876,6 +901,16 @@ function WorkerWorkspace({
     });
     return list;
   }, [monthDays, attendance]);
+
+  const hasMissingAndClockedIn = useMemo(() => {
+    const actualMissingCount = missingSlots.filter(item => !item.isIgnored).length;
+    return actualMissingCount > 0 && hasClockedInCurrentSlot;
+  }, [missingSlots, hasClockedInCurrentSlot]);
+
+  // Quản lý Modal Chấm Công Bù Thông Minh
+  const [compOpen, setCompOpen] = useState(false);
+  const [compReason, setCompReason] = useState("");
+  const [selectedCompSlots, setSelectedCompSlots] = useState<Array<{ date: string; slot: AttendanceSlot }>>([]);
 
   function markAttendance(kind: WorkerAttendanceKind, day = new Date().getDate(), slot = currentSlot) {
     setAttendance((current) => ({ ...current, [`${day}-${slot}`]: kind }));
@@ -898,30 +933,59 @@ function WorkerWorkspace({
     setSelectedCompSlots([]);
     setCompReason("");
 
+    // Tính toán cấp phê duyệt
+    const totalMissing = missingSlots.length;
+    let approvalText = "Nhân sự xác nhận";
+    if (totalMissing > 8) {
+      approvalText = "Nhân sự, Quản lý và Giám đốc xác nhận (do trên 8 mốc thiếu)";
+    } else if (totalMissing >= 4) {
+      approvalText = "Nhân sự và Quản lý xác nhận (do từ 4-8 mốc thiếu)";
+    }
+
     // Hiển thị chính xác thông báo thành công theo mẫu
     alert(
-      "Yêu cầu chấm công bù của bạn đã được gửi đi.\n" +
-      "Nếu không được xác nhận, liên hệ với nhân sự và quản lý để được xác nhận nhé.\n" +
-      "Sau bạn nhớ chấm công đúng giờ để đảm bảo quyền lợi của mình.\n" +
-      "Cảm ơn!"
+      `Yêu cầu chấm công bù của bạn đã được gửi đi.\n` +
+      `● Số mốc đăng ký bù: ${selectedCompSlots.length} mốc\n` +
+      `● Cấp phê duyệt cần thiết: ${approvalText}\n\n` +
+      `Nếu không được xác nhận, liên hệ với nhân sự và quản lý để được xác nhận nhé.\n` +
+      `Sau bạn nhớ chấm công đúng giờ để đảm bảo quyền lợi của mình.\n` +
+      `Cảm ơn!`
     );
-    setClockMessage("Yêu cầu chấm công bù đã được gửi thành công.");
+    setClockMessage(`Yêu cầu chấm công bù đã được gửi thành công. Cần: ${approvalText}.`);
+  }
+
+  function handleReportDone() {
+    if (!selectedOrder) return;
+    const confirmed = globalThis.confirm(`Bạn có chắc chắn muốn báo cáo hoàn thành cho đơn hàng ${selectedOrder.code} không?`);
+    if (!confirmed) return;
+    setReportedDoneIds(curr => [...curr, selectedOrder.id]);
+    setOrders(curr => curr.map(o => o.id === selectedOrder.id ? requestStepConfirmation(o, currentUserName, "Thợ báo xong từ màn hình chính") : o));
+    alert(`Đã gửi báo cáo hoàn thành đơn hàng ${selectedOrder.code} tới giám sát/quản lý phê duyệt.`);
   }
 
   function answerWork(done: boolean) {
     if (flowIndex === null) return;
-    const order = workerOrders[flowIndex];
+    const order = activeWorkingOrders[flowIndex];
     if (done && order) {
       setReportedDoneIds((current) => current.includes(order.id) ? current : [...current, order.id]);
       setOrders((current) => current.map((item) => item.id === order.id ? requestStepConfirmation(item, currentUserName, "Báo xong khi chấm công cuối buổi") : item));
     }
     const nextIndex = flowIndex + 1;
-    if (nextIndex < workerOrders.length) {
+    if (nextIndex < activeWorkingOrders.length) {
       setFlowIndex(nextIndex);
       return;
     }
     setFlowIndex(null);
     setCameraReady(true);
+  }
+
+  if (!mounted) {
+    return (
+      <div className="flex min-h-[400px] flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-orange-500 border-t-transparent"></div>
+        <p className="mt-4 text-sm font-bold text-slate-500">Đang tải không gian làm việc của thợ...</p>
+      </div>
+    );
   }
 
   return (
@@ -940,17 +1004,17 @@ function WorkerWorkspace({
             </div>
           </div>
           <div className="mt-4 bg-slate-50 p-3 rounded-lg border border-slate-100 text-xs text-slate-500">
-            Mốc chấm công tiếp theo: <strong className="text-slate-800">{currentSlot}</strong> ({formatTime(slotWindow.opensAt.toISOString())} - {formatTime(slotWindow.closesAt.toISOString())})
+            Mốc chấm công tiếp theo: <strong className="text-slate-800">{currentSlot}</strong> ({formatTime(slotWindow.opensAt)} - {formatTime(slotWindow.closesAt)})
           </div>
         </div>
 
         <ClockCard 
           currentSlot={currentSlot} 
-          windowText={`${formatTime(slotWindow.opensAt.toISOString())} - ${formatTime(slotWindow.closesAt.toISOString())}`} 
+          windowText={`${formatTime(slotWindow.opensAt)} - ${formatTime(slotWindow.closesAt)}`} 
           cameraReady={cameraReady} 
           needsQuestion={needsEndOfShiftQuestion} 
           onStart={() => {
-            if (needsEndOfShiftQuestion && workerOrders.length) setFlowIndex(0);
+            if (needsEndOfShiftQuestion && activeWorkingOrders.length) setFlowIndex(0);
             else setCameraReady(true);
           }} 
           onCapture={() => {
@@ -964,7 +1028,7 @@ function WorkerWorkspace({
             if (actualMissing.length > 0) {
               setTimeout(() => {
                 const wishComp = globalThis.confirm(
-                  `Bạn đang thiếu ${actualMissing.length} mốc chấm công trong 3 ngày gần nhất.\n` +
+                  `Bạn đang thiếu ${actualMissing.length} mốc chấm công từ đầu tháng.\n` +
                   `Bạn có muốn thực hiện đăng ký chấm công bù ngay bây giờ không?`
                 );
                 if (wishComp) {
@@ -973,6 +1037,8 @@ function WorkerWorkspace({
               }, 600);
             }
           }} 
+          selectedOrder={selectedOrder}
+          onReportDone={handleReportDone}
         />
       </div>
 
@@ -1015,29 +1081,14 @@ function WorkerWorkspace({
           <WorkerDetail order={selectedOrder} />
           
           <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h4 className="font-black text-slate-800 mb-3">Checklist trước khi hoàn thành</h4>
-            <div className="grid gap-3">
-              <label className="flex items-center gap-3 text-sm p-3 rounded-lg border border-slate-200">
-                <input 
-                  type="checkbox" 
-                  checked={reportedDoneIds.includes(selectedOrder.id) || selectedOrder.workStatus === "pending_confirmation"} 
-                  disabled={selectedOrder.workStatus === "pending_confirmation"}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setReportedDoneIds(curr => [...curr, selectedOrder.id]);
-                      setOrders(curr => curr.map(o => o.id === selectedOrder.id ? requestStepConfirmation(o, currentUserName, "Thợ báo xong") : o));
-                    }
-                  }}
-                />
-                <span className="font-bold">Đã làm xong công việc và báo cáo giám sát</span>
-              </label>
-              
-              <div className="text-xs text-slate-500 mt-2 bg-slate-50 p-3 rounded border">
-                Trạng thái: <strong>{getWorkStatusMeta(selectedOrder).label}</strong>
-                {selectedOrder.workStatus === "pending_confirmation" && (
-                  <p className="mt-1 font-semibold text-amber-600">● Đơn đang chờ Giám sát hoặc Quản lý xưởng phê duyệt chuyển bước.</p>
-                )}
-              </div>
+            <h4 className="font-black text-slate-800 mb-3">Trạng thái công việc</h4>
+            <div className="text-sm bg-slate-50 p-4 rounded-lg border">
+              Trạng thái đơn hàng: <strong className="text-slate-800">{getWorkStatusMeta(selectedOrder).label}</strong>
+              {selectedOrder.workStatus === "pending_confirmation" ? (
+                <p className="mt-2 font-semibold text-amber-600">● Đơn đang chờ Giám sát hoặc Quản lý xưởng phê duyệt chuyển bước.</p>
+              ) : (
+                <p className="mt-2 font-semibold text-green-600">● Bạn đang thực hiện công việc này. Bấm nút "BÁO CÁO HOÀN THÀNH CÔNG VIỆC" ở góc trên khi làm xong nhé.</p>
+              )}
             </div>
           </aside>
         </div>
@@ -1054,12 +1105,21 @@ function WorkerWorkspace({
               <LegendDot color="bg-slate-300" label="Thiếu công" />
             </div>
           </div>
+          {hasMissingAndClockedIn && (
+            <button 
+              className="min-h-10 rounded-lg border border-blue-300 bg-blue-50 px-4 text-sm font-black text-blue-700 hover:bg-blue-100 transition animate-pulse" 
+              onClick={() => setCompOpen(true)} 
+              type="button"
+            >
+              Đăng ký chấm công bù
+            </button>
+          )}
         </div>
         <WorkerAttendanceGrid monthDays={monthDays} attendance={attendance} />
       </div>
 
       {flowIndex !== null ? (
-        <ConfirmCard index={`${flowIndex + 1}/${workerOrders.length}`} orderCode={workerOrders[flowIndex]?.code ?? ""} onAnswer={answerWork} finalQuestion={flowIndex === workerOrders.length - 1} />
+        <ConfirmCard index={`${flowIndex + 1}/${activeWorkingOrders.length}`} orderCode={activeWorkingOrders[flowIndex]?.code ?? ""} onAnswer={answerWork} finalQuestion={flowIndex === activeWorkingOrders.length - 1} />
       ) : null}
 
       {/* 2. & 3. MODAL CHẤM CÔNG BÙ THÔNG MINH */}
@@ -1230,18 +1290,105 @@ function WorkerDetail({ order }: { order: Order }) {
   );
 }
 
-function ClockCard({ currentSlot, windowText, cameraReady, needsQuestion, onStart, onCapture }: { currentSlot: string; windowText: string; cameraReady: boolean; needsQuestion: boolean; onStart: () => void; onCapture: () => void }) {
+function ClockCard({ 
+  currentSlot, 
+  windowText, 
+  cameraReady, 
+  needsQuestion, 
+  onStart, 
+  onCapture,
+  selectedOrder,
+  onReportDone
+}: { 
+  currentSlot: string; 
+  windowText: string; 
+  cameraReady: boolean; 
+  needsQuestion: boolean; 
+  onStart: () => void; 
+  onCapture: () => void;
+  selectedOrder?: Order;
+  onReportDone?: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState(false);
+
+  useEffect(() => {
+    if (cameraReady) {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+        .then((s) => {
+          setStream(s);
+          setCameraError(false);
+          if (videoRef.current) {
+            videoRef.current.srcObject = s;
+          }
+        })
+        .catch((err) => {
+          console.error("Camera error:", err);
+          setCameraError(true);
+        });
+    } else {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+        setStream(null);
+      }
+    }
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [cameraReady]);
+
   return (
-    <div className="rounded-xl border border-green-200 bg-emerald-50/50 p-6 text-center shadow-sm flex flex-col justify-center items-center text-slate-900">
+    <div className="rounded-xl border border-green-200 bg-emerald-50/50 p-6 text-center shadow-sm flex flex-col justify-center items-center text-slate-900 w-full">
       <h3 className="font-black text-slate-800 text-lg">Chấm công mốc hiện tại</h3>
       <div className="mt-3 text-5xl font-black text-green-600">{currentSlot}</div>
       <div className="mt-3 flex items-center justify-center gap-1.5 text-sm text-green-700 font-semibold"><CheckCircle2 className="h-4 w-4 text-green-600" />Đang trong giờ ({windowText})</div>
       
+      {cameraReady && (
+        <div className="mt-4 overflow-hidden rounded-lg border-2 border-green-500 bg-black w-full max-w-[280px] aspect-[4/3] relative flex items-center justify-center">
+          {cameraError ? (
+            <div className="p-4 text-xs font-bold text-red-500 bg-white w-full h-full flex flex-col justify-center items-center">
+              <AlertTriangle className="h-8 w-8 text-red-500 mb-2 animate-bounce" />
+              <span>Không mở được camera trực tiếp.</span>
+              <span className="text-[10px] text-slate-400 mt-1">Vui lòng kiểm tra quyền camera của trình duyệt.</span>
+            </div>
+          ) : (
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
+              muted 
+              className="w-full h-full object-cover scale-x-[-1]" 
+            />
+          )}
+        </div>
+      )}
+
       <button className="mt-5 flex min-h-14 w-full max-w-xs items-center justify-center gap-3 rounded-xl bg-green-600 text-xl font-black text-white shadow-lg shadow-green-600/20 hover:bg-green-700 transition" onClick={cameraReady ? onCapture : onStart} type="button">
         <Camera className="h-6 w-6" />
         {cameraReady ? "CHỤP ẢNH" : "CHẤM CÔNG"}
       </button>
-      <div className="mt-3 text-xs text-slate-500">{cameraReady ? "Vui lòng chụp ảnh khuôn mặt." : needsQuestion ? "Cần báo cáo trạng thái đơn hàng trước khi chụp ảnh." : "Nhấp nút Chấm công."}</div>
+      <div className="mt-2 text-xs text-slate-500">{cameraReady ? "Vui lòng chụp ảnh khuôn mặt." : needsQuestion ? "Cần báo cáo trạng thái đơn hàng trước khi chụp ảnh." : "Nhấp nút Chấm công."}</div>
+      
+      {selectedOrder && onReportDone && (
+        <button 
+          className={`mt-4 flex min-h-12 w-full max-w-xs items-center justify-center gap-2 rounded-xl font-black transition text-sm ${
+            selectedOrder.workStatus === "pending_confirmation"
+              ? "bg-amber-100 text-amber-700 border border-amber-300 cursor-not-allowed"
+              : "bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-600"
+          }`}
+          disabled={selectedOrder.workStatus === "pending_confirmation"}
+          onClick={onReportDone}
+          type="button"
+        >
+          <Check className="h-5 w-5" />
+          {selectedOrder.workStatus === "pending_confirmation" 
+            ? "ĐÃ BÁO CÁO XONG (CHỜ DUYỆT)" 
+            : "BÁO CÁO HOÀN THÀNH CÔNG VIỆC"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1539,8 +1686,11 @@ function maskPhone(phone: string) {
   return `${phone.slice(0, 3)}***${phone.slice(-3)}`;
 }
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+function formatTime(value: string | Date) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 function formatDate(value: string) {

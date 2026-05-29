@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
 import type { Position } from "../roles";
+import { attendanceSlots, isSlotOpen } from "@/modules/attendance/compensationRules";
 
 type AttendanceKind = "normal" | "compensated";
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
@@ -26,6 +27,25 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
   const overtime = position.id === "hr" ? 12.5 : 8;
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
 
+  // Tính số lượng mốc thiếu công trong tháng thực tế
+  const missingSlotsCount = useMemo(() => {
+    let count = 0;
+    monthDays.forEach((day) => {
+      if (day.getDay() === 0 || day.getDate() > today) return;
+      slots.forEach((slot) => {
+        if (!attendance[`${day.getDate()}-${slot}`]) count++;
+      });
+    });
+    return count;
+  }, [monthDays, attendance, today]);
+
+  // Kiểm tra xem đã chấm công cho mốc hiện tại chưa
+  const currentSlot = useMemo(() => attendanceSlots.find((slot) => isSlotOpen(slot)), []);
+  const hasClockedInCurrentSlot = useMemo(() => {
+    if (!currentSlot) return true; // Ngoài khung giờ thì mặc định cho phép hiện nút
+    return attendance[`${today}-${currentSlot}`] === "normal" || attendance[`${today}-${currentSlot}`] === "compensated";
+  }, [attendance, today, currentSlot]);
+
   function clockIn(slot: Slot) {
     const key = `${today}-${slot}`;
     setAttendance((current) => ({ ...current, [key]: "normal" }));
@@ -34,8 +54,25 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
 
   function compensate() {
     if (!missing) return;
+
+    let approvalText = "Nhân sự xác nhận";
+    if (missingSlotsCount > 8) {
+      approvalText = "Nhân sự, Quản lý và Giám đốc xác nhận (do trên 8 mốc thiếu)";
+    } else if (missingSlotsCount >= 4) {
+      approvalText = "Nhân sự và Quản lý xác nhận (do từ 4-8 mốc thiếu)";
+    }
+
+    const confirmed = globalThis.confirm(
+      `Đăng ký chấm công bù cho:\n` +
+      `● Ngày: ${missing.day}/${new Date().getMonth() + 1}/${new Date().getFullYear()}\n` +
+      `● Mốc giờ: ${missing.slot}\n` +
+      `● Phê duyệt: ${approvalText}\n\n` +
+      `Bạn có chắc chắn muốn gửi yêu cầu không?`
+    );
+    if (!confirmed) return;
+
     setAttendance((current) => ({ ...current, [`${missing.day}-${missing.slot}`]: "compensated" }));
-    setMessage(`Đã gửi chấm công bù ngày ${missing.day}, mốc ${missing.slot}.`);
+    setMessage(`Đã gửi yêu cầu chấm công bù Ngày ${missing.day}, Mốc ${missing.slot} thành công. Cấp duyệt: ${approvalText}.`);
   }
 
   return (
@@ -92,7 +129,7 @@ export function ProfileDashboard({ account, position }: { account: UserAccount; 
                 Chấm {slot}
               </button>
             ))}
-            {missing ? <button className="min-h-10 rounded-lg border border-blue-300 bg-blue-50 px-3 text-sm font-black text-blue-700" onClick={compensate} type="button">Chấm công bù</button> : null}
+            {missing && hasClockedInCurrentSlot ? <button className="min-h-10 rounded-lg border border-blue-300 bg-blue-50 px-3 text-sm font-black text-blue-700" onClick={compensate} type="button">Chấm công bù</button> : null}
             <button className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black" type="button"><Download className="h-4 w-4" />Tải bảng công</button>
           </div>
         </div>

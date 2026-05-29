@@ -4,11 +4,11 @@ import type { PositionLevel } from "@/modules/hr/roles";
 export const attendanceSlots: AttendanceSlot[] = ["07:30", "11:30", "13:30", "17:30"];
 
 export function getRequiredApprovals(level: PositionLevel, missingCountInMonth: number): ApprovalRole[] {
-  if (level === "director" || missingCountInMonth > 12) {
+  if (level === "director" || missingCountInMonth > 8) {
     return ["hr", "department_manager", "director"];
   }
 
-  if (level === "team_lead" || level === "department_head" || missingCountInMonth > 8) {
+  if (level === "team_lead" || level === "department_head" || missingCountInMonth >= 4) {
     return ["hr", "department_manager"];
   }
 
