@@ -114,7 +114,7 @@ export default function HomePage() {
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
     function fetchData() {
-      fetch("http://localhost:3001/api/data")
+      fetch("https://gomita.onrender.com/api/data")
         .then((res) => res.json())
         .then((data) => {
           if (data.accounts) setAccounts(data.accounts);
@@ -151,7 +151,7 @@ export default function HomePage() {
   // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay dữ liệu
   useEffect(() => {
     if (accounts === demoAccounts) return;
-    fetch("http://localhost:3001/api/sync", {
+    fetch("https://gomita.onrender.com/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accounts })
@@ -161,7 +161,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (orders === demoOrders) return;
-    fetch("http://localhost:3001/api/sync", {
+    fetch("https://gomita.onrender.com/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orders })
@@ -171,7 +171,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (overtimeRequests.length === 0) return;
-    fetch("http://localhost:3001/api/sync", {
+    fetch("https://gomita.onrender.com/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ overtimeRequests })
@@ -181,7 +181,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (compensationRequests.length === 0) return;
-    fetch("http://localhost:3001/api/sync", {
+    fetch("https://gomita.onrender.com/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ compensationRequests })
@@ -191,7 +191,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (Object.keys(attendance).length === 0) return;
-    fetch("http://localhost:3001/api/sync", {
+    fetch("https://gomita.onrender.com/api/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendance })
