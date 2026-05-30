@@ -396,136 +396,182 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
     return parseFloat(totalHours.toFixed(1));
   }
 
-  // 1. Tính toán tiền công thợ và ngày công
+  // 1. Lấy TOÀN BỘ người thực hiện mỗi công đoạn từ order.*Names (chính xác hơn historyLogs.assignee)
+  function getAssigneeListForStep(step: string): string[] {
+    switch (step) {
+      case "Ti\u1ebfp nh\u1eadn":
+      case "B\u00e1o gi\u00e1":
+        return order.saleName ? order.saleName.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      case "Thi\u1ebft k\u1ebf":
+        return ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
+      case "Ra file":
+        return ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
+      case "S\u1ea3n xu\u1ea5t":
+        return ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
+      case "L\u1eafp \u0111\u1eb7t":
+        return ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
+      case "Nghi\u1ec7m thu":
+      case "Ho\u00e0n c\u00f4ng":
+        return ((order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName]) as string[]).filter(Boolean);
+      default:
+        return [];
+    }
+  }
+
+  // 2. Tính toán tiền công thợ và ngày công
   let totalLaborCost = 0;
   let totalWorkdays = 0;
-  const logsSummary = (order.historyLogs || []).map(log => {
+  const logsSummary = (order.historyLogs || []).map((log) => {
     const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
-    
-    // Lấy giờ tăng ca được phê duyệt
-    const overtimeHours = overtimeRequests
-      .filter(req => req.orderCode === order.code && req.userDisplayName === log.assignee && req.status === "approved")
-      .reduce((sum, req) => sum + (req.hours || 0), 0);
+    const assigneeList = getAssigneeListForStep(log.step);
+    // Nếu không tìm được ai từ order fields, dùng log.assignee làm fallback
+    const finalAssignees = assigneeList.length > 0 ? assigneeList : [log.assignee].filter(Boolean);
 
-    const totalHours = workingHours + overtimeHours;
-    const workdays = parseFloat((totalHours / 8).toFixed(2));
-    const dayRate = 350000;
-    const cost = workdays * dayRate;
-    
-    totalWorkdays += workdays;
-    totalLaborCost += cost;
+    // Tính OT và chi phí riêng cho từng người
+    const assigneeDetails = finalAssignees.map((name) => {
+      const personOT = overtimeRequests
+        .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
+        .reduce((sum, req) => sum + (req.hours || 0), 0);
+      const totalHours = workingHours + personOT;
+      const workdays = parseFloat((totalHours / 8).toFixed(2));
+      const cost = workdays * 350000;
+      totalWorkdays += workdays;
+      totalLaborCost += cost;
+      return { name, overtimeHours: personOT, workdays, cost };
+    });
 
     return {
       step: log.step,
-      assignee: log.assignee,
+      startedAt: log.startedAt,
+      completedAt: log.completedAt,
       workingHours,
-      overtimeHours,
-      workdays,
-      cost
+      assignees: assigneeDetails,
     };
   });
 
-  // 2. Chi phí vật tư
+  // 3. Chi phí vật tư
   const materialCost = (order.materialsList || []).reduce((sum, mat) => sum + mat.price, 0);
 
-  // 3. Phụ kiện ngoài
+  // 4. Phụ kiện ngoài
   let accessorySales = 0;
   let accessoryCost = 0;
-  const accessoriesList = (order.externalAccessories || []).filter(acc => acc.name.trim()).map(acc => {
+  const accessoriesList = (order.externalAccessories || []).filter((acc) => acc.name.trim()).map((acc) => {
     const cost = acc.actualCost || acc.costPrice || 0;
     accessorySales += acc.sellPrice || 0;
     accessoryCost += cost;
     return acc;
   });
 
-  // 4. Chi phí lắp đặt khác
+  // 5. Chi phí lắp đặt khác
   const transport = order.installationCosts?.transport || 0;
   const loader = order.installationCosts?.loader || 0;
 
-  // 5. Doanh thu & Lợi nhuận
+  // 6. Doanh thu & Lợi nhuận
   const revenue = order.quotation.quoteValue + accessorySales;
   const totalExpenses = totalLaborCost + materialCost + accessoryCost + transport + loader;
   const profit = revenue - totalExpenses;
 
   // Tạo nội dung báo cáo văn bản
   let reportText = `======================================================
-     BÁO CÁO QUYẾT TOÁN CHI TIẾT ĐƠN HÀNG: ${order.code}
+     BAO CAO QUYET TOAN CHI TIET DON HANG: ${order.code}
 ======================================================
 
-1. THÔNG TIN KHÁCH HÀNG:
-   - Khách hàng: ${order.customerName}
-   - Số điện thoại: ${order.phone}
-   - Địa chỉ: ${order.address}
-   - Khu vực: ${order.area}
-   - Sale phụ trách: ${order.saleName}
-   - Thời gian xuất báo cáo: ${new Date().toLocaleString("vi-VN")}
+1. THONG TIN KHACH HANG:
+   - Khach hang: ${order.customerName}
+   - So dien thoai: ${order.phone}
+   - Dia chi: ${order.address}
+   - Khu vuc: ${order.area}
+   - Sale phu trach: ${order.saleName}
+   - Thoi gian xuat bao cao: ${new Date().toLocaleString("vi-VN")}
 
-2. LỊCH SỬ THỰC HIỆN CÔNG ĐOẠN & TIỀN CÔNG THỢ:
+2. LICH SU THUC HIEN CONG DOAN & TIEN CONG THO:
 `;
 
   logsSummary.forEach((log, idx) => {
-    reportText += `   [Mốc ${idx + 1}] Công đoạn: ${log.step}
-         + Người đảm nhận: ${log.assignee}
-         + Giờ làm hành chính: ${log.workingHours} giờ
-         + Giờ làm tăng ca (OT): ${log.overtimeHours} giờ
-         + Số ngày công quy đổi: ${log.workdays} công (Tính: Tổng giờ / 8)
-         + Tiền công ước tính (350.000 đ/ngày): ${log.cost.toLocaleString("vi-VN")} đ
-\n`;
+    const startStr = log.startedAt ? new Date(log.startedAt).toLocaleString("vi-VN") : "Chua ro";
+    const endStr = log.completedAt ? new Date(log.completedAt).toLocaleString("vi-VN") : "Dang thuc hien";
+    const isManyPeople = log.assignees.length > 1;
+
+    reportText += `   [Moc ${idx + 1}] Cong doan: ${log.step}
+         + Thoi gian bat dau: ${startStr}
+         + Thoi gian hoan thanh: ${endStr}
+         + Gio lam hanh chinh: ${log.workingHours} gio
+         + So nguoi thuc hien: ${log.assignees.length} nguoi${isManyPeople ? " (moi nguoi tinh tien rieng)" : ""}
+`;
+
+    if (isManyPeople) {
+      log.assignees.forEach((person, pIdx) => {
+        reportText += `         + Nguoi ${pIdx + 1}: ${person.name}
+             - Gio tang ca (OT) duoc duyet: ${person.overtimeHours} gio
+             - Ngay cong quy doi: ${person.workdays} cong
+             - Tien cong uoc tinh (350.000 d/ngay): ${person.cost.toLocaleString("vi-VN")} d
+`;
+      });
+      const totalStepCost = log.assignees.reduce((s, p) => s + p.cost, 0);
+      reportText += `         => Tong tien cong cong doan nay: ${totalStepCost.toLocaleString("vi-VN")} d\n`;
+    } else if (log.assignees.length === 1) {
+      const person = log.assignees[0];
+      reportText += `         + Nguoi dam nhan: ${person.name}
+         + Gio tang ca (OT) duoc duyet: ${person.overtimeHours} gio
+         + Ngay cong quy doi: ${person.workdays} cong (Tong gio / 8)
+         + Tien cong uoc tinh (350.000 d/ngay): ${person.cost.toLocaleString("vi-VN")} d
+`;
+    } else {
+      reportText += `         + Nguoi dam nhan: Chua ghi nhan\n`;
+    }
+    reportText += "\n";
   });
 
-  reportText += `3. CHI TIẾT VẬT TƯ & CHI PHÍ LẮP ĐẶT PHỤ:
-   * Danh sách vật tư sản xuất:
+  reportText += `3. CHI TIET VAT TU & CHI PHI LAP DAT PHU:
+   * Danh sach vat tu san xuat:
 `;
 
   if (!order.materialsList || order.materialsList.length === 0) {
-    reportText += `     - Không có vật tư ghi nhận.
-`;
+    reportText += `     - Khong co vat tu ghi nhan.\n`;
   } else {
     order.materialsList.forEach((mat) => {
-      reportText += `     - ${mat.name}: ${mat.price.toLocaleString("vi-VN")} đ
-`;
+      reportText += `     - ${mat.name}: ${mat.price.toLocaleString("vi-VN")} d\n`;
     });
   }
 
-  reportText += `   * Chi phí phụ (Giám sát nhập):
-     - Tiền xe vận chuyển: ${transport.toLocaleString("vi-VN")} đ
-     - Tiền thuê bốc vác: ${loader.toLocaleString("vi-VN")} đ
+  reportText += `   * Chi phi phu (Giam sat nhap):
+     - Tien xe van chuyen: ${transport.toLocaleString("vi-VN")} d
+     - Tien thue boc vac: ${loader.toLocaleString("vi-VN")} d
 
-4. CHI TIẾT PHỤ KIỆN NGOÀI:
+4. CHI TIET PHU KIEN NGOAI:
 `;
 
   if (accessoriesList.length === 0) {
-    reportText += `   - Không có phụ kiện ngoài nào được khai báo.
-`;
+    reportText += `   - Khong co phu kien ngoai nao duoc khai bao.\n`;
   } else {
     accessoriesList.forEach((acc, idx) => {
-      reportText += `   [Phụ kiện ${idx + 1}] ${acc.name}:
-         + Giá bán (khách trả): ${acc.sellPrice.toLocaleString("vi-VN")} đ
-         + Giá vốn (Kế toán nhập): ${acc.costPrice.toLocaleString("vi-VN")} đ
-         + Chi phí thực tế: ${acc.actualCost.toLocaleString("vi-VN")} đ
+      reportText += `   [Phu kien ${idx + 1}] ${acc.name}:
+         + Gia ban (khach tra): ${acc.sellPrice.toLocaleString("vi-VN")} d
+         + Gia von (Ke toan nhap): ${acc.costPrice.toLocaleString("vi-VN")} d
+         + Chi phi thuc te: ${acc.actualCost.toLocaleString("vi-VN")} d
 `;
     });
   }
 
   reportText += `
-5. TỔNG HỢP DOANH THU, CHI PHÍ & LỢI NHUẬN RÒNG ĐƠN HÀNG:
-   - Tổng Doanh Thu (Giá báo đơn hàng + Phụ kiện ngoài): ${revenue.toLocaleString("vi-VN")} đ
-     + Giá báo đơn hàng: ${order.quotation.quoteValue.toLocaleString("vi-VN")} đ
-     + Doanh thu phụ kiện: ${accessorySales.toLocaleString("vi-VN")} đ
+5. TONG HOP DOANH THU, CHI PHI & LOI NHUAN RONG DON HANG:
+   - Tong Doanh Thu (Gia bao don hang + Phu kien ngoai): ${revenue.toLocaleString("vi-VN")} d
+     + Gia bao don hang: ${order.quotation.quoteValue.toLocaleString("vi-VN")} d
+     + Doanh thu phu kien: ${accessorySales.toLocaleString("vi-VN")} d
 
-   - Tổng Chi Phí Quyết Toán: ${totalExpenses.toLocaleString("vi-VN")} đ
-     + Chi phí tiền công thợ: ${totalLaborCost.toLocaleString("vi-VN")} đ
-     + Chi phí vật tư sản xuất: ${materialCost.toLocaleString("vi-VN")} đ
-     + Chi phí phụ kiện ngoài: ${accessoryCost.toLocaleString("vi-VN")} đ
-     + Chi phí xe cộ, bốc xếp: ${(transport + loader).toLocaleString("vi-VN")} đ
+   - Tong Chi Phi Quyet Toan: ${totalExpenses.toLocaleString("vi-VN")} d
+     + Chi phi tien cong tho (${totalWorkdays.toFixed(2)} cong): ${totalLaborCost.toLocaleString("vi-VN")} d
+     + Chi phi vat tu san xuat: ${materialCost.toLocaleString("vi-VN")} d
+     + Chi phi phu kien ngoai: ${accessoryCost.toLocaleString("vi-VN")} d
+     + Chi phi xe co, boc xep: ${(transport + loader).toLocaleString("vi-VN")} d
 
-   - LỢI NHUẬN RÒNG ĐƠN HÀNG (Doanh Thu - Chi Phí): ${profit.toLocaleString("vi-VN")} đ (${profit >= 0 ? "CÓ LÃI" : "BỊ THUA LỖ"})
+   - LOI NHUAN RONG DON HANG (Doanh Thu - Chi Phi): ${profit.toLocaleString("vi-VN")} d (${profit >= 0 ? "CO LAI" : "BI THUA LO"})
 
 ======================================================
-        BÁO CÁO ĐƯỢC PHÁT HÀNH BỞI HỆ THỐNG GOMITA
+        BAO CAO DUOC PHAT HANH BOI HE THONG GOMITA
 ======================================================`;
 
-  // Thêm UTF-8 BOM \uFEFF để Notepad/Word hiển thị tiếng Việt đúng
+  // Thêm UTF-8 BOM để Notepad/Word hiển thị đúng
   const blob = new Blob(["\uFEFF" + reportText], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
