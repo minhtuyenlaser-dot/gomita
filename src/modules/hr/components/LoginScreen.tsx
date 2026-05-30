@@ -6,8 +6,8 @@ import type { UserAccount } from "../accounts";
 import { authenticate } from "../accounts";
 
 export function LoginScreen({ accounts, onLogin }: { accounts: UserAccount[]; onLogin: (account: UserAccount) => void }) {
-  const [username, setUsername] = useState("giamdoc");
-  const [password, setPassword] = useState("123456");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   function submitLogin() {
@@ -53,10 +53,6 @@ export function LoginScreen({ accounts, onLogin }: { accounts: UserAccount[]; on
           <button className="min-h-14 rounded-lg bg-orange-500 text-lg font-black text-white" onClick={submitLogin} type="button">
             Đăng nhập
           </button>
-        </div>
-
-        <div className="mt-5 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-          Dữ liệu đang reset: chỉ có tài khoản <b>giamdoc</b>. Mật khẩu: <b>123456</b>.
         </div>
       </section>
     </main>
