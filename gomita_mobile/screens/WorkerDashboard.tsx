@@ -136,10 +136,39 @@ export function WorkerDashboard({
     return apiData.attendance[key] === "normal" || apiData.attendance[key] === "compensated";
   }, [apiData, user.id, today, currentSlot]);
 
+  const monthDays = useMemo(() => {
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Array.from({ length: daysInMonth }, (_, index) => new Date(now.getFullYear(), now.getMonth(), index + 1));
+  }, []);
+
+  const maxWorkDays = useMemo(() => {
+    return monthDays.filter((day) => day.getDay() !== 0).length;
+  }, [monthDays]);
+
+  const expectedDays = useMemo(() => {
+    return monthDays.filter((day) => day.getDay() !== 0 && day.getDate() <= today).length;
+  }, [monthDays, today]);
+
   const workDays = useMemo(() => {
-    const uniqueDays = new Set(userAttendanceKeys.map(k => k.split("-")[1]));
-    return uniqueDays.size;
-  }, [userAttendanceKeys]);
+    if (!apiData || !apiData.attendance) return 0;
+    let total = 0;
+    const slots = ["07:30", "11:30", "13:30", "17:30"];
+    monthDays.forEach((day) => {
+      if (day.getDay() === 0 || day.getDate() > today) return;
+      const dayNum = day.getDate();
+      let checkedCount = 0;
+      slots.forEach((slot) => {
+        const key = `${user.id}-${dayNum}-${slot}`;
+        if (apiData.attendance[key] === "normal" || apiData.attendance[key] === "compensated") {
+          checkedCount++;
+        }
+      });
+      if (checkedCount === 4) total += 1.0;
+      else if (checkedCount >= 2) total += 0.5;
+    });
+    return total;
+  }, [monthDays, apiData, user.id, today]);
 
   const otHours = useMemo(() => {
     if (!apiData || !apiData.overtimeRequests) return 0;
@@ -158,12 +187,12 @@ export function WorkerDashboard({
 
   const estimatedIncome = useMemo(() => {
     if (salaryType === "monthly") {
-      return salaryValue;
+      return maxWorkDays ? (salaryValue / maxWorkDays) * workDays : 0;
     }
     const base = workDays * salaryValue;
     const otPay = otHours * 1.5 * (salaryValue / 8);
     return base + otPay;
-  }, [salaryType, salaryValue, workDays, otHours]);
+  }, [salaryType, salaryValue, workDays, otHours, maxWorkDays]);
 
   // Lọc công việc đang được giao của thợ hôm nay
   const activeJobs = useMemo(() => {
