@@ -24,6 +24,7 @@ import { demoAccounts, type UserAccount } from "@/modules/hr/accounts";
 import { AccountManagement } from "@/modules/hr/components/AccountManagement";
 import { LoginScreen } from "@/modules/hr/components/LoginScreen";
 import { CompanyPayrollDashboard, ProfileDashboard } from "@/modules/hr/components/ProfileDashboard";
+import { BackupRestoreDashboard } from "@/modules/hr/components/BackupRestoreDashboard";
 import { getMenuForPosition, isWorkerPosition, mustClockIn, positions } from "@/modules/hr/roles";
 import { FinanceDashboard } from "@/modules/finance/components/FinanceDashboard";
 import { OrderDashboard } from "@/modules/orders/components/OrderDashboard";
@@ -327,7 +328,18 @@ export default function HomePage() {
         />
       )}
       {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} />}
-      {activeModule === "admin" && <Placeholder title="Backup/Restore" />}
+      {activeModule === "admin" && (
+        <BackupRestoreDashboard 
+          onDataRestored={(restoredData) => {
+            if (restoredData.accounts) setAccounts(restoredData.accounts);
+            if (restoredData.orders) setOrders(restoredData.orders);
+            if (restoredData.overtimeRequests) setOvertimeRequests(restoredData.overtimeRequests);
+            if (restoredData.compensationRequests) setCompensationRequests(restoredData.compensationRequests);
+            if (restoredData.attendance) setAttendance(restoredData.attendance);
+            if (restoredData.attendanceDetails) setAttendanceDetails(restoredData.attendanceDetails);
+          }}
+        />
+      )}
       {!["orders", "profile", "reports", "finance", "hr", "admin", "attendance"].includes(activeModule) && <Placeholder title={menu.find((item) => item.id === activeModule)?.label ?? "Module"} />}
     </>
   );
