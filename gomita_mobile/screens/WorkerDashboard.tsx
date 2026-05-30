@@ -9,7 +9,7 @@ import {
   Dimensions,
   ActivityIndicator
 } from "react-native";
-import { Camera as ExpoCamera } from "expo-camera";
+import { CameraView, Camera as ExpoCamera } from "expo-camera";
 import * as Location from "expo-location";
 import { 
   LogOut, 
@@ -576,9 +576,9 @@ export function WorkerDashboard({
           </View>
 
           <View style={styles.cameraFrame}>
-            <ExpoCamera 
+            <CameraView 
               style={styles.cameraNative} 
-              type={cameraType} 
+              facing="front" 
               ref={(ref: any) => setCameraRef(ref)}
             />
           </View>
