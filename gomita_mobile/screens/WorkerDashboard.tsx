@@ -121,8 +121,6 @@ export function WorkerDashboard({
   }, [currentTime]);
 
   const today = new Date().getDate();
-  const monthDaysCount = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  const monthDays = Array.from({ length: monthDaysCount }, (_, idx) => idx + 1);
 
   // Tính toán Ngày công, OT và Lương di động
   const userAttendanceKeys = useMemo(() => {
@@ -474,7 +472,7 @@ export function WorkerDashboard({
             <View style={styles.gridHeaderRow}>
               <Text style={[styles.gridCellHeader, styles.cellWidthLabel]}>Mốc giờ</Text>
               {monthDays.map(day => (
-                <Text key={day} style={[styles.gridCellHeader, styles.cellWidthDot]}>{day}</Text>
+                <Text key={day.getDate()} style={[styles.gridCellHeader, styles.cellWidthDot]}>{day.getDate()}</Text>
               ))}
             </View>
 
@@ -483,10 +481,11 @@ export function WorkerDashboard({
               <View key={slot} style={styles.gridRow}>
                 <Text style={[styles.gridCellLabel, styles.cellWidthLabel]}>{slot}</Text>
                 {monthDays.map(day => {
-                  const key = `${user.id}-${day}-${slot}`;
+                  const dayNum = day.getDate();
+                  const key = `${user.id}-${dayNum}-${slot}`;
                   const val = apiData && apiData.attendance ? apiData.attendance[key] : null;
                   return (
-                    <View key={day} style={[styles.gridCellDotArea, styles.cellWidthDot]}>
+                    <View key={dayNum} style={[styles.gridCellDotArea, styles.cellWidthDot]}>
                       <View 
                         style={[
                           styles.attendanceDot,
