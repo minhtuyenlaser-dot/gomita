@@ -276,14 +276,32 @@ export function OrderDashboard({
             const assignConfig = getAssignConfig(position.id, assignOrder);
             const autoAccept = assignConfig.targetPositionId === "production_worker" || assignConfig.targetPositionId === "installer";
             
-            // Cập nhật historyLogs khi giao việc
+            // Cập nhật historyLogs khi giao việc - lấy đúng người theo công đoạn hiện tại
             updateOrder(assignOrder.id, (order) => {
               const nowStr = new Date().toISOString();
               const logs = order.historyLogs || [];
+              // Xác định người đảm nhận dựa trên công đoạn hiện tại
+              function getCorrectAssignee(currentLog: { step: string; assignee: string }): string {
+                const step = order.step;
+                if (step === "Tiếp nhận" || step === "Báo giá" || step === "Hoàn công") {
+                  return patch.saleName || order.saleName || currentLog.assignee;
+                } else if (step === "Thiết kế") {
+                  return patch.designerName || order.designerName || currentLog.assignee;
+                } else if (step === "Ra file") {
+                  return patch.fileOperatorName || order.fileOperatorName || currentLog.assignee;
+                } else if (step === "Sản xuất") {
+                  return patch.productionWorkerName || order.productionWorkerName || currentLog.assignee;
+                } else if (step === "Lắp đặt") {
+                  return patch.installerName || order.installerName || currentLog.assignee;
+                } else if (step === "Nghiệm thu") {
+                  return patch.supervisorName || order.supervisorName || patch.installerName || order.installerName || currentLog.assignee;
+                }
+                return currentLog.assignee;
+              }
               const updatedLogs = logs.map(log => 
                 log.step === order.step ? { 
                   ...log, 
-                  assignee: patch.productionWorkerName || patch.installerName || patch.designerName || patch.fileOperatorName || patch.saleName || log.assignee, 
+                  assignee: getCorrectAssignee(log),
                   startedAt: nowStr 
                 } : log
               );
@@ -507,7 +525,8 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
         BÁO CÁO ĐƯỢC PHÁT HÀNH BỞI HỆ THỐNG GOMITA
 ======================================================`;
 
-  const blob = new Blob([reportText], { type: "text/plain;charset=utf-8" });
+  // Thêm UTF-8 BOM \uFEFF để Notepad/Word hiển thị tiếng Việt đúng
+  const blob = new Blob(["\uFEFF" + reportText], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
