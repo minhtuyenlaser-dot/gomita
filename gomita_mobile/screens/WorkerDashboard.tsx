@@ -22,6 +22,7 @@ import {
   MapPin,
   CheckCircle
 } from "lucide-react-native";
+import { getApiUrl } from "./LoginScreen";
 
 const slots = ["07:30", "11:30", "13:30", "17:30"];
 const screenWidth = Dimensions.get("window").width;
@@ -239,7 +240,7 @@ export function WorkerDashboard({
       const photo = await cameraRef.takePictureAsync({ quality: 0.5 });
       
       // Gửi chấm công lên API Server
-      const url = `http://${serverIp}/api/clockin`;
+      const url = getApiUrl(serverIp, "/api/clockin");
       const isCompleted = activeJobToReport && !askModalOpen; 
       
       const payload = {
@@ -290,7 +291,7 @@ export function WorkerDashboard({
           onPress: async () => {
             setLoading(true);
             try {
-              const url = `http://${serverIp}/api/report-done`;
+              const url = getApiUrl(serverIp, "/api/report-done");
               const response = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -343,28 +344,28 @@ export function WorkerDashboard({
       {/* DUY NHẤT 1 NÚT CHẤM CÔNG LỚN */}
       <View style={styles.clockInCenter}>
         {isSlotCurrentlyOpen ? (
-          <TouchableOpacity 
-            style={[
-              styles.clockInButton,
-              hasClockedInCurrentSlot ? styles.clockedInBtnBg : styles.clockInBtnBg
-            ]}
-            onPress={handleClockInPress}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator size="large" color="#ffffff" />
-            ) : hasClockedInCurrentSlot ? (
-              <View style={styles.centerBtnContent}>
-                <CheckCircle size={44} color="#ffffff" />
-                <Text style={styles.clockInBtnText}>ĐÃ CHẤM XONG</Text>
-              </View>
-            ) : (
-              <View style={styles.centerBtnContent}>
-                <Camera size={44} color="#ffffff" />
-                <Text style={styles.clockInBtnText}>BẤM CHẤM CÔNG</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          hasClockedInCurrentSlot ? (
+            <View style={styles.clockedInSuccessBadge}>
+              <CheckCircle size={48} color="#22c55e" />
+              <Text style={styles.clockedInSuccessText}>ĐÃ HOÀN THÀNH CHẤM CÔNG</Text>
+              <Text style={styles.clockedInSuccessSub}>Chúc bạn một ngày làm việc vui vẻ và hiệu quả!</Text>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={[styles.clockInButton, styles.clockInBtnBg]}
+              onPress={handleClockInPress}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="large" color="#ffffff" />
+              ) : (
+                <View style={styles.centerBtnContent}>
+                  <Camera size={44} color="#ffffff" />
+                  <Text style={styles.clockInBtnText}>BẤM CHẤM CÔNG</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )
         ) : (
           <View style={styles.outsideSlotCard}>
             <Clock size={36} color="#94a3b8" />
@@ -377,7 +378,7 @@ export function WorkerDashboard({
         )}
         <Text style={styles.clockInHelp}>
           {hasClockedInCurrentSlot 
-            ? `Chúc bạn một ngày làm việc hiệu quả!` 
+            ? `Cảm ơn bạn. Hệ thống đã ghi nhận chấm công mốc ${currentSlot} thành công.` 
             : isSlotCurrentlyOpen
               ? `Mở camera chụp ảnh selfie + gửi GPS định vị mốc ${currentSlot}`
               : `Vui lòng quay lại đúng khung giờ quy định.`}
@@ -1066,5 +1067,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "900",
     letterSpacing: 1,
+  },
+  clockedInSuccessBadge: {
+    width: screenWidth - 32,
+    backgroundColor: "#16a34a15",
+    borderColor: "#22c55e",
+    borderWidth: 2,
+    borderRadius: 20,
+    padding: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  clockedInSuccessText: {
+    color: "#22c55e",
+    fontSize: 16,
+    fontWeight: "900",
+    marginTop: 10,
+    textAlign: "center",
+  },
+  clockedInSuccessSub: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 6,
+    lineHeight: 16,
   }
 });

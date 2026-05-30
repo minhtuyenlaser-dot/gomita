@@ -249,7 +249,17 @@ export default function HomePage() {
           onAttendanceChange={setAttendance}
         />
       )}
-      {activeModule === "profile" && <ProfileDashboard account={currentAccount} accounts={accounts} position={currentPosition} overtimeRequests={overtimeRequests} attendance={attendance} />}
+      {activeModule === "profile" && (
+        <ProfileDashboard 
+          account={currentAccount} 
+          accounts={accounts} 
+          position={currentPosition} 
+          overtimeRequests={overtimeRequests} 
+          attendance={attendance} 
+          compensationRequests={compensationRequests}
+          onCompensationRequestsChange={setCompensationRequests}
+        />
+      )}
       {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} attendance={attendance} />}
       {activeModule === "attendance" && (
         <AttendanceDashboard 
@@ -278,7 +288,15 @@ export default function HomePage() {
   if (isWorkerPosition(currentPosition.id)) {
     return (
       <main className="min-h-screen bg-slate-50">
-        <WorkerTopBar account={currentAccount} allowedPositions={allowedPositions} positionId={currentPosition.id} positionName={currentPosition.name} onLogout={() => setCurrentAccount(null)} onPositionChange={changePosition} />
+        <WorkerTopBar 
+          account={currentAccount} 
+          allowedPositions={allowedPositions} 
+          positionId={currentPosition.id} 
+          positionName={currentPosition.name} 
+          onLogout={() => setCurrentAccount(null)} 
+          onPositionChange={changePosition} 
+          onClockClick={() => setClockOpen(true)}
+        />
         <div className="p-4 pb-24 md:p-6">{content}</div>
         <WorkerBottomNav activeModule={activeModule} onChange={setActiveModule} />
       </main>
@@ -325,7 +343,7 @@ export default function HomePage() {
             <h1 className="text-xl font-black">{menu.find((item) => item.id === activeModule)?.label ?? "Đơn hàng"}</h1>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-4">
             {mustClockIn(currentPosition.id) && !isWorkerPosition(currentPosition.id) && isAnyClockInSlotOpen ? (
               <button className="min-h-10 rounded-lg bg-orange-500 px-4 text-xs font-black text-white hover:bg-orange-600 transition" onClick={() => setClockOpen(true)} type="button">CHẤM CÔNG</button>
             ) : null}
@@ -337,10 +355,10 @@ export default function HomePage() {
                 <div className="text-sm text-slate-500">{currentPosition.name}</div>
               </div>
               <ChevronDown className="h-4 w-4 text-slate-500" />
-              <button className="grid h-10 w-10 place-items-center rounded-lg hover:bg-slate-100" onClick={() => setCurrentAccount(null)} type="button" aria-label="Đăng xuất">
-                <LogOut className="h-5 w-5 text-slate-500" />
-              </button>
             </div>
+            <button className="grid h-10 w-10 place-items-center rounded-lg hover:bg-slate-100" onClick={() => setCurrentAccount(null)} type="button" aria-label="Đăng xuất">
+              <LogOut className="h-5 w-5 text-slate-500" />
+            </button>
           </div>
         </header>
 
@@ -370,6 +388,23 @@ export default function HomePage() {
         />
       ) : null}
       {clockOpen ? <ClockInModal employeeName={currentAccount.displayName} onClose={() => setClockOpen(false)} onSubmit={(message) => {
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMin = now.getMinutes();
+        const currentVal = currentHour * 60 + currentMin;
+        
+        let activeSlot = "07:30";
+        if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) activeSlot = "07:30";
+        else if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) activeSlot = "11:30";
+        else if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) activeSlot = "13:30";
+        else if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) activeSlot = "17:30";
+        
+        const dayNum = now.getDate();
+        const key = `${currentAccount.id}-${dayNum}-${activeSlot}`;
+        setAttendance((prev) => ({
+          ...prev,
+          [key]: "normal"
+        }));
         setClockOpen(false);
         setToast(message);
       }} /> : null}
@@ -460,7 +495,8 @@ function WorkerTopBar({
   positionName,
   positionId,
   onPositionChange,
-  onLogout
+  onLogout,
+  onClockClick
 }: {
   account: UserAccount;
   allowedPositions: typeof positions;
@@ -468,7 +504,21 @@ function WorkerTopBar({
   positionId: string;
   onPositionChange: (value: string) => void;
   onLogout: () => void;
+  onClockClick: () => void;
 }) {
+  const isAnyClockInSlotOpen = useMemo(() => {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMin = now.getMinutes();
+    const currentVal = currentHour * 60 + currentMin;
+
+    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return true;
+    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return true;
+    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return true;
+    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return true;
+    return false;
+  }, []);
+
   return (
     <header className="flex min-h-20 items-center justify-between bg-slate-950 px-4 text-white md:px-7">
       <div className="flex items-center gap-8">
@@ -481,13 +531,22 @@ function WorkerTopBar({
           {positionName}
         </div>
       </div>
-      <div className="flex items-center gap-4 md:gap-8">
+      <div className="flex items-center gap-2 md:gap-8">
+        {isAnyClockInSlotOpen && (
+          <button 
+            className="min-h-9 rounded-lg bg-orange-500 px-3 text-xs font-black text-white hover:bg-orange-600 transition" 
+            onClick={onClockClick} 
+            type="button"
+          >
+            CHẤM CÔNG
+          </button>
+        )}
         <RoleSelect dark allowedPositions={allowedPositions} value={positionId} onChange={onPositionChange} />
         <div className="hidden items-center gap-3 md:flex">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-slate-200"><UserCircle className="h-9 w-9 text-slate-500" /></div>
           <div className="font-black">{account.displayName}</div>
-          <button className="grid h-10 w-10 place-items-center rounded-lg hover:bg-white/10" onClick={onLogout} type="button" aria-label="Đăng xuất"><LogOut className="h-5 w-5" /></button>
         </div>
+        <button className="grid h-10 w-10 place-items-center rounded-lg hover:bg-white/10" onClick={onLogout} type="button" aria-label="Đăng xuất"><LogOut className="h-5 w-5 text-white" /></button>
       </div>
     </header>
   );

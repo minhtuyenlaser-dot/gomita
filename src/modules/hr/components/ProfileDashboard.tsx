@@ -1,10 +1,11 @@
 "use client";
 
-import { BriefcaseBusiness, Camera, Clock3, Download, FileText, IdCard, Lock, UserRound, Image } from "lucide-react";
+import { BriefcaseBusiness, Camera, Clock3, Download, FileText, IdCard, Lock, UserRound, Image, CheckSquare, Square, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
 import type { Position } from "../roles";
+import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
 const slots: Slot[] = ["07:30", "11:30", "13:30", "17:30"];
@@ -13,20 +14,70 @@ export function ProfileDashboard({
   account, 
   position, 
   overtimeRequests = [],
-  attendance = {}
+  attendance = {},
+  compensationRequests = [],
+  onCompensationRequestsChange
 }: { 
   account: UserAccount; 
   accounts?: UserAccount[]; 
   position: Position; 
   overtimeRequests?: any[]; 
   attendance?: Record<string, string>;
+  compensationRequests?: any[];
+  onCompensationRequestsChange?: (requests: any[]) => void;
 }) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [compModalOpen, setCompModalOpen] = useState(false);
+  const [compDate, setCompDate] = useState("");
+  const [compSlots, setCompSlots] = useState<Slot[]>([]);
+  const [compReason, setCompReason] = useState("");
+
   const [username, setUsername] = useState(account.username);
   const [password, setPassword] = useState(account.password);
   const [message, setMessage] = useState("");
   const today = new Date().getDate();
+
+  // Tính toán các mốc thiếu công thực tế của nhân viên này để tự chọn đăng ký bù
+  const realMissingAttendance = useMemo(() => {
+    const list: Array<{ date: string; slots: Slot[] }> = [];
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const todayNum = now.getDate();
+
+    for (let d = 1; d <= todayNum; d++) {
+      const dateObj = new Date(year, month, d);
+      if (dateObj.getDay() === 0) continue; // Bỏ qua Chủ Nhật
+      
+      const dateString = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const missingSlotsForDay: Slot[] = [];
+      
+      slots.forEach((slot) => {
+        const key = `${account.id}-${d}-${slot}`;
+        // Nếu không có bản ghi chấm công
+        if (!attendance[key]) {
+          const hasPendingOrApproved = compensationRequests.some(
+            (req) => req.employeeId === account.id && req.date === dateString && req.slots.includes(slot)
+          );
+          if (!hasPendingOrApproved) {
+            missingSlotsForDay.push(slot);
+          }
+        }
+      });
+      
+      if (missingSlotsForDay.length > 0) {
+        list.push({
+          date: dateString,
+          slots: missingSlotsForDay
+        });
+      }
+    }
+    return list;
+  }, [account.id, attendance, compensationRequests]);
+
+  const compSelectedMissingItem = realMissingAttendance.find((item) => item.date === compDate);
+  const compAvailableSlots = compSelectedMissingItem?.slots ?? [];
 
   // Số ngày công tối đa trong tháng (Loại trừ Chủ Nhật)
   const maxWorkDays = useMemo(() => {
@@ -263,8 +314,26 @@ export function ProfileDashboard({
               <Legend color="bg-blue-500" label="Chấm công bù" />
               <Legend color="bg-slate-300" label="Chưa chấm / Thiếu công" />
             </div>
+            <div className="mt-1.5 text-xs text-orange-500 font-bold block md:hidden">
+              💡 Vuốt ngang bảng bên dưới để xem chi tiết tất cả các ngày trong tháng.
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {onCompensationRequestsChange && (
+              <button 
+                className="flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 px-4 text-sm font-black text-white transition shadow-sm" 
+                onClick={() => {
+                  setCompModalOpen(true);
+                  if (realMissingAttendance.length > 0) {
+                    setCompDate(realMissingAttendance[0].date);
+                  }
+                }}
+                type="button"
+              >
+                <Clock3 className="h-4 w-4" />
+                Đăng ký chấm công bù
+              </button>
+            )}
             <button 
               className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black bg-white hover:bg-slate-50 text-slate-700 transition" 
               onClick={downloadAttendanceAsImage}
@@ -306,6 +375,152 @@ export function ProfileDashboard({
               }} type="button">Lưu thay đổi</button>
               <button className="min-h-11 rounded-lg border border-slate-200 font-bold" onClick={() => setAccountOpen(false)} type="button">Đóng</button>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {compModalOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
+          <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl text-slate-900">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-xl font-black">Đăng ký chấm công bù</h2>
+              <button 
+                className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" 
+                onClick={() => {
+                  setCompModalOpen(false);
+                  setCompDate("");
+                  setCompSlots([]);
+                  setCompReason("");
+                }} 
+                type="button"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {realMissingAttendance.length === 0 ? (
+              <div className="text-center p-6 bg-slate-50 rounded-lg border border-slate-150">
+                <p className="font-bold text-green-600 text-base">Tuyệt vời! 🎉</p>
+                <p className="mt-2 text-sm text-slate-500">Bạn đã chấm công đầy đủ, không thiếu mốc nào trong tháng này.</p>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                <label className="grid gap-1 text-sm font-bold">
+                  Chọn ngày thiếu công
+                  <select 
+                    className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-blue-500 font-normal bg-white" 
+                    value={compDate} 
+                    onChange={(e) => {
+                      setCompDate(e.target.value);
+                      setCompSlots([]);
+                    }}
+                  >
+                    {realMissingAttendance.map((item) => {
+                      const dateParts = item.date.split("-");
+                      const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+                      return (
+                        <option key={item.date} value={item.date}>
+                          Ngày {formattedDate} (Thiếu {item.slots.length} mốc)
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+
+                {compDate && (
+                  <div className="grid gap-2">
+                    <span className="text-sm font-bold">Chọn mốc giờ cần chấm công bù</span>
+                    <div className="flex flex-wrap gap-2">
+                      {compAvailableSlots.map((slot) => {
+                        const isSelected = compSlots.includes(slot);
+                        return (
+                          <button
+                            key={slot}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                setCompSlots(compSlots.filter((s) => s !== slot));
+                              } else {
+                                setCompSlots([...compSlots, slot]);
+                              }
+                            }}
+                            className={`flex min-h-10 items-center gap-2 px-3 rounded-lg border text-sm font-bold transition ${
+                              isSelected
+                                ? "border-blue-600 bg-blue-50 text-blue-700"
+                                : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="h-4 w-4" />
+                            ) : (
+                              <Square className="h-4 w-4" />
+                            )}
+                            {slot}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <label className="grid gap-1 text-sm font-bold">
+                  Lý do xin bù công
+                  <textarea 
+                    className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-blue-500" 
+                    value={compReason} 
+                    onChange={(event) => setCompReason(event.target.value)} 
+                    placeholder="Ví dụ: Quên điện thoại ở nhà, đi gặp khách hàng..." 
+                  />
+                </label>
+
+                <button 
+                  className={`min-h-12 rounded-lg font-black text-white transition ${
+                    compSlots.length > 0 && compReason.trim()
+                      ? "bg-blue-600 hover:bg-blue-700 shadow-md"
+                      : "bg-slate-350 cursor-not-allowed"
+                  }`} 
+                  onClick={() => {
+                    if (compSlots.length > 0 && compReason.trim()) {
+                      // Xử lý tạo và đăng ký
+                      const monthPrefix = compDate.slice(0, 7);
+                      const prevCount = compensationRequests.filter(
+                        (req) => req.employeeId === account.id && req.date.slice(0, 7) === monthPrefix
+                      ).length;
+                      const monthCount = prevCount + compSlots.length;
+                      const level = account.positionIds.includes("hr") ? "department_head" : (position.level || "staff");
+
+                      const nextRequest = {
+                        id: `comp-${Date.now()}`,
+                        employeeId: account.id,
+                        employeeName: account.displayName,
+                        employeePositionLevel: level,
+                        date: compDate,
+                        slots: compSlots,
+                        reason: compReason.trim(),
+                        missingCountInMonth: monthCount,
+                        requiredApprovals: getRequiredApprovals(level, monthCount),
+                        approvals: [],
+                        status: "pending",
+                        createdAt: new Date().toISOString()
+                      };
+
+                      if (onCompensationRequestsChange) {
+                        onCompensationRequestsChange([nextRequest, ...compensationRequests]);
+                      }
+                      setCompModalOpen(false);
+                      setCompDate("");
+                      setCompSlots([]);
+                      setCompReason("");
+                      setMessage("Đã gửi yêu cầu chấm công bù thành công! Đang chờ duyệt.");
+                    }
+                  }} 
+                  disabled={compSlots.length === 0 || !compReason.trim()}
+                  type="button"
+                >
+                  Gửi yêu cầu bù công
+                </button>
+              </div>
+            )}
           </section>
         </div>
       ) : null}
@@ -428,8 +643,8 @@ function AttendanceGrid({
   accountId: string;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <div className="min-w-[1240px]">
+    <div className="overflow-x-auto select-none" style={{ WebkitOverflowScrolling: "touch" }}>
+      <div className="min-w-[1240px] px-4 pb-2">
         <div className="grid border-b border-slate-200 bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `110px repeat(${monthDays.length}, 36px)` }}>
           <div>Mốc giờ</div>
           {monthDays.map((day) => <div key={day.toISOString()} className="text-center">{day.getDate()}</div>)}

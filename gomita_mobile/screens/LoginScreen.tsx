@@ -12,6 +12,16 @@ import {
 } from "react-native";
 import { Lock, User, Settings, Check } from "lucide-react-native";
 
+export function getApiUrl(serverIp: string, path: string) {
+  const ip = serverIp.trim();
+  if (ip.startsWith("http://") || ip.startsWith("https://")) {
+    return `${ip}${path}`;
+  }
+  // Nếu là domain chữ thì dùng https, IP số cục bộ thì dùng http
+  const protocol = (ip.includes("render.com") || ip.includes("gomita") || !/^[0-9.:]+$/.test(ip)) ? "https" : "http";
+  return `${protocol}://${ip}${path}`;
+}
+
 export function LoginScreen({ 
   defaultIp, 
   onLoginSuccess 
@@ -33,9 +43,9 @@ export function LoginScreen({
     }
     setErrorMsg("");
     setLoading(true);
-
+  
     try {
-      const url = `http://${serverIp.trim()}/api/login`;
+      const url = getApiUrl(serverIp, "/api/login");
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

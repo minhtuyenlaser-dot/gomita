@@ -8,7 +8,7 @@ import {
   StatusBar
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { LoginScreen } from "./screens/LoginScreen";
+import { LoginScreen, getApiUrl } from "./screens/LoginScreen";
 import { WorkerDashboard } from "./screens/WorkerDashboard";
 
 export default function App() {
@@ -43,7 +43,7 @@ export default function App() {
 
   async function syncWithServer(userId: string, targetIp: string) {
     try {
-      const url = `http://${targetIp}/api/data`;
+      const url = getApiUrl(targetIp, "/api/data");
       const res = await fetch(url, { headers: { "Cache-Control": "no-cache" } });
       const data = await res.json();
       setApiData(data);
