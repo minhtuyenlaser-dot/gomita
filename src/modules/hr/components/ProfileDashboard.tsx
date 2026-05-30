@@ -29,8 +29,7 @@ export function ProfileDashboard({
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const [accountOpen, setAccountOpen] = useState(false);
   const [compModalOpen, setCompModalOpen] = useState(false);
-  const [compDate, setCompDate] = useState("");
-  const [compSlots, setCompSlots] = useState<Slot[]>([]);
+  const [compSelectedItems, setCompSelectedItems] = useState<string[]>([]);
   const [compReason, setCompReason] = useState("");
 
   const [username, setUsername] = useState(account.username);
@@ -38,46 +37,21 @@ export function ProfileDashboard({
   const [message, setMessage] = useState("");
   const today = new Date().getDate();
 
-  // Tính toán các mốc thiếu công thực tế của nhân viên này để tự chọn đăng ký bù
-  const realMissingAttendance = useMemo(() => {
-    const list: Array<{ date: string; slots: Slot[] }> = [];
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const todayNum = now.getDate();
-
-    for (let d = 1; d <= todayNum; d++) {
-      const dateObj = new Date(year, month, d);
-      if (dateObj.getDay() === 0) continue; // Bỏ qua Chủ Nhật
-      
-      const dateString = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const missingSlotsForDay: Slot[] = [];
-      
-      slots.forEach((slot) => {
-        const key = `${account.id}-${d}-${slot}`;
-        // Nếu không có bản ghi chấm công
-        if (!attendance[key]) {
-          const hasPendingOrApproved = compensationRequests.some(
-            (req) => req.employeeId === account.id && req.date === dateString && req.slots.includes(slot)
-          );
-          if (!hasPendingOrApproved) {
-            missingSlotsForDay.push(slot);
-          }
-        }
-      });
-      
-      if (missingSlotsForDay.length > 0) {
-        list.push({
-          date: dateString,
-          slots: missingSlotsForDay
-        });
+  // Tính ngày mốc bù công gần nhất của nhân viên này trong tháng
+  const latestCompDay = useMemo(() => {
+    const userReqs = compensationRequests.filter(req => req.employeeId === account.id);
+    if (userReqs.length === 0) return 0;
+    
+    let maxDay = 0;
+    userReqs.forEach(req => {
+      const parts = req.date.split("-");
+      if (parts.length === 3) {
+        const d = Number(parts[2]);
+        if (d > maxDay) maxDay = d;
       }
-    }
-    return list;
-  }, [account.id, attendance, compensationRequests]);
-
-  const compSelectedMissingItem = realMissingAttendance.find((item) => item.date === compDate);
-  const compAvailableSlots = compSelectedMissingItem?.slots ?? [];
+    });
+    return maxDay;
+  }, [compensationRequests, account.id]);
 
   // Số ngày công tối đa trong tháng (Loại trừ Chủ Nhật)
   const maxWorkDays = useMemo(() => {
@@ -324,9 +298,7 @@ export function ProfileDashboard({
                 className="flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 px-4 text-sm font-black text-white transition shadow-sm" 
                 onClick={() => {
                   setCompModalOpen(true);
-                  if (realMissingAttendance.length > 0) {
-                    setCompDate(realMissingAttendance[0].date);
-                  }
+                  setCompSelectedItems([]);
                 }}
                 type="button"
               >
@@ -381,15 +353,17 @@ export function ProfileDashboard({
 
       {compModalOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
-          <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl text-slate-900">
+          <section className="w-full max-w-4xl rounded-xl bg-white p-5 shadow-2xl text-slate-900">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-xl font-black">Đăng ký chấm công bù</h2>
+              <div>
+                <h2 className="text-xl font-black">Bảng Đăng Ký Chấm Công Bù Trực Quan</h2>
+                <p className="text-xs text-slate-500 mt-1">💡 Tích chọn trực tiếp vào các ô thiếu công dưới đây. Bạn có thể chọn nhiều mốc, nhiều ngày cùng lúc.</p>
+              </div>
               <button 
                 className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" 
                 onClick={() => {
                   setCompModalOpen(false);
-                  setCompDate("");
-                  setCompSlots([]);
+                  setCompSelectedItems([]);
                   setCompReason("");
                 }} 
                 type="button"
@@ -397,130 +371,215 @@ export function ProfileDashboard({
                 <X className="h-5 w-5" />
               </button>
             </div>
-            
-            {realMissingAttendance.length === 0 ? (
-              <div className="text-center p-6 bg-slate-50 rounded-lg border border-slate-150">
-                <p className="font-bold text-green-600 text-base">Tuyệt vời! 🎉</p>
-                <p className="mt-2 text-sm text-slate-500">Bạn đã chấm công đầy đủ, không thiếu mốc nào trong tháng này.</p>
-              </div>
-            ) : (
-              <div className="grid gap-4">
-                <label className="grid gap-1 text-sm font-bold">
-                  Chọn ngày thiếu công
-                  <select 
-                    className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-blue-500 font-normal bg-white" 
-                    value={compDate} 
-                    onChange={(e) => {
-                      setCompDate(e.target.value);
-                      setCompSlots([]);
-                    }}
-                  >
-                    {realMissingAttendance.map((item) => {
-                      const dateParts = item.date.split("-");
-                      const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+
+            {/* Chú thích */}
+            <div className="mb-4 flex flex-wrap gap-4 rounded-lg bg-slate-50 p-3 text-xs font-bold text-slate-600 border border-slate-200">
+              <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-green-500" /> Đã chấm</span>
+              <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-blue-500" /> Đã bù công</span>
+              <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-amber-500" /> Đang chờ duyệt</span>
+              <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-full border border-dashed border-slate-400 bg-white" /> Thiếu công (Bấm chọn)</span>
+              <span className="flex items-center gap-1.5">🔒 Đã khóa kì công</span>
+            </div>
+
+            {/* Bảng lưới */}
+            <div className="overflow-x-auto select-none rounded-lg border border-slate-200" style={{ WebkitOverflowScrolling: "touch" }}>
+              <div className="min-w-[1140px] px-2 py-3 bg-white">
+                <div className="grid border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-600" style={{ gridTemplateColumns: `100px repeat(${monthDays.length}, 32px)` }}>
+                  <div>Mốc giờ</div>
+                  {monthDays.map((day) => <div key={day.toISOString()} className="text-center">{day.getDate()}</div>)}
+                </div>
+                {slots.map((slot) => (
+                  <div key={slot} className="grid items-center border-b border-slate-100 px-3 py-2.5 text-xs" style={{ gridTemplateColumns: `100px repeat(${monthDays.length}, 32px)` }}>
+                    <div className="font-black text-slate-700">{slot}</div>
+                    {monthDays.map((day) => {
+                      const dayNum = day.getDate();
+                      const dateParts = [
+                        day.getFullYear(),
+                        String(day.getMonth() + 1).padStart(2, "0"),
+                        String(dayNum).padStart(2, "0")
+                      ];
+                      const dateString = dateParts.join("-");
+                      const key = `${account.id}-${dayNum}-${slot}`;
+                      const kind = attendance[key];
+                      
+                      // 1. Kiểm tra xem có yêu cầu đang chờ duyệt không
+                      const isPending = compensationRequests.some(
+                        (req) => req.employeeId === account.id && req.date === dateString && req.slots.includes(slot) && req.status === "pending"
+                      );
+
+                      // 2. Kiểm tra xem ngày có bị khóa không (trước hoặc bằng ngày bù gần nhất)
+                      const isLocked = dayNum <= latestCompDay;
+
+                      // 3. Kiểm tra xem có phải Chủ Nhật không
+                      const isSunday = day.getDay() === 0;
+
+                      // 4. Kiểm tra xem ô này đã được chọn trong lượt này chưa
+                      const itemKey = `${dayNum}-${slot}`;
+                      const isSelected = compSelectedItems.includes(itemKey);
+
+                      if (isSunday) {
+                        return (
+                          <div key={day.toISOString()} className="text-center font-bold text-slate-300 select-none">
+                            CN
+                          </div>
+                        );
+                      }
+
+                      if (kind === "normal") {
+                        return (
+                          <div key={day.toISOString()} className="grid place-items-center">
+                            <span className="h-3.5 w-3.5 rounded-full bg-green-500" title="Đã chấm thành công" />
+                          </div>
+                        );
+                      }
+
+                      if (kind === "compensated") {
+                        return (
+                          <div key={day.toISOString()} className="grid place-items-center">
+                            <span className="h-3.5 w-3.5 rounded-full bg-blue-500" title="Đã được bù công" />
+                          </div>
+                        );
+                      }
+
+                      if (isPending) {
+                        return (
+                          <div key={day.toISOString()} className="grid place-items-center">
+                            <span className="h-3.5 w-3.5 rounded-full bg-amber-500" title="Đang chờ duyệt" />
+                          </div>
+                        );
+                      }
+
+                      if (isLocked) {
+                        return (
+                          <div key={day.toISOString()} className="grid place-items-center text-[10px] text-slate-400 select-none" title="Kì công trước ngày bù gần nhất đã khóa">
+                            🔒
+                          </div>
+                        );
+                      }
+
+                      // Nếu là mốc thiếu công và chưa bị khóa
                       return (
-                        <option key={item.date} value={item.date}>
-                          Ngày {formattedDate} (Thiếu {item.slots.length} mốc)
-                        </option>
+                        <button
+                          key={day.toISOString()}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              setCompSelectedItems(compSelectedItems.filter((i) => i !== itemKey));
+                            } else {
+                              setCompSelectedItems([...compSelectedItems, itemKey]);
+                            }
+                          }}
+                          className={`grid h-6 w-6 place-items-center rounded-full border transition ${
+                            isSelected
+                              ? "bg-blue-600 border-blue-700 text-white font-black scale-110 shadow-sm animate-pulse"
+                              : "border-slate-300 border-dashed bg-white hover:bg-slate-50 text-slate-400"
+                          }`}
+                        >
+                          {isSelected ? "✓" : "+"}
+                        </button>
                       );
                     })}
-                  </select>
-                </label>
-
-                {compDate && (
-                  <div className="grid gap-2">
-                    <span className="text-sm font-bold">Chọn mốc giờ cần chấm công bù</span>
-                    <div className="flex flex-wrap gap-2">
-                      {compAvailableSlots.map((slot) => {
-                        const isSelected = compSlots.includes(slot);
-                        return (
-                          <button
-                            key={slot}
-                            type="button"
-                            onClick={() => {
-                              if (isSelected) {
-                                setCompSlots(compSlots.filter((s) => s !== slot));
-                              } else {
-                                setCompSlots([...compSlots, slot]);
-                              }
-                            }}
-                            className={`flex min-h-10 items-center gap-2 px-3 rounded-lg border text-sm font-bold transition ${
-                              isSelected
-                                ? "border-blue-600 bg-blue-50 text-blue-700"
-                                : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
-                            }`}
-                          >
-                            {isSelected ? (
-                              <CheckSquare className="h-4 w-4" />
-                            ) : (
-                              <Square className="h-4 w-4" />
-                            )}
-                            {slot}
-                          </button>
-                        );
-                      })}
-                    </div>
                   </div>
-                )}
+                ))}
+              </div>
+            </div>
 
-                <label className="grid gap-1 text-sm font-bold">
-                  Lý do xin bù công
-                  <textarea 
-                    className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-blue-500" 
-                    value={compReason} 
-                    onChange={(event) => setCompReason(event.target.value)} 
-                    placeholder="Ví dụ: Quên điện thoại ở nhà, đi gặp khách hàng..." 
-                  />
-                </label>
+            {/* Lý do & Nút Gửi */}
+            <div className="mt-5 grid gap-4">
+              <label className="grid gap-1 text-sm font-bold">
+                Lý do xin bù công *
+                <textarea 
+                  className="min-h-20 rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-blue-500 text-sm" 
+                  value={compReason} 
+                  onChange={(event) => setCompReason(event.target.value)} 
+                  placeholder="Ví dụ: Quên điện thoại ở nhà, đi gặp khách hàng..." 
+                />
+              </label>
 
+              <div className="flex items-center justify-between gap-3 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                <span className="text-xs font-bold text-blue-700">
+                  Đã chọn: <strong className="text-sm font-black text-blue-900">{compSelectedItems.length} mốc</strong> thiếu công
+                </span>
+                <span className="text-[11px] text-slate-400 italic">
+                  Ngày bù gần nhất đã khóa: {latestCompDay > 0 ? `Ngày ${latestCompDay}` : "Chưa có"}
+                </span>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCompModalOpen(false);
+                    setCompSelectedItems([]);
+                    setCompReason("");
+                  }}
+                  className="flex-1 min-h-11 rounded-lg border border-slate-200 font-bold hover:bg-slate-50 transition"
+                >
+                  Hủy bỏ
+                </button>
                 <button 
-                  className={`min-h-12 rounded-lg font-black text-white transition ${
-                    compSlots.length > 0 && compReason.trim()
+                  className={`flex-[2] min-h-11 rounded-lg font-black text-white transition ${
+                    compSelectedItems.length > 0 && compReason.trim()
                       ? "bg-blue-600 hover:bg-blue-700 shadow-md"
-                      : "bg-slate-350 cursor-not-allowed"
+                      : "bg-slate-300 cursor-not-allowed text-slate-450"
                   }`} 
                   onClick={() => {
-                    if (compSlots.length > 0 && compReason.trim()) {
-                      // Xử lý tạo và đăng ký
-                      const monthPrefix = compDate.slice(0, 7);
-                      const prevCount = compensationRequests.filter(
-                        (req) => req.employeeId === account.id && req.date.slice(0, 7) === monthPrefix
-                      ).length;
-                      const monthCount = prevCount + compSlots.length;
-                      const level = account.positionIds.includes("hr") ? "department_head" : (position.level || "staff");
+                    if (compSelectedItems.length > 0 && compReason.trim()) {
+                      const grouped: Record<number, Slot[]> = {};
+                      compSelectedItems.forEach(item => {
+                        const [dayStr, slotStr] = item.split("-");
+                        const dayNum = Number(dayStr);
+                        const slotVal = slotStr as Slot;
+                        if (!grouped[dayNum]) {
+                          grouped[dayNum] = [];
+                        }
+                        grouped[dayNum].push(slotVal);
+                      });
 
-                      const nextRequest = {
-                        id: `comp-${Date.now()}`,
-                        employeeId: account.id,
-                        employeeName: account.displayName,
-                        employeePositionLevel: level,
-                        date: compDate,
-                        slots: compSlots,
-                        reason: compReason.trim(),
-                        missingCountInMonth: monthCount,
-                        requiredApprovals: getRequiredApprovals(level, monthCount),
-                        approvals: [],
-                        status: "pending",
-                        createdAt: new Date().toISOString()
-                      };
+                      const newRequests = Object.keys(grouped).map(dayStr => {
+                        const dayNum = Number(dayStr);
+                        const daySlots = grouped[dayNum];
+                        const dateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+                        
+                        const monthPrefix = dateString.slice(0, 7);
+                        const prevCount = compensationRequests.filter(
+                          (req) => req.employeeId === account.id && req.date.slice(0, 7) === monthPrefix
+                        ).length;
+                        const monthCount = prevCount + daySlots.length;
+                        const level = account.positionIds.includes("hr") ? "department_head" : (position.level || "staff");
+
+                        return {
+                          id: `comp-${Date.now()}-${dayNum}`,
+                          employeeId: account.id,
+                          employeeName: account.displayName,
+                          employeePositionLevel: level,
+                          date: dateString,
+                          slots: daySlots,
+                          reason: compReason.trim(),
+                          missingCountInMonth: monthCount,
+                          requiredApprovals: getRequiredApprovals(level, monthCount),
+                          approvals: [],
+                          status: "pending",
+                          createdAt: new Date().toISOString()
+                        };
+                      });
 
                       if (onCompensationRequestsChange) {
-                        onCompensationRequestsChange([nextRequest, ...compensationRequests]);
+                        onCompensationRequestsChange([...newRequests, ...compensationRequests]);
                       }
                       setCompModalOpen(false);
-                      setCompDate("");
-                      setCompSlots([]);
+                      setCompSelectedItems([]);
                       setCompReason("");
-                      setMessage("Đã gửi yêu cầu chấm công bù thành công! Đang chờ duyệt.");
+                      setMessage(`Đã gửi thành công ${newRequests.length} yêu cầu chấm công bù lên cấp trên chờ duyệt!`);
                     }
                   }} 
-                  disabled={compSlots.length === 0 || !compReason.trim()}
+                  disabled={compSelectedItems.length === 0 || !compReason.trim()}
                   type="button"
                 >
                   Gửi yêu cầu bù công
                 </button>
               </div>
-            )}
+            </div>
           </section>
         </div>
       ) : null}
