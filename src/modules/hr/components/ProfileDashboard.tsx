@@ -39,7 +39,11 @@ export function ProfileDashboard({
 
   // Tính ngày mốc bù công gần nhất của nhân viên này trong tháng
   const latestCompDay = useMemo(() => {
-    const userReqs = compensationRequests.filter(req => req.employeeId === account.id);
+    const now = new Date();
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const userReqs = compensationRequests.filter(
+      req => req.employeeId === account.id && req.date.startsWith(currentMonthStr)
+    );
     if (userReqs.length === 0) return 0;
     
     let maxDay = 0;
@@ -525,6 +529,7 @@ export function ProfileDashboard({
                   }`} 
                   onClick={() => {
                     if (compSelectedItems.length > 0 && compReason.trim()) {
+                      const now = new Date();
                       const grouped: Record<number, Slot[]> = {};
                       compSelectedItems.forEach(item => {
                         const [dayStr, slotStr] = item.split("-");
