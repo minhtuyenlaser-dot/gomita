@@ -2,6 +2,7 @@
 
 import type { Order, OrderStep } from "@/modules/orders/orderFlow";
 import type { UserAccount } from "@/modules/hr/accounts";
+import type { Position } from "@/modules/hr/roles";
 import { useState, useMemo } from "react";
 import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck } from "lucide-react";
 
@@ -9,12 +10,14 @@ export function FinanceDashboard({
   orders, 
   setOrders, 
   overtimeRequests = [], 
-  accounts = [] 
+  accounts = [],
+  currentPosition
 }: { 
   orders: Order[]; 
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>; 
   overtimeRequests: any[];
   accounts: UserAccount[];
+  currentPosition?: Position;
 }) {
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id ?? "");
   const selectedOrder = useMemo(() => orders.find(o => o.id === selectedOrderId) ?? orders[0], [orders, selectedOrderId]);
@@ -210,6 +213,32 @@ export function FinanceDashboard({
         {/* 3. Panel Chi Tiết Theo Dõi & Hạch Toán Bên Phải */}
         {selectedOrder ? (
           <section className="grid gap-6">
+            {currentPosition?.id === "director" && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm text-slate-900">
+                <div className="flex items-center gap-2">
+                  <div className="grid h-9 w-9 place-items-center rounded-lg bg-red-100 text-red-600">
+                    <ShieldCheck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-red-800 text-sm">Quyền Hạn Giám Đốc</h4>
+                    <p className="text-xs text-red-600">Bạn có quyền xóa vĩnh viễn đơn hàng lỗi hoặc đơn hàng mẫu này.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`[CẢNH BÁO] Bạn có chắc chắn muốn XÓA VĨNH VIỄN đơn hàng ${selectedOrder.code} của khách hàng ${selectedOrder.customerName} không?\n\nMọi dữ liệu liên quan sẽ bị xóa sạch và không thể khôi phục!`)) {
+                      setOrders(curr => curr.filter(o => o.id !== selectedOrder.id));
+                      setSelectedOrderId("");
+                    }
+                  }}
+                  className="flex min-h-10 items-center gap-2 rounded-lg bg-red-600 hover:bg-red-700 px-4 text-xs font-black text-white transition shadow-sm"
+                  type="button"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  XÓA ĐƠN HÀNG
+                </button>
+              </div>
+            )}
             {/* Lịch sử công đoạn & tính giờ làm việc */}
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="mb-4 text-lg font-black text-slate-800 flex items-center gap-2">

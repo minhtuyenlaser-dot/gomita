@@ -111,6 +111,36 @@ export default function HomePage() {
   const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
 
+  // Lọc công việc đang được giao cho người dùng này hôm nay (nếu là thợ)
+  const userActiveJobs = useMemo(() => {
+    if (!currentAccount) return [];
+    return orders.filter((order) => {
+      const isAssigned = (order.installerNames && order.installerNames.includes(currentAccount.displayName)) ||
+                         (order.productionWorkerNames && order.productionWorkerNames.includes(currentAccount.displayName));
+      return isAssigned && order.workStatus === "working";
+    });
+  }, [orders, currentAccount]);
+
+  const currentSlot = useMemo(() => {
+    const currentHour = currentSystemTime.getHours();
+    const currentMin = currentSystemTime.getMinutes();
+    const currentVal = currentHour * 60 + currentMin;
+
+    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return "07:30";
+    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return "11:30";
+    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return "13:30";
+    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return "17:30";
+    return "";
+  }, [currentSystemTime]);
+
+  const todayDate = useMemo(() => currentSystemTime.getDate(), [currentSystemTime]);
+
+  const hasClockedInCurrentSlot = useMemo(() => {
+    if (!currentAccount || !currentSlot) return false;
+    const key = `${currentAccount.id}-${todayDate}-${currentSlot}`;
+    return attendance[key] === "normal" || attendance[key] === "compensated";
+  }, [attendance, currentAccount, todayDate, currentSlot]);
+
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
     function fetchData() {
@@ -277,6 +307,7 @@ export default function HomePage() {
           setOrders={setOrders} 
           overtimeRequests={overtimeRequests} 
           accounts={accounts}
+          currentPosition={currentPosition}
         />
       )}
       {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} />}
@@ -296,6 +327,7 @@ export default function HomePage() {
           onLogout={() => setCurrentAccount(null)} 
           onPositionChange={changePosition} 
           onClockClick={() => setClockOpen(true)}
+          hasClockedInCurrentSlot={hasClockedInCurrentSlot}
         />
         <div className="p-4 pb-24 md:p-6">{content}</div>
         <WorkerBottomNav activeModule={activeModule} onChange={setActiveModule} />
@@ -328,7 +360,7 @@ export default function HomePage() {
             })}
           </nav>
 
-          {mustClockIn(currentPosition.id) ? <SidebarClock onClock={() => setClockOpen(true)} onOvertime={() => setOvertimeOpen(true)} /> : null}
+          {mustClockIn(currentPosition.id) ? <SidebarClock onClock={() => setClockOpen(true)} onOvertime={() => setOvertimeOpen(true)} hasClockedInCurrentSlot={hasClockedInCurrentSlot} /> : null}
         </div>
       </aside>
 
@@ -344,8 +376,8 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-4">
-            {mustClockIn(currentPosition.id) && !isWorkerPosition(currentPosition.id) && isAnyClockInSlotOpen ? (
-              <button className="min-h-10 rounded-lg bg-orange-500 px-4 text-xs font-black text-white hover:bg-orange-600 transition" onClick={() => setClockOpen(true)} type="button">CHẤM CÔNG</button>
+            {mustClockIn(currentPosition.id) && !isWorkerPosition(currentPosition.id) && isAnyClockInSlotOpen && !hasClockedInCurrentSlot ? (
+              <button className="min-h-10 rounded-lg bg-orange-500 px-4 text-xs font-black text-white hover:bg-orange-600 transition animate-pulse" onClick={() => setClockOpen(true)} type="button">CHẤM CÔNG</button>
             ) : null}
             <RoleSelect allowedPositions={allowedPositions} value={currentPosition.id} onChange={changePosition} />
             <div className="hidden items-center gap-3 md:flex">
@@ -387,32 +419,59 @@ export default function HomePage() {
           }} 
         />
       ) : null}
-      {clockOpen ? <ClockInModal employeeName={currentAccount.displayName} onClose={() => setClockOpen(false)} onSubmit={(message) => {
-        const now = new Date();
-        const currentHour = now.getHours();
-        const currentMin = now.getMinutes();
-        const currentVal = currentHour * 60 + currentMin;
-        
-        let activeSlot = "07:30";
-        if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) activeSlot = "07:30";
-        else if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) activeSlot = "11:30";
-        else if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) activeSlot = "13:30";
-        else if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) activeSlot = "17:30";
-        
-        const dayNum = now.getDate();
-        const key = `${currentAccount.id}-${dayNum}-${activeSlot}`;
-        setAttendance((prev) => ({
-          ...prev,
-          [key]: "normal"
-        }));
-        setClockOpen(false);
-        setToast(message);
-      }} /> : null}
+      {clockOpen ? (
+        <ClockInModal 
+          employeeName={currentAccount.displayName} 
+          activeJobs={userActiveJobs.map(o => o.code)}
+          onClose={() => setClockOpen(false)} 
+          onSubmit={(message, completedJobCodes) => {
+            const now = new Date();
+            const currentHour = now.getHours();
+            const currentMin = now.getMinutes();
+            const currentVal = currentHour * 60 + currentMin;
+            
+            let activeSlot = "07:30";
+            if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) activeSlot = "07:30";
+            else if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) activeSlot = "11:30";
+            else if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) activeSlot = "13:30";
+            else if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) activeSlot = "17:30";
+            
+            const dayNum = now.getDate();
+            const key = `${currentAccount.id}-${dayNum}-${activeSlot}`;
+            
+            // Cập nhật chấm công
+            setAttendance((prev) => ({
+              ...prev,
+              [key]: "normal"
+            }));
+
+            // Cập nhật trạng thái các đơn hàng báo xong
+            if (completedJobCodes.length > 0) {
+              setOrders((currOrders) =>
+                currOrders.map((o) => {
+                  if (completedJobCodes.includes(o.code)) {
+                    return {
+                      ...o,
+                      workStatus: "pending_confirmation",
+                      progressPercent: 100,
+                      finalNote: `Thợ báo hoàn thành khi chấm công trên Web App`
+                    };
+                  }
+                  return o;
+                })
+              );
+            }
+
+            setClockOpen(false);
+            setToast(message);
+          }} 
+        />
+      ) : null}
     </main>
   );
 }
 
-function SidebarClock({ onClock, onOvertime }: { onClock: () => void; onOvertime: () => void }) {
+function SidebarClock({ onClock, onOvertime, hasClockedInCurrentSlot }: { onClock: () => void; onOvertime: () => void; hasClockedInCurrentSlot: boolean }) {
   const [mounted, setMounted] = useState(false);
   const [timeStr, setTimeStr] = useState("07:30:00");
   const [dateStr, setDateStr] = useState("Thứ 6, 24/05/2024");
@@ -473,7 +532,13 @@ function SidebarClock({ onClock, onOvertime }: { onClock: () => void; onOvertime
         <div className="mt-1 text-sm text-slate-300">{dateStr}</div>
         
         {isAnySlotOpen ? (
-          <button className="mt-4 min-h-12 w-full rounded-lg bg-orange-500 font-black hover:bg-orange-600 transition" onClick={onClock} type="button">CHẤM CÔNG</button>
+          hasClockedInCurrentSlot ? (
+            <div className="mt-4 p-3 rounded-lg bg-green-500/10 border border-green-500/35 text-xs font-bold text-green-400">
+              ✓ Đã hoàn thành chấm công mốc này
+            </div>
+          ) : (
+            <button className="mt-4 min-h-12 w-full rounded-lg bg-orange-500 font-black hover:bg-orange-600 transition" onClick={onClock} type="button">CHẤM CÔNG</button>
+          )
         ) : (
           <div className="mt-4 p-3 rounded-lg bg-white/5 border border-white/10 text-xs font-bold text-slate-400">
             Ngoài khung giờ chấm công quy định (07:30, 11:30, 13:30, 17:30)
@@ -496,7 +561,8 @@ function WorkerTopBar({
   positionId,
   onPositionChange,
   onLogout,
-  onClockClick
+  onClockClick,
+  hasClockedInCurrentSlot
 }: {
   account: UserAccount;
   allowedPositions: typeof positions;
@@ -505,6 +571,7 @@ function WorkerTopBar({
   onPositionChange: (value: string) => void;
   onLogout: () => void;
   onClockClick: () => void;
+  hasClockedInCurrentSlot: boolean;
 }) {
   const isAnyClockInSlotOpen = useMemo(() => {
     const now = new Date();
@@ -532,7 +599,7 @@ function WorkerTopBar({
         </div>
       </div>
       <div className="flex items-center gap-2 md:gap-8">
-        {isAnyClockInSlotOpen && (
+        {isAnyClockInSlotOpen && !hasClockedInCurrentSlot && (
           <button 
             className="min-h-9 rounded-lg bg-orange-500 px-3 text-xs font-black text-white hover:bg-orange-600 transition" 
             onClick={onClockClick} 
@@ -648,10 +715,19 @@ function OvertimeModal({
   );
 }
 
-function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: string; onClose: () => void; onSubmit: (message: string) => void }) {
-  const activeJobs = ["TUAN-LECHAN-759", "HOA-THUYNGUYEN-258"];
+function ClockInModal({ 
+  employeeName, 
+  activeJobs = [], 
+  onClose, 
+  onSubmit 
+}: { 
+  employeeName: string; 
+  activeJobs?: string[]; 
+  onClose: () => void; 
+  onSubmit: (message: string, completedJobCodes: string[]) => void 
+}) {
   const [jobIndex, setJobIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, boolean>>({});
+  const [completedJobs, setCompletedJobs] = useState<string[]>([]);
   const [cameraReady, setCameraReady] = useState(activeJobs.length === 0);
   const [gpsText, setGpsText] = useState("Đang lấy định vị...");
   
@@ -690,8 +766,9 @@ function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: strin
 
   function answer(done: boolean) {
     const code = activeJobs[jobIndex];
-    const nextAnswers = { ...answers, [code]: done };
-    setAnswers(nextAnswers);
+    if (done) {
+      setCompletedJobs((prev) => [...prev, code]);
+    }
     if (jobIndex + 1 < activeJobs.length) {
       setJobIndex(jobIndex + 1);
       return;
@@ -739,7 +816,10 @@ function ClockInModal({ employeeName, onClose, onSubmit }: { employeeName: strin
             </div>
             <button className="min-h-12 rounded-lg bg-green-600 font-black text-white" onClick={() => {
               if (stream) stream.getTracks().forEach((track) => track.stop());
-              onSubmit(`Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và chụp ảnh thành công.`);
+              onSubmit(
+                `Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và chụp ảnh thành công.`,
+                completedJobs
+              );
             }} type="button">
               Chụp ảnh và lưu chấm công
             </button>
