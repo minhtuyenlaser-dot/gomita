@@ -98,6 +98,19 @@ export function AttendanceDashboard({
     return compensationRequests.filter((req) => req.status === "pending");
   }, [compensationRequests]);
 
+  // Gom nhóm các yêu cầu bù công chờ duyệt theo groupId hoặc id
+  const groupedPendingRequests = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    compensationRequests.filter((req) => req.status === "pending").forEach((req) => {
+      const key = req.groupId || req.id;
+      if (!groups[key]) {
+        groups[key] = [];
+      }
+      groups[key].push(req);
+    });
+    return Object.values(groups);
+  }, [compensationRequests]);
+
   const approvedRequests = useMemo(() => {
     return compensationRequests.filter((req) => req.status === "approved");
   }, [compensationRequests]);
@@ -141,28 +154,34 @@ export function AttendanceDashboard({
     setReason("");
   }
 
-  // Duyệt và ghi nhận công bù
-  function handleApprove(requestId: string) {
+  // Duyệt và ghi nhận công bù theo đợt gửi
+  function handleApproveGroup(group: any[]) {
     if (!currentApprovalRole) return;
     
+    const requestIds = group.map((req) => req.id);
+    let nextAttendance = { ...attendance };
+    let attendanceChanged = false;
+
     const updatedRequests = compensationRequests.map((request) => {
-      if (request.id !== requestId) return request;
+      if (!requestIds.includes(request.id)) return request;
+      
       const nextRequest = approveCompensation(request, currentApprovalRole, position.name);
       
       // Nếu đã được duyệt hoàn toàn (hoàn thành tất cả các mốc phê duyệt)
       if (nextRequest.status === "approved") {
-        const nextAttendance = { ...attendance };
         const dayNumber = Number(nextRequest.date.split("-")[2]); // Lấy ngày dạng số
-        
         nextRequest.slots.forEach((slot: string) => {
           const key = `${nextRequest.employeeId}-${dayNumber}-${slot}`;
           nextAttendance[key] = "compensated"; // Ghi nhận "Chấm công bù" (blue dot)
         });
-        onAttendanceChange(nextAttendance);
+        attendanceChanged = true;
       }
       return nextRequest;
     });
 
+    if (attendanceChanged) {
+      onAttendanceChange(nextAttendance);
+    }
     onCompensationRequestsChange(updatedRequests);
   }
 
@@ -306,37 +325,43 @@ export function AttendanceDashboard({
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
-            {pendingRequests.map((request) => {
+            {groupedPendingRequests.map((group) => {
+              const repRequest = group[0]; // Bản ghi đại diện cho cả đợt
+              
               // Tìm cấp duyệt tiếp theo
-              const nextRole = (request.requiredApprovals as ApprovalRole[]).find(
-                (role: ApprovalRole) => !request.approvals.some((app: any) => app.role === role)
+              const nextRole = (repRequest.requiredApprovals as ApprovalRole[]).find(
+                (role: ApprovalRole) => !repRequest.approvals.some((app: any) => app.role === role)
               );
               const canApprove = Boolean(currentApprovalRole && nextRole === currentApprovalRole);
 
               return (
-                <article key={request.id} className="rounded-xl border border-slate-200 p-4 hover:border-slate-300 transition flex flex-col justify-between">
+                <article key={repRequest.groupId || repRequest.id} className="rounded-xl border border-slate-200 p-4 hover:border-slate-300 transition flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-start">
                       <div>
-                        <h4 className="font-black text-base text-slate-900">{request.employeeName}</h4>
-                        <div className="text-xs text-orange-500 font-bold mt-0.5">
-                          Thiếu ngày {formatDate(request.date)} · Mốc: {request.slots.join(", ")}
+                        <h4 className="font-black text-base text-slate-900">{repRequest.employeeName}</h4>
+                        <div className="text-xs text-orange-500 font-bold mt-1.5 flex flex-col gap-1.5">
+                          {group.map((req) => (
+                            <div key={req.id} className="bg-orange-50/50 px-2 py-1 rounded border border-orange-100/50">
+                              • Ngày {formatDate(req.date)} · Mốc: {req.slots.join(", ")}
+                            </div>
+                          ))}
                         </div>
                       </div>
-                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-600">
+                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-600 shrink-0">
                         Chờ {nextRole ? approvalNames[nextRole as ApprovalRole] : "Duyệt"}
                       </span>
                     </div>
 
                     <p className="mt-3 text-xs text-slate-600 font-semibold bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                      <strong>Lý do:</strong> {request.reason} (Lần thứ {request.missingCountInMonth} trong tháng)
+                      <strong>Lý do:</strong> {repRequest.reason} (Đăng ký bù: {repRequest.missingCountInMonth} mốc giờ)
                     </p>
 
                     {/* Tiến độ các cấp duyệt */}
                     <div className="mt-4 flex flex-wrap items-center gap-2">
                       <span className="text-[10px] text-slate-400 font-bold mr-1">Các cấp duyệt:</span>
-                      {(request.requiredApprovals as ApprovalRole[]).map((role: ApprovalRole) => {
-                        const approval = request.approvals.find((app: any) => app.role === role);
+                      {(repRequest.requiredApprovals as ApprovalRole[]).map((role: ApprovalRole) => {
+                        const approval = repRequest.approvals.find((app: any) => app.role === role);
                         return (
                           <span
                             key={role}
@@ -357,11 +382,11 @@ export function AttendanceDashboard({
                     {canApprove ? (
                       <button
                         className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 text-xs font-black text-white hover:bg-green-700 shadow-md shadow-green-600/10 transition"
-                        onClick={() => handleApprove(request.id)}
+                        onClick={() => handleApproveGroup(group)}
                         type="button"
                       >
                         <UserCheck className="h-4 w-4" />
-                        XÁC NHẬN DUYỆT CÔNG BÙ
+                        XÁC NHẬN DUYỆT CÔNG BÙ CẢ ĐỢT ({group.length} ngày)
                       </button>
                     ) : (
                       <div className="flex items-center gap-1.5 text-xs text-slate-400 font-bold bg-slate-50 border border-slate-100 rounded-lg p-2.5 w-full justify-center">

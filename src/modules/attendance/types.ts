@@ -26,4 +26,5 @@ export type CompensationRequest = {
   }>;
   status: ApprovalStatus;
   createdAt: string;
+  groupId?: string;
 };

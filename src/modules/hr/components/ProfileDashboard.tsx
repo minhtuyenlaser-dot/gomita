@@ -541,16 +541,17 @@ export function ProfileDashboard({
                         grouped[dayNum].push(slotVal);
                       });
 
+                      const groupId = `comp-group-${Date.now()}`;
+                      let batchSlotsCount = 0;
+                      Object.values(grouped).forEach(daySlots => {
+                        batchSlotsCount += daySlots.length;
+                      });
+
                       const newRequests = Object.keys(grouped).map(dayStr => {
                         const dayNum = Number(dayStr);
                         const daySlots = grouped[dayNum];
                         const dateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
                         
-                        const monthPrefix = dateString.slice(0, 7);
-                        const prevCount = compensationRequests.filter(
-                          (req) => req.employeeId === account.id && req.date.slice(0, 7) === monthPrefix
-                        ).length;
-                        const monthCount = prevCount + daySlots.length;
                         const level = account.positionIds.includes("hr") ? "department_head" : (position.level || "staff");
 
                         return {
@@ -561,11 +562,12 @@ export function ProfileDashboard({
                           date: dateString,
                           slots: daySlots,
                           reason: compReason.trim(),
-                          missingCountInMonth: monthCount,
-                          requiredApprovals: getRequiredApprovals(level, monthCount),
+                          missingCountInMonth: batchSlotsCount,
+                          requiredApprovals: getRequiredApprovals(level, batchSlotsCount),
                           approvals: [],
                           status: "pending",
-                          createdAt: new Date().toISOString()
+                          createdAt: new Date().toISOString(),
+                          groupId
                         };
                       });
 

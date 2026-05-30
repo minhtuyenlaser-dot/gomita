@@ -14,7 +14,7 @@ import { WorkerDashboard } from "./screens/WorkerDashboard";
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
-  const [serverIp, setServerIp] = useState("10.0.2.2:3001"); // IP mặc định trong Emulator Android
+  const [serverIp, setServerIp] = useState("gomita.onrender.com"); // Kết nối mặc định đến máy chủ GOMITA Cloud
   const [apiData, setApiData] = useState<any>(null);
 
   // Khôi phục session đăng nhập và server IP
