@@ -119,7 +119,7 @@ export function LoginScreen({
 
           <TouchableOpacity 
             style={styles.loginButton} 
-            onClick={handleLogin}
+            onPress={handleLogin}
             disabled={loading}
           >
             {loading ? (
@@ -132,7 +132,7 @@ export function LoginScreen({
           {/* Cấu hình IP Máy chủ di động linh hoạt */}
           <TouchableOpacity 
             style={styles.settingToggle} 
-            onClick={() => setShowSettings(!showSettings)}
+            onPress={() => setShowSettings(!showSettings)}
           >
             <Settings size={16} color="#64748b" />
             <Text style={styles.settingToggleText}>Cấu hình kết nối máy chủ</Text>

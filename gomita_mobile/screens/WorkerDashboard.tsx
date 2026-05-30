@@ -326,7 +326,7 @@ export function WorkerDashboard({
           <Text style={styles.helloText}>Xin chào, {user.displayName} 👋</Text>
           <Text style={styles.positionText}>Bộ phận: {user.department}</Text>
         </View>
-        <TouchableOpacity style={styles.logoutBtn} onClick={onLogout}>
+        <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
           <LogOut size={18} color="#f8fafc" />
         </TouchableOpacity>
       </View>
@@ -497,7 +497,7 @@ export function WorkerDashboard({
               {/* Nút Hoàn thành Độc lập */}
               <TouchableOpacity 
                 style={styles.doneIndependentBtn}
-                onClick={() => handleReportDoneIndependent(job)}
+                onPress={() => handleReportDoneIndependent(job)}
               >
                 <CheckCircle2 size={16} color="#ffffff" />
                 <Text style={styles.doneIndependentBtnText}>BÁO CÁO HOÀN THÀNH CÔNG VIỆC</Text>
@@ -519,7 +519,7 @@ export function WorkerDashboard({
             <View style={styles.modalButtons}>
               <TouchableOpacity 
                 style={[styles.modalBtn, styles.modalBtnGreen]}
-                onClick={() => handleAnswerCompletion(true)}
+                onPress={() => handleAnswerCompletion(true)}
               >
                 <CheckCircle2 size={18} color="#ffffff" />
                 <Text style={styles.modalBtnText}>Đã hoàn thành</Text>
@@ -527,7 +527,7 @@ export function WorkerDashboard({
 
               <TouchableOpacity 
                 style={[styles.modalBtn, styles.modalBtnOrange]}
-                onClick={() => handleAnswerCompletion(false)}
+                onPress={() => handleAnswerCompletion(false)}
               >
                 <Text style={styles.modalBtnText}>Chưa hoàn thành</Text>
               </TouchableOpacity>
@@ -555,7 +555,7 @@ export function WorkerDashboard({
           <View style={styles.cameraFooter}>
             <TouchableOpacity 
               style={styles.captureCircleBtn}
-              onClick={captureAndClockin}
+              onPress={captureAndClockin}
               disabled={loading}
             >
               {loading ? (
@@ -566,7 +566,7 @@ export function WorkerDashboard({
             </TouchableOpacity>
             <TouchableOpacity 
               style={styles.closeCameraBtn}
-              onClick={() => {
+              onPress={() => {
                 setShowCamera(false);
                 setActiveJobToReport(null);
               }}
