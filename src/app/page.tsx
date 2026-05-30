@@ -110,6 +110,7 @@ export default function HomePage() {
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
   const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
+  const [attendanceDetails, setAttendanceDetails] = useState<Record<string, { photo: string; gps: string; time: string }>>({});
 
   // Lọc công việc đang được giao cho người dùng này hôm nay (nếu là thợ)
   const userActiveJobs = useMemo(() => {
@@ -152,6 +153,7 @@ export default function HomePage() {
           if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
           if (data.compensationRequests) setCompensationRequests(data.compensationRequests);
           if (data.attendance) setAttendance(data.attendance);
+          if (data.attendanceDetails) setAttendanceDetails(data.attendanceDetails);
         })
         .catch((err) => {
           console.warn("API Server offline, sử dụng dữ liệu offline.", err);
@@ -170,6 +172,9 @@ export default function HomePage() {
 
           const savedAttendance = localStorage.getItem("gomita_web_attendance_v3");
           if (savedAttendance) setAttendance(JSON.parse(savedAttendance));
+
+          const savedAttendanceDetails = localStorage.getItem("gomita_web_attendance_details_v3");
+          if (savedAttendanceDetails) setAttendanceDetails(JSON.parse(savedAttendanceDetails));
         });
     }
 
@@ -228,6 +233,16 @@ export default function HomePage() {
     }).catch(() => {});
     localStorage.setItem("gomita_web_attendance_v3", JSON.stringify(attendance));
   }, [attendance]);
+
+  useEffect(() => {
+    if (Object.keys(attendanceDetails).length === 0) return;
+    fetch("https://gomita.onrender.com/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attendanceDetails })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_attendance_details_v3", JSON.stringify(attendanceDetails));
+  }, [attendanceDetails]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds.includes(position.id)) : [], [currentAccount]);
   const currentPosition = positions.find((position) => position.id === positionId) ?? allowedPositions[0] ?? positions[0];
@@ -299,6 +314,7 @@ export default function HomePage() {
           onCompensationRequestsChange={setCompensationRequests}
           attendance={attendance}
           onAttendanceChange={setAttendance}
+          attendanceDetails={attendanceDetails}
         />
       )}
       {activeModule === "finance" && (
@@ -424,7 +440,7 @@ export default function HomePage() {
           employeeName={currentAccount.displayName} 
           activeJobs={userActiveJobs.map(o => o.code)}
           onClose={() => setClockOpen(false)} 
-          onSubmit={(message, completedJobCodes) => {
+          onSubmit={(message: string, completedJobCodes: string[], photoBase64?: string, gpsText?: string) => {
             const now = new Date();
             const currentHour = now.getHours();
             const currentMin = now.getMinutes();
@@ -444,6 +460,17 @@ export default function HomePage() {
               ...prev,
               [key]: "normal"
             }));
+
+            if (photoBase64 || gpsText) {
+              setAttendanceDetails((prev) => ({
+                ...prev,
+                [key]: {
+                  photo: photoBase64 || "",
+                  gps: gpsText || "",
+                  time: now.toLocaleTimeString("vi-VN", { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                }
+              }));
+            }
 
             // Cập nhật trạng thái các đơn hàng báo xong
             if (completedJobCodes.length > 0) {
@@ -724,7 +751,7 @@ function ClockInModal({
   employeeName: string; 
   activeJobs?: string[]; 
   onClose: () => void; 
-  onSubmit: (message: string, completedJobCodes: string[]) => void 
+  onSubmit: (message: string, completedJobCodes: string[], photoBase64?: string, gpsText?: string) => void 
 }) {
   const [jobIndex, setJobIndex] = useState(0);
   const [completedJobs, setCompletedJobs] = useState<string[]>([]);
@@ -816,9 +843,31 @@ function ClockInModal({
             </div>
             <button className="min-h-12 rounded-lg bg-green-600 font-black text-white" onClick={() => {
               if (stream) stream.getTracks().forEach((track) => track.stop());
+              
+              let photoBase64 = "";
+              if (!cameraError && videoRef.current) {
+                try {
+                  const canvas = document.createElement("canvas");
+                  canvas.width = videoRef.current.videoWidth || 640;
+                  canvas.height = videoRef.current.videoHeight || 480;
+                  const ctx = canvas.getContext("2d");
+                  if (ctx) {
+                    // Mirror image to match the video element style scale-x-[-1]
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                    photoBase64 = canvas.toDataURL("image/jpeg", 0.7);
+                  }
+                } catch (err) {
+                  console.error("Lỗi chụp ảnh selfie:", err);
+                }
+              }
+
               onSubmit(
                 `Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và chụp ảnh thành công.`,
-                completedJobs
+                completedJobs,
+                photoBase64,
+                gpsText
               );
             }} type="button">
               Chụp ảnh và lưu chấm công

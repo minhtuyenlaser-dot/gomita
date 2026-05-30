@@ -97,7 +97,8 @@ const initialData = {
       createdAt: new Date().toISOString()
     }
   ],
-  attendance: {} // { "userId-date-slot": "normal" | "compensated" }
+  attendance: {}, // { "userId-date-slot": "normal" | "compensated" }
+  attendanceDetails: {} // { "userId-date-slot": { photo: string, gps: string, time: string } }
 };
 
 // Đảm bảo có tệp tin cơ sở dữ liệu
@@ -155,6 +156,7 @@ const server = http.createServer((req, res) => {
         if (patch.overtimeRequests) db.overtimeRequests = patch.overtimeRequests;
         if (patch.compensationRequests) db.compensationRequests = patch.compensationRequests;
         if (patch.attendance) db.attendance = patch.attendance;
+        if (patch.attendanceDetails) db.attendanceDetails = patch.attendanceDetails;
         writeDB(db);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true, db }));
@@ -199,11 +201,21 @@ const server = http.createServer((req, res) => {
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
       try {
-        const { userId, date, slot, orderCode, isCompleted } = JSON.parse(body);
+        const { userId, date, slot, orderCode, isCompleted, photo, gps, time } = JSON.parse(body);
         
         // Cập nhật chấm công
         const key = `${userId}-${date}-${slot}`;
         db.attendance[key] = "normal";
+
+        // Cập nhật chi tiết ảnh & gps & giờ chấm thực tế
+        if (photo || gps) {
+          db.attendanceDetails = db.attendanceDetails || {};
+          db.attendanceDetails[key] = {
+            photo: photo || "",
+            gps: gps || "",
+            time: time || new Date().toLocaleTimeString("vi-VN", { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          };
+        }
 
         // Nếu có báo cáo tiến độ đơn hàng
         if (orderCode) {

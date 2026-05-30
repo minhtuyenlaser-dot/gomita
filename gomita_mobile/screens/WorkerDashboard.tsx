@@ -236,8 +236,8 @@ export function WorkerDashboard({
     setLoading(true);
 
     try {
-      // Chụp ảnh selfie
-      const photo = await cameraRef.takePictureAsync({ quality: 0.5 });
+      // Chụp ảnh selfie với tỉ lệ nén tối ưu (25%) để truyền tải dữ liệu nhanh và tiết kiệm dung lượng
+      const photo = await cameraRef.takePictureAsync({ quality: 0.25, base64: true });
       
       // Gửi chấm công lên API Server
       const url = getApiUrl(serverIp, "/api/clockin");
@@ -248,7 +248,10 @@ export function WorkerDashboard({
         date: today,
         slot: currentSlot,
         orderCode: activeJobToReport ? activeJobToReport.code : null,
-        isCompleted: isCompleted // Nếu có hỏi tiến độ
+        isCompleted: isCompleted, // Nếu có hỏi tiến độ
+        photo: photo.base64 ? `data:image/jpeg;base64,${photo.base64}` : null,
+        gps: gpsCoords,
+        time: currentTime
       };
 
       const res = await fetch(url, {
