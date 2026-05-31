@@ -1032,6 +1032,19 @@ function WorkerWorkspace({
     return missingSlots.filter(item => !item.isIgnored).length > 0;
   }, [missingSlots]);
 
+  // Lọc các ngày thiếu công độc nhất để làm cột cho bảng chọn trong Modal
+  const uniqueMissingDays = useMemo(() => {
+    const daysMap = new Map<number, Date>();
+    monthDays.forEach(day => {
+      const dayNum = day.getDate();
+      const hasMissingInDay = attendanceSlots.some(slot => !workerAttendance[`${dayNum}-${slot}`]);
+      if (hasMissingInDay && day.getDay() !== 0 && dayNum <= today) {
+        daysMap.set(dayNum, day);
+      }
+    });
+    return Array.from(daysMap.values()).sort((a, b) => a.getDate() - b.getDate());
+  }, [monthDays, workerAttendance, today]);
+
   // Quản lý Modal Chấm Công Bù Thông Minh
   const [compOpen, setCompOpen] = useState(false);
   const [compReason, setCompReason] = useState("");
@@ -1330,40 +1343,89 @@ function WorkerWorkspace({
               Chỉ được chấm công bù các mốc trong vòng 3 ngày gần nhất. Các mốc cũ hơn sẽ bị hệ thống tự động khóa.
             </div>
 
-            <div>
-              <div className="mb-2 font-black text-sm text-slate-700">Các mốc thiếu công trong tháng</div>
-              {missingSlots.length === 0 ? (
-                <div className="text-center py-6 text-slate-400 italic">Tuyệt vời! Bạn không thiếu mốc chấm công nào.</div>
-              ) : (
-                <div className="grid gap-2 max-h-60 overflow-y-auto rounded-lg border p-2">
-                  {missingSlots.map((item, idx) => {
-                    const isChecked = selectedCompSlots.some(s => s.date === item.date && s.slot === item.slot);
-                    return (
-                      <label key={idx} className={`flex min-h-11 items-center gap-3 rounded-lg border p-2 text-xs font-bold ${item.isIgnored ? "bg-slate-50 text-slate-400 opacity-60 cursor-not-allowed" : "border-slate-200 hover:bg-slate-50 cursor-pointer"}`}>
-                        <input 
-                          type="checkbox" 
-                          disabled={item.isIgnored} 
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedCompSlots(curr => [...curr, { date: item.date, slot: item.slot }]);
-                            } else {
-                              setSelectedCompSlots(curr => curr.filter(s => !(s.date === item.date && s.slot === item.slot)));
-                            }
-                          }}
-                        />
-                        <span className="flex-1">{formatDate(item.date)} - Mốc {item.slot}</span>
-                        {item.isIgnored ? (
-                          <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-600">Đã khóa (Quá 3 ngày)</span>
-                        ) : (
-                          <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold text-orange-600">Cho phép bù</span>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+             <div>
+               <div className="mb-2 font-black text-sm text-slate-700">Các mốc thiếu công trong tháng (Chọn trực tiếp trên bảng)</div>
+               {uniqueMissingDays.length === 0 ? (
+                 <div className="text-center py-6 text-slate-400 italic">Tuyệt vời! Bạn không thiếu mốc chấm công nào.</div>
+               ) : (
+                 <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                   <div className="min-w-[500px] p-1">
+                     <table className="w-full border-collapse text-xs text-center text-slate-800">
+                       <thead>
+                         <tr className="bg-slate-50 border-b border-slate-200">
+                           <th className="p-2 text-left font-black text-slate-600 min-w-[90px]">Mốc giờ</th>
+                           {uniqueMissingDays.map((day) => (
+                             <th key={day.toISOString()} className="p-2 font-black text-slate-600">
+                               {day.getDate()}/{day.getMonth() + 1}
+                             </th>
+                           ))}
+                         </tr>
+                       </thead>
+                       <tbody>
+                         {attendanceSlots.map((slot) => (
+                           <tr key={slot} className="border-b border-slate-100 hover:bg-slate-50/50">
+                             <td className="p-2 text-left font-black text-slate-700">{slot}</td>
+                             {uniqueMissingDays.map((day) => {
+                               const dayNum = day.getDate();
+                               const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+                               const kind = workerAttendance[`${dayNum}-${slot}`];
+                               const dayDiff = today - dayNum;
+                               const isLocked = dayDiff > 3;
+
+                               if (kind === "normal" || kind === "compensated") {
+                                 return (
+                                   <td key={dayNum} className="p-2">
+                                     <span className="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700">
+                                       <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                                       Đã chấm
+                                     </span>
+                                   </td>
+                                 );
+                               }
+
+                               if (isLocked) {
+                                 return (
+                                   <td key={dayNum} className="p-2">
+                                     <span className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-[10px] font-bold text-red-400">
+                                       <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                                       Khóa
+                                     </span>
+                                   </td>
+                                 );
+                               }
+
+                               // Cho phép bù -> Ô tương tác được
+                               const isChecked = selectedCompSlots.some(s => s.date === dateStr && s.slot === slot);
+                               return (
+                                 <td key={dayNum} className="p-2">
+                                   <button
+                                     type="button"
+                                     onClick={() => {
+                                       if (isChecked) {
+                                         setSelectedCompSlots(curr => curr.filter(s => !(s.date === dateStr && s.slot === slot)));
+                                       } else {
+                                         setSelectedCompSlots(curr => [...curr, { date: dateStr, slot }]);
+                                       }
+                                     }}
+                                     className={`w-full min-h-[34px] rounded-lg border text-center transition flex flex-col justify-center items-center font-bold px-1 py-0.5 ${
+                                       isChecked
+                                         ? "bg-blue-600 border-blue-600 text-white shadow-sm"
+                                         : "bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100"
+                                     }`}
+                                   >
+                                     <span className="text-[10px]">{isChecked ? "✓ Chọn" : "Bù"}</span>
+                                   </button>
+                                 </td>
+                                );
+                             })}
+                           </tr>
+                         ))}
+                       </tbody>
+                     </table>
+                   </div>
+                 </div>
+               )}
+             </div>
 
             <label className="grid gap-1.5 text-sm font-black">
               Lý do thiếu công
