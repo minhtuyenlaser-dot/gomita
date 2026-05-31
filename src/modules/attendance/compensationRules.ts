@@ -4,11 +4,11 @@ import type { PositionLevel } from "@/modules/hr/roles";
 export const attendanceSlots: AttendanceSlot[] = ["07:30", "11:30", "13:30", "17:30"];
 
 export function getRequiredApprovals(level: PositionLevel, missingCountInMonth: number): ApprovalRole[] {
-  if (level === "director" || missingCountInMonth > 8) {
+  if (missingCountInMonth > 8) {
     return ["hr", "department_manager", "director"];
   }
 
-  if (level === "team_lead" || level === "department_head" || missingCountInMonth >= 4) {
+  if (missingCountInMonth >= 4) {
     return ["hr", "department_manager"];
   }
 
@@ -39,9 +39,7 @@ export function canApproveCompensation(request: CompensationRequest, role: Appro
   if (!request.requiredApprovals.includes(role)) return false;
   if (request.approvals.some((approval) => approval.role === role)) return false;
 
-  const roleIndex = request.requiredApprovals.indexOf(role);
-  const previousRoles = request.requiredApprovals.slice(0, roleIndex);
-  return previousRoles.every((previousRole) => request.approvals.some((approval) => approval.role === previousRole));
+  return true; // Bỏ kiểm tra duyệt tuần tự, cho phép duyệt song song không phân biệt trước sau!
 }
 
 export function approveCompensation(request: CompensationRequest, role: ApprovalRole, approverName: string): CompensationRequest {

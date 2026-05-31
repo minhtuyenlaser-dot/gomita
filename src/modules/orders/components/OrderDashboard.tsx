@@ -1003,7 +1003,39 @@ function WorkerWorkspace({
     return workerAttendance[`${today}-${currentSlot}`] === "normal" || workerAttendance[`${today}-${currentSlot}`] === "compensated";
   }, [workerAttendance, today, currentSlot]);
 
-  // Lọc các mốc thiếu công thông minh (chỉ cho phép bù mốc thiếu trong vòng 3 ngày gần nhất)
+  // Tìm ngày (dayNum) gần nhất đã chấm công bù (hoặc đã gửi yêu cầu chấm công bù) trong tháng
+  const latestCompDay = useMemo(() => {
+    let maxDay = 0;
+    
+    // 1. Kiểm tra trong dữ liệu chấm công thực tế
+    Object.keys(workerAttendance).forEach(key => {
+      const parts = key.split("-");
+      if (parts.length === 2) {
+        const dayNum = Number(parts[0]);
+        if (workerAttendance[key] === "compensated") {
+          if (dayNum > maxDay) {
+            maxDay = dayNum;
+          }
+        }
+      }
+    });
+
+    // 2. Kiểm tra trong danh sách yêu cầu chấm công bù
+    const workerReqs = compensationRequests.filter(req => req.employeeId === currentAccountId);
+    workerReqs.forEach(req => {
+      const reqDate = new Date(req.date);
+      const now = new Date();
+      if (reqDate.getMonth() === now.getMonth() && reqDate.getFullYear() === now.getFullYear()) {
+        if (reqDate.getDate() > maxDay) {
+          maxDay = reqDate.getDate();
+        }
+      }
+    });
+
+    return maxDay;
+  }, [workerAttendance, compensationRequests, currentAccountId]);
+
+  // Lọc các mốc thiếu công thông minh (khóa toàn bộ ngày trước mốc chấm công bù gần nhất)
   const missingSlots = useMemo(() => {
     const list: Array<{ date: string; slot: AttendanceSlot; isIgnored: boolean }> = [];
     const today = new Date().getDate();
@@ -1015,8 +1047,8 @@ function WorkerWorkspace({
         // Nếu chưa chấm công thành công (normal) hoặc chấm công bù (compensated)
         if (!workerAttendance[key]) {
           const dayNum = day.getDate();
-          const dayDiff = today - dayNum;
-          const isIgnored = dayDiff > 3; // Chỉ cho phép bù trong vòng 3 ngày gần nhất!
+          // Khóa toàn bộ những ngày trước mốc chấm công bù gần nhất (Xác định là ngày nghỉ)
+          const isIgnored = latestCompDay > 0 && dayNum < latestCompDay;
           list.push({
             date: `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`,
             slot,
@@ -1026,7 +1058,7 @@ function WorkerWorkspace({
       });
     });
     return list;
-  }, [monthDays, workerAttendance]);
+  }, [monthDays, workerAttendance, latestCompDay]);
 
   const hasMissing = useMemo(() => {
     return missingSlots.filter(item => !item.isIgnored).length > 0;
