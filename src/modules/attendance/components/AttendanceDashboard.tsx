@@ -412,12 +412,13 @@ export function AttendanceDashboard({
               <div className="grid gap-4 md:grid-cols-2">
                 {groupedPendingRequests.map((group) => {
                   const repRequest = group[0]; // Bản ghi đại diện cho cả đợt
+                  const hasApprovedThisRole = repRequest.approvals.some((app: any) => app.role === currentApprovalRole);
+                  const canApprove = Boolean(currentApprovalRole && repRequest.requiredApprovals.includes(currentApprovalRole) && !hasApprovedThisRole);
                   
-                  // Tìm cấp duyệt tiếp theo
-                  const nextRole = (repRequest.requiredApprovals as ApprovalRole[]).find(
+                  // Lấy danh sách các cấp chưa duyệt để hiển thị trạng thái
+                  const remainingRoles = (repRequest.requiredApprovals as ApprovalRole[]).filter(
                     (role: ApprovalRole) => !repRequest.approvals.some((app: any) => app.role === role)
                   );
-                  const canApprove = Boolean(currentApprovalRole && nextRole === currentApprovalRole);
 
                   return (
                     <article key={repRequest.groupId || repRequest.id} className="rounded-xl border border-slate-200 p-4 hover:border-slate-300 transition flex flex-col justify-between">
@@ -434,7 +435,7 @@ export function AttendanceDashboard({
                             </div>
                           </div>
                           <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-600 shrink-0">
-                            Chờ {nextRole ? approvalNames[nextRole as ApprovalRole] : "Duyệt"}
+                            Chờ {remainingRoles.map(r => approvalNames[r]).join(", ")}
                           </span>
                         </div>
 
@@ -476,9 +477,19 @@ export function AttendanceDashboard({
                         ) : (
                           <div className="flex items-center gap-1.5 text-xs text-slate-400 font-bold bg-slate-50 border border-slate-100 rounded-lg p-2.5 w-full justify-center">
                             <AlertCircle className="h-3.5 w-3.5" />
-                            {currentApprovalRole 
-                              ? `Cần cấp ${nextRole ? approvalNames[nextRole as ApprovalRole] : "khác"} duyệt trước` 
-                              : "Tài khoản của bạn không có thẩm quyền duyệt"}
+                            {currentApprovalRole ? (
+                              repRequest.requiredApprovals.includes(currentApprovalRole) ? (
+                                hasApprovedThisRole ? (
+                                  <span className="text-green-600">✓ Bạn đã phê duyệt. Đang chờ cấp khác.</span>
+                                ) : (
+                                  "Đang chờ duyệt..."
+                                )
+                              ) : (
+                                "Tài khoản của bạn không có thẩm quyền duyệt"
+                              )
+                            ) : (
+                              "Tài khoản của bạn không có thẩm quyền duyệt"
+                            )}
                           </div>
                         )}
                       </div>

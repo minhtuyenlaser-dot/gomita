@@ -1102,9 +1102,11 @@ function WorkerWorkspace({
     const submissionSize = selectedCompSlots.length;
     const requiredApprovals = getRequiredApprovals(currentAccountLevel, submissionSize);
 
+    const groupId = `group-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newRequests = Object.entries(grouped).map(([date, slots], idx) => {
       return {
         id: `comp-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`,
+        groupId,
         employeeId: currentAccountId,
         employeeName: currentUserName,
         employeePositionLevel: currentAccountLevel,
