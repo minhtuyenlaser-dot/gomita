@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:export-legacy-seed": "node scripts/export-legacy-supabase-seed.cjs",
+    "db:import-runtime-state": "node scripts/import-legacy-runtime-state-to-supabase.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.6.1",

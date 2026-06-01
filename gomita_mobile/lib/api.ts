@@ -1,4 +1,4 @@
-export const defaultServerHost = process.env.EXPO_PUBLIC_GOMITA_API_HOST?.trim() || "gomita.onrender.com";
+export const defaultServerHost = process.env.EXPO_PUBLIC_GOMITA_API_HOST?.trim() || "gomita-dbxm.vercel.app";
 
 export function getApiUrl(serverHost: string, path: string) {
   const host = serverHost.trim();

@@ -5,9 +5,6 @@ export function getApiBaseUrl() {
   if (configured && configured.length > 0) {
     return configured.replace(/\/+$/, "");
   }
-  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-    return "http://localhost:3001";
-  }
   return defaultApiBaseUrl;
 }
 

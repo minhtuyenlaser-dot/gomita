@@ -73,6 +73,7 @@ export default function HomePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [overtimeOpen, setOvertimeOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const [backendError, setBackendError] = useState("");
   const [currentSystemTime, setCurrentSystemTime] = useState(() => new Date());
 
   // Khôi phục phiên đăng nhập từ localStorage khi F5
@@ -128,6 +129,7 @@ export default function HomePage() {
       fetch(getApiUrl("/api/data"))
         .then((res) => res.json())
         .then((data) => {
+          setBackendError("");
           if (data.accounts) setAccounts(data.accounts);
           if (data.orders) setOrders(data.orders);
           if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
@@ -140,46 +142,17 @@ export default function HomePage() {
           if (data.attendanceDetails) setAttendanceDetails(data.attendanceDetails);
         })
         .catch((err) => {
-          console.warn("API Server offline, sử dụng dữ liệu offline.", err);
-          // Cơ chế Fallback offline lấy từ localStorage
-          const savedAccounts = readStoredJson<UserAccount[]>("gomita_web_accounts_v2");
-          if (savedAccounts) setAccounts(savedAccounts);
-
-          const savedOrders = readStoredJson<Order[]>("gomita_web_orders_v2");
-          if (savedOrders) setOrders(savedOrders);
-
-          const savedOt = readStoredJson<any[]>("gomita_web_ot_v2");
-          if (savedOt) setOvertimeRequests(savedOt);
-
-          const savedComp = readStoredJson<any[]>("gomita_web_comp_v3");
-          if (savedComp) setCompensationRequests(savedComp);
-
-          const savedLeaveRequests = readStoredJson<LeaveRequest[]>("gomita_web_leave_requests_v1");
-          if (savedLeaveRequests) setLeaveRequests(savedLeaveRequests);
-
-          const savedCashTransactions = readStoredJson<CashTransaction[]>("gomita_web_cash_transactions_v1");
-          if (savedCashTransactions) setCashTransactions(savedCashTransactions);
-
-          const savedCustomerDebts = readStoredJson<CustomerDebt[]>("gomita_web_customer_debts_v1");
-          if (savedCustomerDebts) setCustomerDebts(savedCustomerDebts);
-
-          const savedHolidayDates = readStoredJson<string[]>("gomita_web_holidays_v1");
-          if (savedHolidayDates) setHolidayDates(savedHolidayDates);
-
-          const savedAttendance = readStoredJson<Record<string, string>>("gomita_web_attendance_v3");
-          if (savedAttendance) setAttendance(savedAttendance);
-
-          const savedAttendanceDetails = readStoredJson<Record<string, { photo: string; gps: string; time: string }>>("gomita_web_attendance_details_v3");
-          if (savedAttendanceDetails) setAttendanceDetails(savedAttendanceDetails);
+          console.error("Không kết nối được backend trung tâm.", err);
+          setBackendError("Không kết nối được backend trung tâm. Dữ liệu đơn hàng, nhân sự và tài chính sẽ không cập nhật cho đến khi kết nối lại.");
         });
     }
 
     fetchData();
-    const interval = setInterval(fetchData, 2000); // Polling mỗi 2 giây
+    const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
 
-  // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay dữ liệu
+  // Tự động đồng bộ ngược lại backend trung tâm
   useEffect(() => {
     if (accounts === demoAccounts) return;
     fetch(getApiUrl("/api/sync"), {
@@ -187,7 +160,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accounts })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_accounts_v2", JSON.stringify(accounts));
   }, [accounts]);
 
   useEffect(() => {
@@ -197,7 +169,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orders })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_orders_v2", JSON.stringify(orders));
   }, [orders]);
 
   useEffect(() => {
@@ -207,7 +178,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ overtimeRequests })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_ot_v2", JSON.stringify(overtimeRequests));
   }, [overtimeRequests]);
 
   useEffect(() => {
@@ -217,7 +187,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ compensationRequests })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_comp_v3", JSON.stringify(compensationRequests));
   }, [compensationRequests]);
 
   useEffect(() => {
@@ -227,7 +196,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leaveRequests })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_leave_requests_v1", JSON.stringify(leaveRequests));
   }, [leaveRequests]);
 
   useEffect(() => {
@@ -237,7 +205,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cashTransactions })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_cash_transactions_v1", JSON.stringify(cashTransactions));
   }, [cashTransactions]);
 
   useEffect(() => {
@@ -247,7 +214,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ customerDebts })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_customer_debts_v1", JSON.stringify(customerDebts));
   }, [customerDebts]);
 
   useEffect(() => {
@@ -256,7 +222,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ holidayDates })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_holidays_v1", JSON.stringify(holidayDates));
   }, [holidayDates]);
 
   useEffect(() => {
@@ -266,7 +231,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendance })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_attendance_v3", JSON.stringify(attendance));
   }, [attendance]);
 
   useEffect(() => {
@@ -276,7 +240,6 @@ export default function HomePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendanceDetails })
     }).catch(() => {});
-    localStorage.setItem("gomita_web_attendance_details_v3", JSON.stringify(attendanceDetails));
   }, [attendanceDetails]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds?.includes(position.id)) : [], [currentAccount]);
@@ -462,6 +425,11 @@ export default function HomePage() {
         </header>
 
         <div className="p-4 md:p-7">
+          {backendError ? (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
+              {backendError}
+            </div>
+          ) : null}
           {toast ? <div className="mb-4 flex items-center justify-between rounded-lg border border-green-200 bg-green-50 p-3 text-sm font-bold text-green-700">{toast}<button onClick={() => setToast("")} type="button"><X className="h-4 w-4" /></button></div> : null}
           {content}
         </div>
