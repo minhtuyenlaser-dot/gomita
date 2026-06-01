@@ -2,7 +2,6 @@
 
 import {
   BriefcaseBusiness,
-  Camera,
   CalendarCheck,
   ChevronDown,
   Clock,
@@ -19,7 +18,7 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { demoAccounts, type UserAccount } from "@/modules/hr/accounts";
 import { AccountManagement } from "@/modules/hr/components/AccountManagement";
 import { LoginScreen } from "@/modules/hr/components/LoginScreen";
@@ -73,7 +72,6 @@ export default function HomePage() {
   const [activeModule, setActiveModule] = useState("orders");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [overtimeOpen, setOvertimeOpen] = useState(false);
-  const [clockOpen, setClockOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [currentSystemTime, setCurrentSystemTime] = useState(() => new Date());
 
@@ -114,19 +112,6 @@ export default function HomePage() {
     return () => clearInterval(timer);
   }, []);
 
-  const isAnyClockInSlotOpen = useMemo(() => {
-    return ["07:30", "11:30", "13:30", "17:30"].some((slot) => {
-      const [hour, minute] = slot.split(":").map(Number);
-      const slotTime = new Date(currentSystemTime);
-      slotTime.setHours(hour, minute, 0, 0);
-      const opensAt = new Date(slotTime);
-      opensAt.setMinutes(opensAt.getMinutes() - 15);
-      const closesAt = new Date(slotTime);
-      closesAt.setHours(closesAt.getHours() + 1);
-      return currentSystemTime >= opensAt && currentSystemTime <= closesAt;
-    });
-  }, [currentSystemTime]);
-
   const [orders, setOrders] = useState<Order[]>(demoOrders);
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
   const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
@@ -136,36 +121,6 @@ export default function HomePage() {
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [attendanceDetails, setAttendanceDetails] = useState<Record<string, { photo: string; gps: string; time: string }>>({});
-
-  // Lọc công việc đang được giao cho người dùng này hôm nay (nếu là thợ)
-  const userActiveJobs = useMemo(() => {
-    if (!currentAccount) return [];
-    return orders.filter((order) => {
-      const isAssigned = (order.installerNames && order.installerNames.includes(currentAccount.displayName)) ||
-                         (order.productionWorkerNames && order.productionWorkerNames.includes(currentAccount.displayName));
-      return isAssigned && order.workStatus === "working";
-    });
-  }, [orders, currentAccount]);
-
-  const currentSlot = useMemo(() => {
-    const currentHour = currentSystemTime.getHours();
-    const currentMin = currentSystemTime.getMinutes();
-    const currentVal = currentHour * 60 + currentMin;
-
-    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return "07:30";
-    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return "11:30";
-    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return "13:30";
-    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return "17:30";
-    return "";
-  }, [currentSystemTime]);
-
-  const todayDate = useMemo(() => currentSystemTime.getDate(), [currentSystemTime]);
-
-  const hasClockedInCurrentSlot = useMemo(() => {
-    if (!currentAccount || !currentSlot) return false;
-    const key = `${currentAccount.id}-${todayDate}-${currentSlot}`;
-    return attendance[key] === "normal" || attendance[key] === "compensated";
-  }, [attendance, currentAccount, todayDate, currentSlot]);
 
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
@@ -443,7 +398,6 @@ export default function HomePage() {
           positionName={currentPosition.name} 
           onLogout={() => setCurrentAccount(null)} 
           onPositionChange={changePosition} 
-          hasClockedInCurrentSlot={hasClockedInCurrentSlot}
         />
         <div className="p-4 pb-24 md:p-6">{content}</div>
         <WorkerBottomNav activeModule={activeModule} onChange={setActiveModule} />
@@ -476,7 +430,7 @@ export default function HomePage() {
             })}
           </nav>
 
-          {mustClockIn(currentPosition.id) ? <SidebarClock onOvertime={() => setOvertimeOpen(true)} hasClockedInCurrentSlot={hasClockedInCurrentSlot} /> : null}
+          {mustClockIn(currentPosition.id) ? <SidebarClock onOvertime={() => setOvertimeOpen(true)} /> : null}
         </div>
       </aside>
 
@@ -532,70 +486,11 @@ export default function HomePage() {
           }} 
         />
       ) : null}
-      {clockOpen ? (
-        <ClockInModal 
-          employeeName={currentAccount.displayName} 
-          activeJobs={userActiveJobs.map(o => o.code)}
-          onClose={() => setClockOpen(false)} 
-          onSubmit={(message: string, completedJobCodes: string[], photoBase64?: string, gpsText?: string) => {
-            const now = new Date();
-            const currentHour = now.getHours();
-            const currentMin = now.getMinutes();
-            const currentVal = currentHour * 60 + currentMin;
-            
-            let activeSlot = "07:30";
-            if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) activeSlot = "07:30";
-            else if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) activeSlot = "11:30";
-            else if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) activeSlot = "13:30";
-            else if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) activeSlot = "17:30";
-            
-            const dayNum = now.getDate();
-            const key = `${currentAccount.id}-${dayNum}-${activeSlot}`;
-            
-            // Cập nhật chấm công
-            setAttendance((prev) => ({
-              ...prev,
-              [key]: "normal"
-            }));
-
-            if (photoBase64 || gpsText) {
-              setAttendanceDetails((prev) => ({
-                ...prev,
-                [key]: {
-                  photo: photoBase64 || "",
-                  gps: gpsText || "",
-                  time: now.toLocaleTimeString("vi-VN", { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                }
-              }));
-            }
-
-            // Cập nhật trạng thái các đơn hàng báo xong
-            if (completedJobCodes.length > 0) {
-              setOrders((currOrders) =>
-                currOrders.map((o) => {
-                  if (completedJobCodes.includes(o.code)) {
-                    return {
-                      ...o,
-                      workStatus: "pending_confirmation",
-                      progressPercent: 100,
-                      finalNote: `Thợ báo hoàn thành khi chấm công trên Web App`
-                    };
-                  }
-                  return o;
-                })
-              );
-            }
-
-            setClockOpen(false);
-            setToast(message);
-          }} 
-        />
-      ) : null}
     </main>
   );
 }
 
-function SidebarClock({ onOvertime, hasClockedInCurrentSlot }: { onOvertime: () => void; hasClockedInCurrentSlot: boolean }) {
+function SidebarClock({ onOvertime }: { onOvertime: () => void }) {
   const [mounted, setMounted] = useState(false);
   const [timeStr, setTimeStr] = useState("07:30:00");
   const [dateStr, setDateStr] = useState("Thứ 6, 24/05/2024");
@@ -652,8 +547,7 @@ function WorkerTopBar({
   positionName,
   positionId,
   onPositionChange,
-  onLogout,
-  hasClockedInCurrentSlot
+  onLogout
 }: {
   account: UserAccount;
   allowedPositions: typeof positions;
@@ -661,21 +555,7 @@ function WorkerTopBar({
   positionId: string;
   onPositionChange: (value: string) => void;
   onLogout: () => void;
-  hasClockedInCurrentSlot: boolean;
 }) {
-  const isAnyClockInSlotOpen = useMemo(() => {
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMin = now.getMinutes();
-    const currentVal = currentHour * 60 + currentMin;
-
-    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return true;
-    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return true;
-    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return true;
-    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return true;
-    return false;
-  }, []);
-
   return (
     <header className="flex min-h-20 items-center justify-between bg-slate-950 px-4 text-white md:px-7">
       <div className="flex items-center gap-8">
@@ -689,7 +569,7 @@ function WorkerTopBar({
         </div>
       </div>
       <div className="flex items-center gap-2 md:gap-8">
-        {isAnyClockInSlotOpen && !hasClockedInCurrentSlot ? <div className="hidden text-xs font-bold text-blue-100 md:block">Chấm công trên điện thoại</div> : null}
+        <div className="hidden text-xs font-bold text-blue-100 md:block">Chấm công trên điện thoại</div>
         <RoleSelect dark allowedPositions={allowedPositions} value={positionId} onChange={onPositionChange} />
         <div className="hidden items-center gap-3 md:flex">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-slate-200"><UserCircle className="h-9 w-9 text-slate-500" /></div>
@@ -792,143 +672,6 @@ function OvertimeModal({
           <label className="grid gap-1 text-sm font-bold">Lý do<textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Nhập lý do nếu cần" /></label>
           <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white" onClick={submit} type="button">Gửi đăng ký tăng ca</button>
         </div>
-      </section>
-    </div>
-  );
-}
-
-function ClockInModal({ 
-  employeeName, 
-  activeJobs = [], 
-  onClose, 
-  onSubmit 
-}: { 
-  employeeName: string; 
-  activeJobs?: string[]; 
-  onClose: () => void; 
-  onSubmit: (message: string, completedJobCodes: string[], photoBase64?: string, gpsText?: string) => void 
-}) {
-  const [jobIndex, setJobIndex] = useState(0);
-  const [completedJobs, setCompletedJobs] = useState<string[]>([]);
-  const [cameraReady, setCameraReady] = useState(activeJobs.length === 0);
-  const [gpsText, setGpsText] = useState("Đang lấy định vị...");
-  
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [cameraError, setCameraError] = useState(false);
-
-  useEffect(() => {
-    if (!cameraReady) return;
-    if (!navigator.geolocation) {
-      setGpsText("Không hỗ trợ GPS trên thiết bị này");
-    } else {
-      navigator.geolocation.getCurrentPosition(
-        (position) => setGpsText(`Vị trí hiện tại: Hải Phòng (${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)})`),
-        () => setGpsText("Không lấy được GPS, cần cấp quyền định vị")
-      );
-    }
-
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-      .then((s) => {
-        setStream(s);
-        setCameraError(false);
-        if (videoRef.current) videoRef.current.srcObject = s;
-      })
-      .catch((err) => {
-        console.warn("Camera warning:", err);
-        setCameraError(true);
-      });
-
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [cameraReady]);
-
-  function answer(done: boolean) {
-    const code = activeJobs[jobIndex];
-    if (done) {
-      setCompletedJobs((prev) => [...prev, code]);
-    }
-    if (jobIndex + 1 < activeJobs.length) {
-      setJobIndex(jobIndex + 1);
-      return;
-    }
-    setCameraReady(true);
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
-      <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-xl font-black">Chấm công</h2>
-          <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" onClick={() => {
-            if (stream) stream.getTracks().forEach((track) => track.stop());
-            onClose();
-          }} type="button"><X className="h-5 w-5" /></button>
-        </div>
-        {!cameraReady ? (
-          <div className="grid gap-4 text-center">
-            <div className="text-sm font-bold text-slate-500">{jobIndex + 1}/{activeJobs.length}</div>
-            <div>Bạn đã làm xong đơn hàng</div>
-            <div className="text-xl font-black">{activeJobs[jobIndex]}</div>
-            <div className="grid gap-3">
-              <button className="min-h-12 rounded-lg border border-green-500 font-black text-green-600" onClick={() => answer(true)} type="button">Đã xong</button>
-              <button className="min-h-12 rounded-lg border border-red-400 font-black text-red-500" onClick={() => answer(false)} type="button">Chưa xong</button>
-            </div>
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            <div className="rounded-lg bg-slate-100 p-2 overflow-hidden aspect-[4/3] relative flex items-center justify-center border">
-              {cameraError ? (
-                <div className="text-center p-4">
-                  <Camera className="mx-auto h-14 w-14 text-slate-400" />
-                  <div className="mt-2 font-bold text-red-500">Không mở được camera</div>
-                  <div className="mt-1 text-xs text-slate-500">Vui lòng kiểm tra quyền camera của trình duyệt.</div>
-                </div>
-              ) : (
-                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover rounded scale-x-[-1]" />
-              )}
-            </div>
-            <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-700">
-              <div>Nhân viên: {employeeName}</div>
-              <div>Thời gian: {new Date().toLocaleString("vi-VN")}</div>
-              <div>{gpsText}</div>
-            </div>
-            <button className="min-h-12 rounded-lg bg-green-600 font-black text-white" onClick={() => {
-              if (stream) stream.getTracks().forEach((track) => track.stop());
-              
-              let photoBase64 = "";
-              if (!cameraError && videoRef.current) {
-                try {
-                  const canvas = document.createElement("canvas");
-                  canvas.width = videoRef.current.videoWidth || 640;
-                  canvas.height = videoRef.current.videoHeight || 480;
-                  const ctx = canvas.getContext("2d");
-                  if (ctx) {
-                    // Mirror image to match the video element style scale-x-[-1]
-                    ctx.translate(canvas.width, 0);
-                    ctx.scale(-1, 1);
-                    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-                    photoBase64 = canvas.toDataURL("image/jpeg", 0.7);
-                  }
-                } catch (err) {
-                  console.error("Lỗi chụp ảnh selfie:", err);
-                }
-              }
-
-              onSubmit(
-                `Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và chụp ảnh thành công.`,
-                completedJobs,
-                photoBase64,
-                gpsText
-              );
-            }} type="button">
-              Chụp ảnh và lưu chấm công
-            </button>
-          </div>
-        )}
       </section>
     </div>
   );
