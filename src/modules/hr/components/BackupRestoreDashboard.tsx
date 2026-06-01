@@ -2,6 +2,7 @@
 
 import { Database, Download, Upload, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { getApiUrl } from "@/lib/api";
 
 export function BackupRestoreDashboard({
   onDataRestored
@@ -18,7 +19,7 @@ export function BackupRestoreDashboard({
     setSuccessMessage("");
     setErrorMessage("");
     try {
-      const res = await fetch("https://gomita.onrender.com/api/data");
+      const res = await fetch(getApiUrl("/api/data"));
       const dbData = await res.json();
       
       const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
@@ -66,7 +67,7 @@ export function BackupRestoreDashboard({
         }
 
         // Đồng bộ dữ liệu mới lên Render Server
-        const res = await fetch("https://gomita.onrender.com/api/sync", {
+        const res = await fetch(getApiUrl("/api/sync"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(backupData)

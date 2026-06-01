@@ -11,6 +11,7 @@ const initialData = {
   accounts: [
     {
       id: "u-director",
+      employeeCode: "NV-0001",
       displayName: "Giám đốc GOMITA",
       username: "giamdoc",
       password: "123",
@@ -18,10 +19,13 @@ const initialData = {
       positionIds: ["director"],
       status: "active",
       salaryType: "monthly",
-      salaryValue: 20000000
+      salaryValue: 20000000,
+      idCardNumber: "001086000001",
+      laborContractNote: "Hợp đồng điều hành công ty"
     },
     {
       id: "u-hr",
+      employeeCode: "NV-0002",
       displayName: "Nhân sự GOMITA",
       username: "nhansu",
       password: "123",
@@ -33,6 +37,7 @@ const initialData = {
     },
     {
       id: "u-tuan",
+      employeeCode: "NV-0101",
       displayName: "Tuấn sản xuất",
       username: "tuan",
       password: "123",
@@ -44,6 +49,7 @@ const initialData = {
     },
     {
       id: "u-hoa",
+      employeeCode: "NV-0102",
       displayName: "Hoa lắp đặt",
       username: "hoa",
       password: "123",
@@ -97,8 +103,24 @@ const initialData = {
       createdAt: new Date().toISOString()
     }
   ],
-  attendance: {}, // { "userId-date-slot": "normal" | "compensated" }
-  attendanceDetails: {} // { "userId-date-slot": { photo: string, gps: string, time: string } }
+  leaveRequests: [],
+  cashTransactions: [],
+  customerDebts: [],
+  holidayDates: [
+    "2026-01-01",
+    "2026-02-16",
+    "2026-02-17",
+    "2026-02-18",
+    "2026-02-19",
+    "2026-02-20",
+    "2026-04-30",
+    "2026-05-01",
+    "2026-09-01",
+    "2026-09-02"
+  ],
+  attendance: {}, // { "userId-date-slot": "normal" | "compensated" | "leave_locked" }
+  attendanceDetails: {}, // { "userId-date-slot": { photo: string, gps: string | object, time: string } }
+  attendanceCompensationState: {}
 };
 
 // Đảm bảo có tệp tin cơ sở dữ liệu
@@ -122,6 +144,39 @@ function writeDB(data) {
   } catch (err) {
     console.error("Lỗi ghi cơ sở dữ liệu:", err);
   }
+}
+
+function getAttendanceCompState(db, userId) {
+  db.attendanceCompensationState = db.attendanceCompensationState || {};
+  if (!db.attendanceCompensationState[userId]) {
+    db.attendanceCompensationState[userId] = {
+      declineCount: 0,
+      lockedThroughDate: null,
+      lastDeclinedAt: null
+    };
+  }
+  return db.attendanceCompensationState[userId];
+}
+
+function toAttendanceKey(userId, item) {
+  const dateText = typeof item.date === "string" ? item.date : "";
+  const parts = dateText.split("-");
+  const dayToken = parts.length === 3 ? String(Number(parts[2])) : String(item.day ?? dateText);
+  return `${userId}-${dayToken}-${item.slot}`;
+}
+
+function toCurrentLocalDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isAttendanceBlockedDate(dateString) {
+  const date = new Date(`${dateString}T00:00:00`);
+  if (date.getDay() === 0) return true;
+  return false;
 }
 
 const server = http.createServer((req, res) => {
@@ -154,9 +209,14 @@ const server = http.createServer((req, res) => {
         if (patch.accounts) db.accounts = patch.accounts;
         if (patch.orders) db.orders = patch.orders;
         if (patch.overtimeRequests) db.overtimeRequests = patch.overtimeRequests;
+        if (patch.leaveRequests) db.leaveRequests = patch.leaveRequests;
+        if (patch.cashTransactions) db.cashTransactions = patch.cashTransactions;
+        if (patch.customerDebts) db.customerDebts = patch.customerDebts;
         if (patch.compensationRequests) db.compensationRequests = patch.compensationRequests;
+        if (patch.holidayDates) db.holidayDates = patch.holidayDates;
         if (patch.attendance) db.attendance = patch.attendance;
         if (patch.attendanceDetails) db.attendanceDetails = patch.attendanceDetails;
+        if (patch.attendanceCompensationState) db.attendanceCompensationState = patch.attendanceCompensationState;
         writeDB(db);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true, db }));
@@ -201,7 +261,14 @@ const server = http.createServer((req, res) => {
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
       try {
-        const { userId, date, slot, orderCode, isCompleted, photo, gps, time } = JSON.parse(body);
+        const { userId, date, slot, orderCode, isCompleted, photo, gps, gpsAddress, gpsMeta, time } = JSON.parse(body);
+        const localDateString = toCurrentLocalDateString();
+        const holidayDates = Array.isArray(db.holidayDates) ? db.holidayDates : [];
+        if (isAttendanceBlockedDate(localDateString) || holidayDates.includes(localDateString)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Hôm nay là ngày nghỉ hoặc ngày lễ, không được chấm công." }));
+          return;
+        }
         
         // Cập nhật chấm công
         const key = `${userId}-${date}-${slot}`;
@@ -213,6 +280,8 @@ const server = http.createServer((req, res) => {
           db.attendanceDetails[key] = {
             photo: photo || "",
             gps: gps || "",
+            gpsAddress: gpsAddress || "",
+            gpsMeta: gpsMeta || null,
             time: time || new Date().toLocaleTimeString("vi-VN", { hour: '2-digit', minute: '2-digit', second: '2-digit' })
           };
         }
@@ -266,6 +335,62 @@ const server = http.createServer((req, res) => {
       } catch (err) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Lỗi ghi nhận hoàn thành công việc" }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/attendance-compensation-response" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { userId, decision, pendingSlots = [] } = JSON.parse(body);
+        if (!userId || (decision !== "decline" && decision !== "reset")) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Thiếu dữ liệu quyết định bù công" }));
+          return;
+        }
+
+        const state = getAttendanceCompState(db, userId);
+
+        if (decision === "reset") {
+          state.declineCount = 0;
+          state.lastDeclinedAt = null;
+          writeDB(db);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, locked: false, state }));
+          return;
+        }
+
+        state.declineCount += 1;
+        state.lastDeclinedAt = new Date().toISOString();
+
+        let locked = false;
+        if (state.declineCount >= 5 && Array.isArray(pendingSlots) && pendingSlots.length > 0) {
+          pendingSlots.forEach((item) => {
+            const attendanceKey = toAttendanceKey(userId, item);
+            if (!db.attendance[attendanceKey]) {
+              db.attendance[attendanceKey] = "leave_locked";
+            }
+          });
+
+          const sortedDates = pendingSlots
+            .map((item) => item.date)
+            .filter(Boolean)
+            .sort((left, right) => left.localeCompare(right));
+
+          state.lockedThroughDate = sortedDates[sortedDates.length - 1] || state.lockedThroughDate || null;
+          state.declineCount = 0;
+          locked = true;
+        }
+
+        writeDB(db);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, locked, state }));
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Không xử lý được quyết định bù công" }));
       }
     });
     return;

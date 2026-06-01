@@ -3,6 +3,8 @@
 import type { Order, OrderStep } from "@/modules/orders/orderFlow";
 import type { UserAccount } from "@/modules/hr/accounts";
 import type { Position } from "@/modules/hr/roles";
+import type { CashTransaction, CashTransactionType, CustomerDebt, CustomerDebtStage, CustomerDebtStatus } from "@/modules/finance/types";
+import { customerDebtStageLabels, customerDebtStatusLabels } from "@/modules/finance/types";
 import { useState, useMemo } from "react";
 import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck } from "lucide-react";
 
@@ -11,20 +13,61 @@ export function FinanceDashboard({
   setOrders, 
   overtimeRequests = [], 
   accounts = [],
-  currentPosition
+  currentPosition,
+  cashTransactions = [],
+  onCashTransactionsChange,
+  customerDebts = [],
+  onCustomerDebtsChange
 }: { 
   orders: Order[]; 
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>; 
   overtimeRequests: any[];
   accounts: UserAccount[];
   currentPosition?: Position;
+  cashTransactions?: CashTransaction[];
+  onCashTransactionsChange?: React.Dispatch<React.SetStateAction<CashTransaction[]>>;
+  customerDebts?: CustomerDebt[];
+  onCustomerDebtsChange?: React.Dispatch<React.SetStateAction<CustomerDebt[]>>;
 }) {
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id ?? "");
   const selectedOrder = useMemo(() => orders.find(o => o.id === selectedOrderId) ?? orders[0], [orders, selectedOrderId]);
+  const [cashType, setCashType] = useState<CashTransactionType>("cash_in");
+  const [cashAmount, setCashAmount] = useState(0);
+  const [cashNote, setCashNote] = useState("");
+  const [debtStage, setDebtStage] = useState<CustomerDebtStage>("deposit");
+  const [debtPlannedAmount, setDebtPlannedAmount] = useState(0);
+  const [debtCollectedAmount, setDebtCollectedAmount] = useState(0);
+  const [debtDueDate, setDebtDueDate] = useState("");
+  const [debtStatus, setDebtStatus] = useState<CustomerDebtStatus>("pending");
+  const [debtNote, setDebtNote] = useState("");
 
   // Form thêm vật tư mới
   const [newMatName, setNewMatName] = useState("");
   const [newMatPrice, setNewMatPrice] = useState(0);
+
+  const financeLedger = useMemo(() => {
+    return cashTransactions.reduce((summary, item) => {
+      if (item.type === "cash_in") summary.cashBalance += item.amount;
+      if (item.type === "cash_out") summary.cashBalance -= item.amount;
+      if (item.type === "bank_in") summary.bankBalance += item.amount;
+      if (item.type === "bank_out") summary.bankBalance -= item.amount;
+      if (item.type === "transfer") {
+        summary.cashBalance -= item.amount;
+        summary.bankBalance += item.amount;
+      }
+      return summary;
+    }, { cashBalance: 0, bankBalance: 0 });
+  }, [cashTransactions]);
+
+  const debtStats = useMemo(() => {
+    return customerDebts.reduce((summary, item) => {
+      summary.planned += item.plannedAmount;
+      summary.collected += item.collectedAmount;
+      summary.remaining += Math.max(0, item.plannedAmount - item.collectedAmount);
+      if (item.status === "overdue") summary.overdue += Math.max(0, item.plannedAmount - item.collectedAmount);
+      return summary;
+    }, { planned: 0, collected: 0, remaining: 0, overdue: 0 });
+  }, [customerDebts]);
 
   // Tính giờ làm việc hành chính (bỏ qua nghỉ trưa 11h30-13h30, tối/đêm, Chủ Nhật)
   function calculateWorkingHours(startStr?: string, endStr?: string): number {
@@ -84,6 +127,43 @@ export function FinanceDashboard({
       return acc;
     });
     setOrders(current => current.map(o => o.id === selectedOrder.id ? { ...o, externalAccessories: updatedAccs } : o));
+  }
+
+  function addCashTransaction() {
+    if (!onCashTransactionsChange || cashAmount <= 0) return;
+    const newTransaction: CashTransaction = {
+      id: `cash-${Date.now()}`,
+      type: cashType,
+      amount: cashAmount,
+      note: cashNote.trim() || "Không ghi chú",
+      createdAt: new Date().toISOString(),
+      createdBy: currentPosition?.name || "Kế toán",
+      accountName: cashType.includes("bank") ? "Tài khoản ngân hàng" : "Quỹ tiền mặt"
+    };
+    onCashTransactionsChange((current) => [newTransaction, ...current]);
+    setCashAmount(0);
+    setCashNote("");
+  }
+
+  function addCustomerDebt() {
+    if (!selectedOrder || !onCustomerDebtsChange || debtPlannedAmount <= 0) return;
+    const newDebt: CustomerDebt = {
+      id: `debt-${Date.now()}`,
+      orderId: selectedOrder.id,
+      orderCode: selectedOrder.code,
+      customerName: selectedOrder.customerName,
+      stage: debtStage,
+      plannedAmount: debtPlannedAmount,
+      collectedAmount: debtCollectedAmount,
+      dueDate: debtDueDate || undefined,
+      status: debtStatus,
+      note: debtNote.trim() || undefined
+    };
+    onCustomerDebtsChange((current) => [newDebt, ...current]);
+    setDebtPlannedAmount(0);
+    setDebtCollectedAmount(0);
+    setDebtDueDate("");
+    setDebtNote("");
   }
 
   // Tính toán số liệu tài chính cho đơn hàng được chọn
@@ -185,6 +265,91 @@ export function FinanceDashboard({
           </div>
           <div className="mt-1 text-xs text-slate-400">Lãi gộp sau chi phí nhân công, vật tư, phụ kiện</div>
         </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-black text-slate-800">Thu chi & dòng tiền công ty</h3>
+              <p className="text-sm text-slate-500">Theo dõi quỹ tiền mặt, ngân hàng và chuyển quỹ.</p>
+            </div>
+            <div className="text-right text-xs font-bold text-slate-500">Sổ tạm thời trước khi chuyển DB thật</div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-lg bg-slate-50 p-4">
+              <div className="text-sm font-bold text-slate-500">Quỹ tiền mặt</div>
+              <div className="mt-2 text-2xl font-black text-green-600">{financeLedger.cashBalance.toLocaleString("vi-VN")} đ</div>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-4">
+              <div className="text-sm font-bold text-slate-500">Tài khoản ngân hàng</div>
+              <div className="mt-2 text-2xl font-black text-blue-600">{financeLedger.bankBalance.toLocaleString("vi-VN")} đ</div>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={cashType} onChange={(event) => setCashType(event.target.value as CashTransactionType)}>
+              <option value="cash_in">Phiếu thu tiền mặt</option>
+              <option value="cash_out">Phiếu chi tiền mặt</option>
+              <option value="bank_in">Thu vào ngân hàng</option>
+              <option value="bank_out">Chi từ ngân hàng</option>
+              <option value="transfer">Chuyển quỹ tiền mặt → ngân hàng</option>
+            </select>
+            <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Số tiền" value={cashAmount || ""} onChange={(event) => setCashAmount(Number(event.target.value))} />
+            <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400 md:col-span-2" placeholder="Nội dung thu/chi" value={cashNote} onChange={(event) => setCashNote(event.target.value)} />
+          </div>
+          <button className="mt-3 min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white" onClick={addCashTransaction} type="button">Ghi nhận thu / chi</button>
+          <div className="mt-4 grid gap-2">
+            {cashTransactions.slice(0, 6).map((item) => (
+              <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <div>
+                  <div className="font-black">{item.note}</div>
+                  <div className="text-xs text-slate-500">{new Date(item.createdAt).toLocaleString("vi-VN")} • {item.accountName}</div>
+                </div>
+                <div className={`font-black ${item.type === "cash_out" || item.type === "bank_out" ? "text-red-600" : "text-green-600"}`}>{item.amount.toLocaleString("vi-VN")} đ</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4">
+            <h3 className="text-lg font-black text-slate-800">Công nợ khách hàng</h3>
+            <p className="text-sm text-slate-500">Theo dõi đặt cọc, đợt 2, trước sản xuất, trước lắp đặt, nghiệm thu và hoàn công.</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-4">
+            <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Phải thu kế hoạch</div><div className="mt-1 text-xl font-black text-slate-900">{debtStats.planned.toLocaleString("vi-VN")} đ</div></div>
+            <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Đã thu</div><div className="mt-1 text-xl font-black text-green-600">{debtStats.collected.toLocaleString("vi-VN")} đ</div></div>
+            <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Còn phải thu</div><div className="mt-1 text-xl font-black text-orange-600">{debtStats.remaining.toLocaleString("vi-VN")} đ</div></div>
+            <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs font-bold text-slate-500">Quá hạn</div><div className="mt-1 text-xl font-black text-red-600">{debtStats.overdue.toLocaleString("vi-VN")} đ</div></div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStage} onChange={(event) => setDebtStage(event.target.value as CustomerDebtStage)}>
+              {Object.entries(customerDebtStageLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Phải thu" value={debtPlannedAmount || ""} onChange={(event) => setDebtPlannedAmount(Number(event.target.value))} />
+            <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Đã thu" value={debtCollectedAmount || ""} onChange={(event) => setDebtCollectedAmount(Number(event.target.value))} />
+            <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" type="date" value={debtDueDate} onChange={(event) => setDebtDueDate(event.target.value)} />
+            <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStatus} onChange={(event) => setDebtStatus(event.target.value as CustomerDebtStatus)}>
+              {Object.entries(customerDebtStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" placeholder="Ghi chú công nợ" value={debtNote} onChange={(event) => setDebtNote(event.target.value)} />
+          </div>
+          <button className="mt-3 min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white" onClick={addCustomerDebt} type="button">Ghi nhận công nợ cho đơn đang chọn</button>
+          <div className="mt-4 grid gap-2">
+            {customerDebts.slice(0, 8).map((item) => (
+              <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <div>
+                  <div className="font-black">{item.orderCode} • {customerDebtStageLabels[item.stage]}</div>
+                  <div className="text-xs text-slate-500">{item.customerName}{item.dueDate ? ` • Hạn ${item.dueDate}` : ""}</div>
+                </div>
+                <div className="text-right">
+                  <div className="font-black text-slate-900">{item.collectedAmount.toLocaleString("vi-VN")} / {item.plannedAmount.toLocaleString("vi-VN")} đ</div>
+                  <div className="text-xs font-bold text-slate-500">{customerDebtStatusLabels[item.status]}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">

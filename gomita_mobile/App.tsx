@@ -1,20 +1,21 @@
 import React, { useState, useEffect } from "react";
-import { 
-  SafeAreaView, 
-  StyleSheet, 
+import {
+  SafeAreaView,
+  StyleSheet,
   ActivityIndicator, 
   View, 
   Text,
   StatusBar
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { LoginScreen, getApiUrl } from "./screens/LoginScreen";
+import { defaultServerHost, getApiUrl } from "./lib/api";
+import { LoginScreen } from "./screens/LoginScreen";
 import { WorkerDashboard } from "./screens/WorkerDashboard";
 
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
-  const [serverIp, setServerIp] = useState("gomita.onrender.com"); // Kết nối mặc định đến máy chủ GOMITA Cloud
+  const [serverIp, setServerIp] = useState(defaultServerHost);
   const [apiData, setApiData] = useState<any>(null);
 
   // Khôi phục session đăng nhập và server IP

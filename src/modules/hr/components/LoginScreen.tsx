@@ -10,8 +10,10 @@ export function LoginScreen({ accounts, onLogin }: { accounts: UserAccount[]; on
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
-  function submitLogin() {
-    const account = authenticate(accounts, username.trim(), password);
+  function submitLogin(inputUsername?: string, inputPassword?: string) {
+    const effectiveUsername = (inputUsername ?? username).trim();
+    const effectivePassword = inputPassword ?? password;
+    const account = authenticate(accounts, effectiveUsername, effectivePassword);
     if (!account) {
       setError("Sai tên đăng nhập, mật khẩu hoặc tài khoản đang bị khóa/chưa được duyệt.");
       return;
@@ -32,28 +34,39 @@ export function LoginScreen({ accounts, onLogin }: { accounts: UserAccount[]; on
           </div>
         </div>
 
-        <div className="grid gap-5">
+        <form
+          className="grid gap-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const formData = new FormData(event.currentTarget);
+            const submittedUsername = String(formData.get("username") ?? "");
+            const submittedPassword = String(formData.get("password") ?? "");
+            setUsername(submittedUsername);
+            setPassword(submittedPassword);
+            submitLogin(submittedUsername, submittedPassword);
+          }}
+        >
           <label className="grid gap-2 text-base font-bold">
             Tên đăng nhập
             <span className="relative">
               <User className="absolute left-4 top-4 h-6 w-6 text-slate-400" />
-              <input className="h-14 w-full rounded-lg border border-slate-200 pl-12 pr-3 text-lg outline-none focus:border-orange-400" value={username} onChange={(event) => setUsername(event.target.value)} />
+              <input autoComplete="username" autoFocus className="h-14 w-full rounded-lg border border-slate-200 pl-12 pr-3 text-lg outline-none focus:border-orange-400" name="username" value={username} onChange={(event) => setUsername(event.target.value)} />
             </span>
           </label>
           <label className="grid gap-2 text-base font-bold">
             Mật khẩu
             <span className="relative">
               <Lock className="absolute left-4 top-4 h-6 w-6 text-slate-400" />
-              <input className="h-14 w-full rounded-lg border border-slate-200 pl-12 pr-3 text-lg outline-none focus:border-orange-400" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              <input autoComplete="current-password" className="h-14 w-full rounded-lg border border-slate-200 pl-12 pr-3 text-lg outline-none focus:border-orange-400" name="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
             </span>
           </label>
 
           {error ? <div className="rounded-lg bg-red-50 p-3 text-sm font-bold text-red-600">{error}</div> : null}
 
-          <button className="min-h-14 rounded-lg bg-orange-500 text-lg font-black text-white" onClick={submitLogin} type="button">
+          <button className="min-h-14 rounded-lg bg-orange-500 text-lg font-black text-white" type="submit">
             Đăng nhập
           </button>
-        </div>
+        </form>
       </section>
     </main>
   );

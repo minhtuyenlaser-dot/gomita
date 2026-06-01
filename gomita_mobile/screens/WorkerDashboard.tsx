@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { 
   StyleSheet, 
   View, 
@@ -7,7 +7,8 @@ import {
   ScrollView, 
   Alert, 
   Dimensions,
-  ActivityIndicator
+  ActivityIndicator,
+  TextInput
 } from "react-native";
 import { CameraView, Camera as ExpoCamera } from "expo-camera";
 import * as Location from "expo-location";
@@ -22,7 +23,7 @@ import {
   MapPin,
   CheckCircle
 } from "lucide-react-native";
-import { getApiUrl } from "./LoginScreen";
+import { getApiUrl } from "../lib/api";
 
 const slots = ["07:30", "11:30", "13:30", "17:30"];
 const screenWidth = Dimensions.get("window").width;
@@ -49,6 +50,9 @@ export function WorkerDashboard({
   const [cameraType, setCameraType] = useState<any>(null);
   const [cameraRef, setCameraRef] = useState<any>(null);
   const [gpsCoords, setGpsCoords] = useState<string | null>(null);
+  const [gpsAddress, setGpsAddress] = useState<string | null>(null);
+  const [gpsMeta, setGpsMeta] = useState<{ lat: number; lng: number; address: string } | null>(null);
+  const [attendanceOverrides, setAttendanceOverrides] = useState<Record<string, string>>({});
 
   // UX Hỏi tiến độ thông minh State
   const [askModalOpen, setAskModalOpen] = useState(false);
@@ -57,6 +61,183 @@ export function WorkerDashboard({
   // Đồng hồ thời gian thực di động
   const [currentTime, setCurrentTime] = useState("");
   const [currentDate, setCurrentDate] = useState("");
+
+  // Trạng thái Chấm công bù di động
+  const [compOpen, setCompOpen] = useState(false);
+  const [compReason, setCompReason] = useState("");
+  const [selectedCompSlots, setSelectedCompSlots] = useState<Array<{ date: string; slot: string }>>([]);
+  const [otOpen, setOtOpen] = useState(false);
+  const [otFrom, setOtFrom] = useState("18:00");
+  const [otTo, setOtTo] = useState("20:00");
+  const [otReason, setOtReason] = useState("");
+  const [selectedOrderCode, setSelectedOrderCode] = useState("");
+
+  const monthDays = useMemo(() => {
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Array.from({ length: daysInMonth }, (_, index) => new Date(now.getFullYear(), now.getMonth(), index + 1));
+  }, []);
+
+  const effectiveAttendance = useMemo(() => {
+    return {
+      ...(apiData?.attendance || {}),
+      ...attendanceOverrides
+    };
+  }, [apiData, attendanceOverrides]);
+
+  const compensationState = apiData?.attendanceCompensationState?.[user.id] || null;
+  const lockedThroughDate = compensationState?.lockedThroughDate || null;
+
+  const toDateString = useCallback((day: Date) => {
+    return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  const hasPendingCompRequest = useCallback((date: string, slot: string) => {
+    const requests = apiData?.compensationRequests || [];
+    return requests.some((req: any) =>
+      req.employeeId === user.id &&
+      req.date === date &&
+      Array.isArray(req.slots) &&
+      req.slots.includes(slot) &&
+      req.status !== "rejected"
+    );
+  }, [apiData, user.id]);
+
+  const buildPromptableMissingSlots = useCallback((attendanceSource?: Record<string, string>) => {
+    const source = attendanceSource || effectiveAttendance;
+    const list: Array<{ date: string; slot: string; day: number; isIgnored: boolean }> = [];
+    const currentDay = new Date().getDate();
+
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      if (day.getDay() === 0 || dayNum > currentDay) return;
+
+      slots.forEach((slot) => {
+        const date = toDateString(day);
+        const key = `${user.id}-${dayNum}-${slot}`;
+        const value = source[key];
+        const isLocked = Boolean(lockedThroughDate && date <= lockedThroughDate);
+        const isPending = hasPendingCompRequest(date, slot);
+
+        if (value === "normal" || value === "compensated" || value === "leave_locked" || isPending) return;
+
+        list.push({
+          date,
+          slot,
+          day: dayNum,
+          isIgnored: isLocked
+        });
+      });
+    });
+
+    return list;
+  }, [effectiveAttendance, hasPendingCompRequest, lockedThroughDate, monthDays, toDateString, user.id]);
+
+  const missingSlots = useMemo(() => buildPromptableMissingSlots(), [buildPromptableMissingSlots]);
+
+  const uniqueMissingDays = useMemo(() => {
+    const daysMap = new Map<number, Date>();
+    missingSlots.forEach((item) => {
+      if (item.isIgnored) return;
+      const day = monthDays.find((entry) => entry.getDate() === item.day);
+      if (day) {
+        daysMap.set(item.day, day);
+      }
+    });
+    return Array.from(daysMap.values()).sort((a, b) => a.getDate() - b.getDate());
+  }, [missingSlots, monthDays]);
+
+  // Hàm gửi đơn chấm công bù lên GOMITA API Server từ di động
+  const submitCompensations = async () => {
+    if (selectedCompSlots.length === 0 || !compReason.trim()) return;
+
+    setLoading(true);
+    try {
+      const grouped: Record<string, string[]> = {};
+      selectedCompSlots.forEach(item => {
+        if (!grouped[item.date]) {
+          grouped[item.date] = [];
+        }
+        grouped[item.date].push(item.slot);
+      });
+
+      const submissionSize = selectedCompSlots.length;
+      let requiredApprovals = ["hr"];
+      if (submissionSize > 8) {
+        requiredApprovals = ["hr", "department_manager", "director"];
+      } else if (submissionSize >= 4) {
+        requiredApprovals = ["hr", "department_manager"];
+      }
+
+      const groupId = `group-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const existingReqs = apiData && apiData.compensationRequests ? apiData.compensationRequests : [];
+
+      const newRequests = Object.entries(grouped).map(([date, slots], idx) => {
+        return {
+          id: `comp-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`,
+          groupId,
+          employeeId: user.id,
+          employeeName: user.displayName,
+          employeePositionLevel: user.positionIds.includes("hr") ? "department_head" : "staff",
+          date,
+          slots,
+          reason: compReason.trim(),
+          missingCountInMonth: submissionSize,
+          requiredApprovals,
+          approvals: [],
+          status: "pending",
+          createdAt: new Date().toISOString()
+        };
+      });
+
+      const url = getApiUrl(serverIp, "/api/sync");
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compensationRequests: [...newRequests, ...existingReqs]
+        })
+      });
+
+      const resJson = await res.json();
+      if (resJson.success) {
+        await fetch(getApiUrl(serverIp, "/api/attendance-compensation-response"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user.id,
+            decision: "reset"
+          })
+        }).catch(() => {});
+
+        setCompOpen(false);
+        setSelectedCompSlots([]);
+        setCompReason("");
+        await onRefresh();
+
+        let approvalText = "Nhân sự xác nhận";
+        if (submissionSize > 8) {
+          approvalText = "Nhân sự, Quản lý và Giám đốc xác nhận";
+        } else if (submissionSize >= 4) {
+          approvalText = "Nhân sự và Quản lý xác nhận";
+        }
+
+        Alert.alert(
+          "Gửi đơn chấm công bù thành công! 🎉",
+          `● Số mốc đăng ký bù: ${submissionSize} mốc\n` +
+          `● Cấp phê duyệt cần thiết: ${approvalText}\n\n` +
+          `Yêu cầu đã được gửi lên hệ thống và đang chờ phê duyệt.`
+        );
+      } else {
+        Alert.alert("Lỗi", "Gửi yêu cầu chấm công bù thất bại!");
+      }
+    } catch (err) {
+      console.warn("Lỗi gửi chấm công bù:", err);
+      Alert.alert("Lỗi kết nối", "Không thể kết nối API Server để lưu yêu cầu chấm công bù!");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     // Xin quyền Camera và Định vị
@@ -107,7 +288,20 @@ export function WorkerDashboard({
     return "07:30"; // Mặc định hiển thị mốc 07:30 nếu ngoài giờ
   }, [currentTime]);
 
+  const todayDateString = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  }, [currentDate]);
+
+  const isAttendanceBlockedDay = useMemo(() => {
+    const now = new Date();
+    if (now.getDay() === 0) return true;
+    const blockedDates = Array.isArray(apiData?.holidayDates) ? apiData.holidayDates : [];
+    return blockedDates.includes(todayDateString);
+  }, [apiData, todayDateString]);
+
   const isSlotCurrentlyOpen = useMemo(() => {
+    if (isAttendanceBlockedDay) return false;
     const now = new Date();
     const currentHour = now.getHours();
     const currentMin = now.getMinutes();
@@ -118,27 +312,19 @@ export function WorkerDashboard({
     if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return true;
     if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return true;
     return false;
-  }, [currentTime]);
+  }, [currentTime, isAttendanceBlockedDay]);
 
   const today = new Date().getDate();
 
   // Tính toán Ngày công, OT và Lương di động
   const userAttendanceKeys = useMemo(() => {
-    if (!apiData || !apiData.attendance) return [];
-    return Object.keys(apiData.attendance).filter(k => k.startsWith(user.id + "-"));
-  }, [apiData, user.id]);
+    return Object.keys(effectiveAttendance).filter(k => k.startsWith(user.id + "-"));
+  }, [effectiveAttendance, user.id]);
 
   const hasClockedInCurrentSlot = useMemo(() => {
-    if (!apiData || !apiData.attendance) return false;
     const key = `${user.id}-${today}-${currentSlot}`;
-    return apiData.attendance[key] === "normal" || apiData.attendance[key] === "compensated";
-  }, [apiData, user.id, today, currentSlot]);
-
-  const monthDays = useMemo(() => {
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    return Array.from({ length: daysInMonth }, (_, index) => new Date(now.getFullYear(), now.getMonth(), index + 1));
-  }, []);
+    return effectiveAttendance[key] === "normal" || effectiveAttendance[key] === "compensated";
+  }, [effectiveAttendance, user.id, today, currentSlot]);
 
   const maxWorkDays = useMemo(() => {
     return monthDays.filter((day) => day.getDay() !== 0).length;
@@ -149,16 +335,14 @@ export function WorkerDashboard({
   }, [monthDays, today]);
 
   const workDays = useMemo(() => {
-    if (!apiData || !apiData.attendance) return 0;
     let total = 0;
-    const slots = ["07:30", "11:30", "13:30", "17:30"];
     monthDays.forEach((day) => {
       if (day.getDay() === 0 || day.getDate() > today) return;
       const dayNum = day.getDate();
       let checkedCount = 0;
       slots.forEach((slot) => {
         const key = `${user.id}-${dayNum}-${slot}`;
-        if (apiData.attendance[key] === "normal" || apiData.attendance[key] === "compensated") {
+        if (effectiveAttendance[key] === "normal" || effectiveAttendance[key] === "compensated") {
           checkedCount++;
         }
       });
@@ -166,7 +350,7 @@ export function WorkerDashboard({
       else if (checkedCount >= 2) total += 0.5;
     });
     return total;
-  }, [monthDays, apiData, user.id, today]);
+  }, [effectiveAttendance, monthDays, user.id, today]);
 
   const otHours = useMemo(() => {
     if (!apiData || !apiData.overtimeRequests) return 0;
@@ -203,8 +387,141 @@ export function WorkerDashboard({
     });
   }, [apiData, user.displayName]);
 
+  const assignedOrders = useMemo(() => {
+    if (!apiData || !apiData.orders) return [];
+    return apiData.orders.filter((order: any) => {
+      return (Array.isArray(order.installerNames) && order.installerNames.includes(user.displayName)) ||
+        (Array.isArray(order.productionWorkerNames) && order.productionWorkerNames.includes(user.displayName));
+    });
+  }, [apiData, user.displayName]);
+
+  useEffect(() => {
+    if (!selectedOrderCode && assignedOrders.length > 0) {
+      setSelectedOrderCode(assignedOrders[0].code || "");
+    }
+  }, [assignedOrders, selectedOrderCode]);
+
+  const handleDeclineCompensation = useCallback(async (pendingSlots: Array<{ date: string; slot: string; day: number; isIgnored: boolean }>) => {
+    try {
+      const response = await fetch(getApiUrl(serverIp, "/api/attendance-compensation-response"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.id,
+          decision: "decline",
+          pendingSlots: pendingSlots.map((item) => ({
+            date: item.date,
+            slot: item.slot,
+            day: item.day
+          }))
+        })
+      });
+
+      const payload = await response.json();
+      await onRefresh();
+
+      if (payload?.locked) {
+        Alert.alert("Đã khóa các mốc thiếu công", "Các mốc cần chấm công bù trước đó đã được chốt là nghỉ. Bộ đếm cho đợt thiếu công tiếp theo đã được làm mới.");
+        return;
+      }
+
+      const nextDeclineCount = payload?.state?.declineCount || 0;
+      Alert.alert("Đã ghi nhận", `Hệ thống đã lưu lựa chọn không chấm công bù. Lần từ chối hiện tại: ${nextDeclineCount}/5.`);
+    } catch (error) {
+      console.warn("Lỗi lưu từ chối chấm công bù:", error);
+      Alert.alert("Lỗi kết nối", "Không thể lưu lựa chọn không chấm công bù.");
+    }
+  }, [onRefresh, serverIp, user.id]);
+
+  const promptCompensationIfNeeded = useCallback((attendanceSource?: Record<string, string>) => {
+    const pendingSlots = buildPromptableMissingSlots(attendanceSource).filter((item) => !item.isIgnored);
+    if (pendingSlots.length === 0) return;
+
+    Alert.alert(
+      "Thiếu công cần xử lý",
+      `Bạn đang còn ${pendingSlots.length} mốc thiếu công. Bạn có muốn đăng ký chấm công bù không?`,
+      [
+        {
+          text: "Không",
+          style: "cancel",
+          onPress: () => {
+            void handleDeclineCompensation(pendingSlots);
+          }
+        },
+        {
+          text: "Có",
+          onPress: () => {
+            setSelectedCompSlots(pendingSlots.map((item) => ({ date: item.date, slot: item.slot })));
+            setCompOpen(true);
+          }
+        }
+      ]
+    );
+  }, [buildPromptableMissingSlots, handleDeclineCompensation]);
+
+  const submitOvertimeRequest = useCallback(async () => {
+    const [fromHour, fromMinute] = otFrom.split(":").map(Number);
+    const [toHour, toMinute] = otTo.split(":").map(Number);
+    let diffMinutes = (toHour * 60 + toMinute) - (fromHour * 60 + fromMinute);
+    if (diffMinutes < 0) diffMinutes += 24 * 60;
+    const hours = diffMinutes / 60;
+
+    if (!otReason.trim()) {
+      Alert.alert("Thiếu thông tin", "Bạn cần nhập lý do tăng ca.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const existingRequests = apiData?.overtimeRequests || [];
+      const nextRequest = {
+        id: `ot-${Date.now()}`,
+        userId: user.id,
+        userDisplayName: user.displayName,
+        from: otFrom,
+        to: otTo,
+        hours,
+        orderCode: selectedOrderCode,
+        reason: otReason.trim(),
+        status: "approved",
+        createdAt: new Date().toISOString()
+      };
+
+      const response = await fetch(getApiUrl(serverIp, "/api/sync"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          overtimeRequests: [nextRequest, ...existingRequests]
+        })
+      });
+
+      const payload = await response.json();
+      if (!payload?.success) {
+        Alert.alert("Lỗi", "Không gửi được đăng ký tăng ca.");
+        return;
+      }
+
+      setOtOpen(false);
+      setOtReason("");
+      setOtFrom("18:00");
+      setOtTo("20:00");
+      await onRefresh();
+      Alert.alert("Đăng ký thành công", `Đã đăng ký tăng ca ${hours} giờ.`);
+    } catch (error) {
+      console.warn("Lỗi đăng ký tăng ca:", error);
+      Alert.alert("Lỗi kết nối", "Không thể gửi đăng ký tăng ca.");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiData, onRefresh, otFrom, otReason, otTo, selectedOrderCode, serverIp, user.displayName, user.id]);
+
   // NÚT CHẤM CÔNG DUY NHẤT CLICK
   const handleClockInPress = async () => {
+    if (isAttendanceBlockedDay) {
+      Alert.alert("Không thể chấm công", "Hôm nay là Chủ nhật hoặc ngày lễ/tết. Bạn chỉ có thể đăng ký tăng ca.");
+      return;
+    }
+
     if (hasClockedInCurrentSlot) {
       Alert.alert("Thông báo", `Bạn đã chấm công mốc ${currentSlot} hôm nay thành công rồi!`);
       return;
@@ -229,14 +546,42 @@ export function WorkerDashboard({
   const startCameraAndGps = async () => {
     setLoading(true);
     try {
-      // Lấy định vị GPS
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setGpsCoords(`${location.coords.latitude.toFixed(5)}, ${location.coords.longitude.toFixed(5)}`);
+      const coordsText = `${location.coords.latitude.toFixed(5)}, ${location.coords.longitude.toFixed(5)}`;
+      let addressText = "Chưa xác định được địa chỉ";
+
+      try {
+        const geocoded = await Location.reverseGeocodeAsync(location.coords);
+        const firstResult = geocoded[0];
+        if (firstResult) {
+          addressText = [
+            firstResult.street,
+            firstResult.district,
+            firstResult.subregion,
+            firstResult.region
+          ].filter(Boolean).join(", ");
+        }
+      } catch (error) {
+        console.warn("Lỗi đổi GPS sang địa chỉ:", error);
+      }
+
+      setGpsCoords(coordsText);
+      setGpsAddress(addressText);
+      setGpsMeta({
+        lat: location.coords.latitude,
+        lng: location.coords.longitude,
+        address: addressText
+      });
       setShowCamera(true);
     } catch (err) {
       console.warn("Lỗi GPS:", err);
-      // Fallback nếu GPS yếu
-      setGpsCoords("10.7760, 106.7010 (Hải Phòng)");
+      setGpsCoords("0.00000, 0.00000");
+      setGpsAddress("Không lấy được địa chỉ GPS");
+      setGpsMeta({
+        lat: 0,
+        lng: 0,
+        address: "Không lấy được địa chỉ GPS"
+      });
       setShowCamera(true);
     } finally {
       setLoading(false);
@@ -278,6 +623,8 @@ export function WorkerDashboard({
         isCompleted: isCompleted, // Nếu có hỏi tiến độ
         photo: photo.base64 ? `data:image/jpeg;base64,${photo.base64}` : null,
         gps: gpsCoords,
+        gpsAddress,
+        gpsMeta,
         time: currentTime
       };
 
@@ -289,15 +636,29 @@ export function WorkerDashboard({
 
       const resJson = await res.json();
       if (resJson.success) {
+        const currentKey = `${user.id}-${today}-${currentSlot}`;
+        const nextAttendance = {
+          ...effectiveAttendance,
+          [currentKey]: "normal"
+        };
+
+        setAttendanceOverrides((current) => ({
+          ...current,
+          [currentKey]: "normal"
+        }));
         setShowCamera(false);
         setActiveJobToReport(null);
-        await onRefresh(); // Tải lại bảng công tức thì!
+        await onRefresh();
         Alert.alert(
           "Chấm công thành công! 🎉",
           `Hệ thống đã ghi nhận mốc ${currentSlot} ngày hôm nay lúc ${currentTime} của bạn.\n` +
           `● Vị trí GPS: ${gpsCoords}\n` +
+          `● Khu vực: ${gpsAddress || "Chưa xác định"}\n` +
           `● Tiền lương tháng tạm tính đã được cập nhật!`
         );
+        setTimeout(() => {
+          promptCompensationIfNeeded(nextAttendance);
+        }, 250);
       } else {
         Alert.alert("Lỗi", "Gửi dữ liệu chấm công thất bại!");
       }
@@ -369,6 +730,9 @@ export function WorkerDashboard({
           <Clock size={14} color="#f97316" />
           <Text style={styles.shiftBadgeText}>Mốc chấm hiện tại: {currentSlot}</Text>
         </View>
+        <TouchableOpacity style={styles.overtimeActionBtn} onPress={() => setOtOpen(true)}>
+          <Text style={styles.overtimeActionText}>Đăng ký tăng ca</Text>
+        </TouchableOpacity>
       </View>
 
       {/* DUY NHẤT 1 NÚT CHẤM CÔNG LỚN */}
@@ -379,6 +743,7 @@ export function WorkerDashboard({
               <CheckCircle size={48} color="#22c55e" />
               <Text style={styles.clockedInSuccessText}>ĐÃ HOÀN THÀNH CHẤM CÔNG</Text>
               <Text style={styles.clockedInSuccessSub}>Chúc bạn một ngày làm việc vui vẻ và hiệu quả!</Text>
+              
             </View>
           ) : (
             <TouchableOpacity 
@@ -399,15 +764,18 @@ export function WorkerDashboard({
         ) : (
           <View style={styles.outsideSlotCard}>
             <Clock size={36} color="#94a3b8" />
-            <Text style={styles.outsideSlotTitle}>Ngoài khung giờ chấm công</Text>
+            <Text style={styles.outsideSlotTitle}>{isAttendanceBlockedDay ? "Ngày nghỉ / ngày lễ" : "Ngoài khung giờ chấm công"}</Text>
             <Text style={styles.outsideSlotDesc}>
-              Mốc quy định: 07:30 · 11:30 · 13:30 · 17:30 {"\n"}
-              (Mở trước 15 phút, đóng sau mốc 1 tiếng)
+              {isAttendanceBlockedDay
+                ? "Hôm nay không được chấm công. Bạn chỉ có thể đăng ký tăng ca nếu có làm việc."
+                : `Mốc quy định: 07:30 · 11:30 · 13:30 · 17:30 \n(Mở trước 15 phút, đóng sau mốc 1 tiếng)`}
             </Text>
           </View>
         )}
         <Text style={styles.clockInHelp}>
-          {hasClockedInCurrentSlot 
+          {isAttendanceBlockedDay
+            ? "Hôm nay là ngày nghỉ tiêu chuẩn. Không mở chấm công."
+            : hasClockedInCurrentSlot 
             ? `Cảm ơn bạn. Hệ thống đã ghi nhận chấm công mốc ${currentSlot} thành công.` 
             : isSlotCurrentlyOpen
               ? `Mở camera chụp ảnh selfie + gửi GPS định vị mốc ${currentSlot}`
@@ -483,7 +851,7 @@ export function WorkerDashboard({
                 {monthDays.map(day => {
                   const dayNum = day.getDate();
                   const key = `${user.id}-${dayNum}-${slot}`;
-                  const val = apiData && apiData.attendance ? apiData.attendance[key] : null;
+                  const val = effectiveAttendance[key] || null;
                   return (
                     <View key={dayNum} style={[styles.gridCellDotArea, styles.cellWidthDot]}>
                       <View 
@@ -567,12 +935,208 @@ export function WorkerDashboard({
         </View>
       )}
 
+      {/* MODAL ĐĂNG KÝ CHẤM CÔNG BÙ TRÊN DI ĐỘNG */}
+      {compOpen && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.compModalContent}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.compModalTitle}>Đăng ký chấm công bù</Text>
+              <TouchableOpacity onPress={() => {
+                setCompOpen(false);
+                setSelectedCompSlots([]);
+                setCompReason("");
+              }}>
+                <Text style={styles.closeModalText}>Đóng</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalWarningBox}>
+              <Text style={styles.modalWarningText}>
+                ⚠️ Hệ thống chỉ hỏi khi còn thiếu công đang treo. Nếu bạn chọn không đủ 5 lần cho cùng một đợt thiếu công, các mốc cũ sẽ tự chốt là nghỉ.
+              </Text>
+            </View>
+
+            <Text style={styles.gridSectionLabel}>
+              Chọn trực tiếp trên bảng (Hàng: mốc, Cột: ngày)
+            </Text>
+
+            {uniqueMissingDays.length === 0 ? (
+              <View style={styles.emptyGridArea}>
+                <Text style={styles.emptyGridText}>Tuyệt vời! Bạn không thiếu mốc chấm công nào.</Text>
+              </View>
+            ) : (
+              <View style={styles.gridTableBorder}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View style={styles.modalTable}>
+                    {/* Header Row */}
+                    <View style={styles.modalTableHeader}>
+                      <View style={styles.colHeaderSlot}>
+                        <Text style={styles.colHeaderLabelText}>Mốc giờ</Text>
+                      </View>
+                      {uniqueMissingDays.map((day) => (
+                        <View key={day.toISOString()} style={styles.colHeaderDay}>
+                          <Text style={styles.colHeaderDayText}>{day.getDate()}/{day.getMonth() + 1}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    {/* Slot Rows */}
+                    {["07:30", "11:30", "13:30", "17:30"].map((slot) => (
+                      <View key={slot} style={styles.modalTableRow}>
+                        <View style={styles.cellSlotLabel}>
+                          <Text style={styles.cellSlotLabelText}>{slot}</Text>
+                        </View>
+                        {uniqueMissingDays.map((day) => {
+                          const dayNum = day.getDate();
+                          const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+                          const key = `${user.id}-${dayNum}-${slot}`;
+                          const val = effectiveAttendance[key] || null;
+                          const isLocked = Boolean(lockedThroughDate && dateStr <= lockedThroughDate);
+
+                          if (val === "normal" || val === "compensated") {
+                            return (
+                              <View key={dayNum} style={styles.cellWrapper}>
+                                <View style={[styles.statusBadge, styles.badgeGreen]}>
+                                  <Text style={styles.badgeTextGreen}>Đã chấm</Text>
+                                </View>
+                              </View>
+                            );
+                          }
+
+                          if (isLocked) {
+                            return (
+                              <View key={dayNum} style={styles.cellWrapper}>
+                                <View style={[styles.statusBadge, styles.badgeRed]}>
+                                  <Text style={styles.badgeTextRed}>Khóa</Text>
+                                </View>
+                              </View>
+                            );
+                          }
+
+                          // Selectable Cell
+                          const isChecked = selectedCompSlots.some(s => s.date === dateStr && s.slot === slot);
+                          return (
+                            <View key={dayNum} style={styles.cellWrapper}>
+                              <TouchableOpacity
+                                style={[
+                                  styles.selectBtn,
+                                  isChecked ? styles.selectBtnActive : styles.selectBtnNormal
+                                ]}
+                                onPress={() => {
+                                  if (isChecked) {
+                                    setSelectedCompSlots(curr => curr.filter(s => !(s.date === dateStr && s.slot === slot)));
+                                  } else {
+                                    setSelectedCompSlots(curr => [...curr, { date: dateStr, slot }]);
+                                  }
+                                }}
+                              >
+                                <Text style={[styles.selectBtnText, isChecked ? styles.textWhite : styles.textOrange]}>
+                                  {isChecked ? "✓ Chọn" : "Bù"}
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+            )}
+
+            <Text style={styles.fieldLabel}>Lý do thiếu công *</Text>
+            <TextInput
+              style={styles.reasonInput}
+              placeholder="Ví dụ: Quên điện thoại, Đi công trình ngoài..."
+              placeholderTextColor="#94a3b8"
+              value={compReason}
+              onChangeText={setCompReason}
+              multiline
+            />
+
+            <TouchableOpacity
+              style={[
+                styles.submitCompBtn,
+                (selectedCompSlots.length === 0 || !compReason.trim()) ? styles.btnDisabled : styles.btnActive
+              ]}
+              onPress={submitCompensations}
+              disabled={selectedCompSlots.length === 0 || !compReason.trim() || loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.submitCompBtnText}>GỬI YÊU CẦU CHẤM CÔNG BÙ</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {otOpen && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.whiteModalContent}>
+            <Text style={styles.modalTitle}>Đăng ký tăng ca</Text>
+            <Text style={styles.modalDesc}>Nhập khoảng thời gian tăng ca và lý do để lưu vào hệ thống.</Text>
+
+            <Text style={styles.whiteFieldLabel}>Đơn hàng tăng ca</Text>
+            <View style={styles.orderList}>
+              <TouchableOpacity
+                style={[styles.orderChip, selectedOrderCode === "" ? styles.orderChipActive : null]}
+                onPress={() => setSelectedOrderCode("")}
+              >
+                <Text style={[styles.orderChipText, selectedOrderCode === "" ? styles.orderChipTextActive : null]}>Tăng ca chung</Text>
+              </TouchableOpacity>
+              {assignedOrders.map((order: any) => (
+                <TouchableOpacity
+                  key={order.id}
+                  style={[styles.orderChip, selectedOrderCode === order.code ? styles.orderChipActive : null]}
+                  onPress={() => setSelectedOrderCode(order.code)}
+                >
+                  <Text style={[styles.orderChipText, selectedOrderCode === order.code ? styles.orderChipTextActive : null]}>{order.code}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.timeRow}>
+              <View style={styles.timeField}>
+                <Text style={styles.whiteFieldLabel}>Từ giờ</Text>
+                <TextInput style={styles.inlineInput} value={otFrom} onChangeText={setOtFrom} placeholder="18:00" placeholderTextColor="#94a3b8" />
+              </View>
+              <View style={styles.timeField}>
+                <Text style={styles.whiteFieldLabel}>Đến giờ</Text>
+                <TextInput style={styles.inlineInput} value={otTo} onChangeText={setOtTo} placeholder="20:00" placeholderTextColor="#94a3b8" />
+              </View>
+            </View>
+
+            <Text style={styles.whiteFieldLabel}>Lý do</Text>
+            <TextInput
+              style={styles.whiteReasonInput}
+              value={otReason}
+              onChangeText={setOtReason}
+              placeholder="Nhập lý do tăng ca"
+              placeholderTextColor="#94a3b8"
+              multiline
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalBtnOrange]} onPress={() => setOtOpen(false)}>
+                <Text style={styles.modalBtnText}>Đóng</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalBtnGreen]} onPress={submitOvertimeRequest} disabled={loading}>
+                {loading ? <ActivityIndicator size="small" color="#ffffff" /> : <Text style={styles.modalBtnText}>Gửi đăng ký</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* SCREEN CAMERA NATIVE HIỂN THỊ KHI CHẤM CÔNG */}
       {showCamera && (
         <View style={styles.cameraOverlay}>
           <View style={styles.cameraHeader}>
             <Text style={styles.cameraHeaderText}>Mốc chấm công: {currentSlot}</Text>
             <Text style={styles.cameraHeaderSub}>Vị trí GPS: {gpsCoords}</Text>
+            <Text style={styles.cameraHeaderSub}>{gpsAddress || "Đang lấy địa chỉ khu vực..."}</Text>
           </View>
 
           <View style={styles.cameraFrame}>
@@ -714,6 +1278,22 @@ const styles = StyleSheet.create({
     color: "#f8fafc",
     fontSize: 12,
     fontWeight: "800",
+  },
+  overtimeActionBtn: {
+    marginTop: 14,
+    width: "100%",
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#fb923c",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f9731615",
+  },
+  overtimeActionText: {
+    color: "#fdba74",
+    fontSize: 14,
+    fontWeight: "900",
   },
   clockInCenter: {
     alignItems: "center",
@@ -992,6 +1572,76 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 10,
   },
+  whiteModalContent: {
+    width: screenWidth - 32,
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 20,
+    maxHeight: "85%",
+  },
+  whiteFieldLabel: {
+    color: "#0f172a",
+    fontSize: 13,
+    fontWeight: "900",
+    marginBottom: 6,
+    marginTop: 10,
+  },
+  orderList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  orderChip: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#f8fafc",
+  },
+  orderChipActive: {
+    backgroundColor: "#f97316",
+    borderColor: "#f97316",
+  },
+  orderChipText: {
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  orderChipTextActive: {
+    color: "#ffffff",
+  },
+  timeRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 6,
+  },
+  timeField: {
+    flex: 1,
+  },
+  inlineInput: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  whiteReasonInput: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    minHeight: 84,
+    textAlignVertical: "top",
+  },
   modalTitle: {
     fontSize: 18,
     color: "#0f172a",
@@ -1123,5 +1773,221 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 6,
     lineHeight: 16,
+  },
+  mobileCompBtn: {
+    marginTop: 14,
+    backgroundColor: "#1d4ed8",
+    borderColor: "#3b82f6",
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  mobileCompBtnText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  compModalContent: {
+    width: screenWidth - 24,
+    backgroundColor: "#0f2547",
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: "#1e3a66",
+    padding: 20,
+    maxHeight: "85%",
+  },
+  modalHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  compModalTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  closeModalText: {
+    color: "#ef4444",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  modalWarningBox: {
+    backgroundColor: "#1e3a8a30",
+    borderColor: "#3b82f6",
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+  },
+  modalWarningText: {
+    color: "#93c5fd",
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 16,
+  },
+  gridSectionLabel: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "bold",
+    marginBottom: 8,
+  },
+  emptyGridArea: {
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+  emptyGridText: {
+    color: "#94a3b8",
+    fontStyle: "italic",
+    fontSize: 13,
+  },
+  gridTableBorder: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e3a66",
+    backgroundColor: "#071a38",
+    overflow: "hidden",
+    marginBottom: 12,
+  },
+  modalTable: {
+    padding: 6,
+    minWidth: 420,
+  },
+  modalTableHeader: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1e3a66",
+    paddingBottom: 6,
+    marginBottom: 6,
+  },
+  colHeaderSlot: {
+    width: 70,
+    justifyContent: "center",
+  },
+  colHeaderLabelText: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  colHeaderDay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  colHeaderDayText: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  modalTableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 4,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#1e3a6680",
+  },
+  cellSlotLabel: {
+    width: 70,
+    justifyContent: "center",
+  },
+  cellSlotLabelText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  cellWrapper: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  statusBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+  },
+  badgeGreen: {
+    backgroundColor: "#22c55e20",
+  },
+  badgeRed: {
+    backgroundColor: "#ef444420",
+  },
+  badgeTextGreen: {
+    color: "#22c55e",
+    fontSize: 9,
+    fontWeight: "900",
+  },
+  badgeTextRed: {
+    color: "#ef4444",
+    fontSize: 9,
+    fontWeight: "900",
+  },
+  selectBtn: {
+    width: "100%",
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  selectBtnActive: {
+    backgroundColor: "#2563eb",
+    borderColor: "#2563eb",
+  },
+  selectBtnNormal: {
+    backgroundColor: "#f9731615",
+    borderColor: "#f9731640",
+  },
+  selectBtnText: {
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  textWhite: {
+    color: "#ffffff",
+  },
+  textOrange: {
+    color: "#f97316",
+  },
+  fieldLabel: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "900",
+    marginBottom: 6,
+    marginTop: 6,
+  },
+  reasonInput: {
+    backgroundColor: "#071a38",
+    borderColor: "#1e3a66",
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    color: "#ffffff",
+    fontSize: 12,
+    minHeight: 60,
+    textAlignVertical: "top",
+    marginBottom: 14,
+  },
+  submitCompBtn: {
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  btnActive: {
+    backgroundColor: "#16a34a",
+  },
+  btnDisabled: {
+    backgroundColor: "#1e293b",
+  },
+  submitCompBtnText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "900",
   }
 });

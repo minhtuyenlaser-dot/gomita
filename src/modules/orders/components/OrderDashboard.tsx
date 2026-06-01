@@ -1212,15 +1212,10 @@ function WorkerWorkspace({
                 Chúc bạn một ngày làm việc hiệu quả và an toàn.
               </p>
               
-              {/* Nút Đăng ký chấm công bù thông minh xuất hiện sau khi chấm công xong gần nhất */}
               {hasMissing && (
-                <button 
-                  className="mt-4 min-h-11 rounded-lg border border-blue-300 bg-blue-50 px-5 text-sm font-black text-blue-700 hover:bg-blue-100 transition shadow-sm animate-pulse" 
-                  onClick={() => setCompOpen(true)} 
-                  type="button"
-                >
-                  Đăng ký chấm công bù
-                </button>
+                <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">
+                  Nếu còn thiếu công, hãy chấm công trên điện thoại để hệ thống hỏi đăng ký bù công.
+                </div>
               )}
 
               {/* Báo cáo hoàn thành đơn hàng */}
@@ -1243,24 +1238,33 @@ function WorkerWorkspace({
               )}
             </div>
           ) : (
-            <ClockCard 
-              currentSlot={currentSlot} 
-              windowText={`${formatTime(slotWindow.opensAt)} - ${formatTime(slotWindow.closesAt)}`} 
-              cameraReady={cameraReady} 
-              needsQuestion={needsEndOfShiftQuestion} 
-              onStart={() => {
-                if (needsEndOfShiftQuestion && activeWorkingOrders.length) setFlowIndex(0);
-                else setCameraReady(true);
-              }} 
-              onCapture={() => {
-                markAttendance("normal");
-                setClockMessage(`Đã chấm công mốc ${currentSlot} và cập nhật vào bảng công tháng.`);
-                setCameraReady(false);
-                setOrders((current) => current.map((order) => reportedDoneIds.includes(order.id) ? { ...order, finalNote: `${order.finalNote} (Thợ đã báo xong khi chấm công)` } : order));
-              }} 
-              selectedOrder={selectedOrder}
-              onReportDone={handleReportDone}
-            />
+            <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-6 text-center shadow-sm flex min-h-[220px] flex-col items-center justify-center text-slate-900 w-full">
+              <Phone className="h-12 w-12 text-blue-600 mb-3" />
+              <h3 className="font-black text-slate-800 text-lg">Chấm công chỉ thực hiện trên điện thoại</h3>
+              <p className="mt-2 text-sm font-semibold text-blue-700">
+                Mốc hiện tại: {currentSlot} ({formatTime(slotWindow.opensAt)} - {formatTime(slotWindow.closesAt)})
+              </p>
+              <p className="mt-3 max-w-md text-xs font-bold text-slate-500">
+                Trên web chỉ theo dõi bảng công và công việc. Hãy dùng ứng dụng điện thoại để chấm công, chấm công bù và chụp ảnh GPS.
+              </p>
+              {selectedOrder && (
+                <button
+                  className={`mt-5 flex min-h-12 w-full max-w-xs items-center justify-center gap-2 rounded-xl font-black transition text-sm ${
+                    selectedOrder.workStatus === "pending_confirmation"
+                      ? "bg-amber-100 text-amber-700 border border-amber-300 cursor-not-allowed"
+                      : "bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-600"
+                  }`}
+                  disabled={selectedOrder.workStatus === "pending_confirmation"}
+                  onClick={handleReportDone}
+                  type="button"
+                >
+                  <Check className="h-5 w-5" />
+                  {selectedOrder.workStatus === "pending_confirmation"
+                    ? "ĐÃ BÁO CÁO XONG (CHỜ DUYỆT)"
+                    : "BÁO CÁO HOÀN THÀNH CÔNG VIỆC"}
+                </button>
+              )}
+            </div>
           )
         ) : (
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center shadow-sm flex flex-col justify-center items-center text-slate-500 w-full min-h-[220px]">

@@ -4,6 +4,8 @@ import { BriefcaseBusiness, Camera, Clock3, Download, FileText, IdCard, Lock, Us
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
+import type { LeaveRequest, LeaveType } from "../leave";
+import { leaveStatusLabels, leaveTypeLabels } from "../leave";
 import type { Position } from "../roles";
 import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 
@@ -16,7 +18,9 @@ export function ProfileDashboard({
   overtimeRequests = [],
   attendance = {},
   compensationRequests = [],
-  onCompensationRequestsChange
+  onCompensationRequestsChange,
+  leaveRequests = [],
+  onLeaveRequestsChange
 }: { 
   account: UserAccount; 
   accounts?: UserAccount[]; 
@@ -25,12 +29,18 @@ export function ProfileDashboard({
   attendance?: Record<string, string>;
   compensationRequests?: any[];
   onCompensationRequestsChange?: (requests: any[]) => void;
+  leaveRequests?: LeaveRequest[];
+  onLeaveRequestsChange?: (requests: LeaveRequest[]) => void;
 }) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const [accountOpen, setAccountOpen] = useState(false);
   const [compModalOpen, setCompModalOpen] = useState(false);
   const [compSelectedItems, setCompSelectedItems] = useState<string[]>([]);
   const [compReason, setCompReason] = useState("");
+  const [leaveType, setLeaveType] = useState<LeaveType>("annual");
+  const [leaveFromDate, setLeaveFromDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [leaveToDate, setLeaveToDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [leaveReason, setLeaveReason] = useState("");
 
   const [username, setUsername] = useState(account.username);
   const [password, setPassword] = useState(account.password);
@@ -120,6 +130,38 @@ export function ProfileDashboard({
   }, [salaryType, salaryValue, workDays, overtime, maxWorkDays]);
 
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
+  const myLeaveRequests = useMemo(() => leaveRequests.filter((request) => request.employeeId === account.id), [leaveRequests, account.id]);
+
+  function submitLeaveRequest() {
+    if (!onLeaveRequestsChange || !leaveReason.trim()) {
+      setMessage("Vui lòng nhập lý do nghỉ phép.");
+      return;
+    }
+    const from = new Date(`${leaveFromDate}T00:00:00`);
+    const to = new Date(`${leaveToDate}T00:00:00`);
+    if (to < from) {
+      setMessage("Ngày kết thúc nghỉ phép phải lớn hơn hoặc bằng ngày bắt đầu.");
+      return;
+    }
+    const daySpan = leaveType === "half_day" ? 0.5 : Math.max(1, Math.floor((to.getTime() - from.getTime()) / 86400000) + 1);
+    const newRequest: LeaveRequest = {
+      id: `leave-${Date.now()}`,
+      employeeId: account.id,
+      employeeCode: account.employeeCode || account.id,
+      employeeName: account.displayName,
+      department: account.department,
+      type: leaveType,
+      fromDate: leaveFromDate,
+      toDate: leaveToDate,
+      days: daySpan,
+      reason: leaveReason.trim(),
+      status: "pending",
+      createdAt: new Date().toISOString()
+    };
+    onLeaveRequestsChange([newRequest, ...leaveRequests]);
+    setLeaveReason("");
+    setMessage("Đã gửi đơn nghỉ phép lên Nhân sự/Giám đốc.");
+  }
 
   function downloadAttendanceAsImage() {
     const canvas = document.createElement("canvas");
@@ -265,10 +307,11 @@ export function ProfileDashboard({
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-xl font-black">{account.displayName}</h3>
                 <span className="rounded-full bg-orange-100 px-2 py-1 text-xs font-black text-orange-600">{position.name}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-black text-slate-700">{account.employeeCode || "Chưa có mã NV"}</span>
               </div>
               <InfoLine icon={<BriefcaseBusiness className="h-4 w-4" />} text="Nhân viên chính thức" />
-              <InfoLine icon={<IdCard className="h-4 w-4" />} text="CCCD: 0310 1234 5678" />
-              <InfoLine icon={<FileText className="h-4 w-4" />} text="HĐLĐ: 12 tháng, hiệu lực 01/01/2026" />
+              <InfoLine icon={<IdCard className="h-4 w-4" />} text={`CCCD: ${account.idCardNumber || "Chưa cập nhật"}`} />
+              <InfoLine icon={<FileText className="h-4 w-4" />} text={`HĐLĐ: ${account.laborContractNote || "Chưa cập nhật"}`} />
             </div>
           </div>
           <button className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 font-black" onClick={() => setAccountOpen(true)} type="button">
@@ -297,19 +340,12 @@ export function ProfileDashboard({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {onCompensationRequestsChange && (
-              <button 
-                className="flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 px-4 text-sm font-black text-white transition shadow-sm" 
-                onClick={() => {
-                  setCompModalOpen(true);
-                  setCompSelectedItems([]);
-                }}
-                type="button"
-              >
+            {onCompensationRequestsChange ? (
+              <div className="flex min-h-10 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-700">
                 <Clock3 className="h-4 w-4" />
-                Đăng ký chấm công bù
-              </button>
-            )}
+                Chấm công bù chỉ thực hiện trên điện thoại sau khi chấm công thành công.
+              </div>
+            ) : null}
             <button 
               className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black bg-white hover:bg-slate-50 text-slate-700 transition" 
               onClick={downloadAttendanceAsImage}
@@ -333,6 +369,52 @@ export function ProfileDashboard({
         <div className="rounded-lg border border-slate-200 bg-white p-5 text-center shadow-sm">
           <div className="mx-auto grid h-28 w-28 place-items-center rounded-full border-[14px] border-green-500 text-xl font-black">{workRate}%</div>
           <div className="mt-3 text-sm font-bold text-slate-600">Tỷ lệ chấm công</div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-xl font-black">Đơn nghỉ phép của tôi</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1 text-sm font-bold">Loại nghỉ
+              <select className="h-11 rounded-lg border border-slate-200 px-3 font-normal" value={leaveType} onChange={(event) => setLeaveType(event.target.value as LeaveType)}>
+                {Object.entries(leaveTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-bold">Từ ngày<input className="h-11 rounded-lg border border-slate-200 px-3 font-normal" type="date" value={leaveFromDate} onChange={(event) => setLeaveFromDate(event.target.value)} /></label>
+            <label className="grid gap-1 text-sm font-bold">Đến ngày<input className="h-11 rounded-lg border border-slate-200 px-3 font-normal" type="date" value={leaveToDate} onChange={(event) => setLeaveToDate(event.target.value)} /></label>
+            <label className="grid gap-1 text-sm font-bold md:col-span-2">Lý do<textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal" value={leaveReason} onChange={(event) => setLeaveReason(event.target.value)} /></label>
+          </div>
+          <button className="mt-4 min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white" onClick={submitLeaveRequest} type="button">Gửi đơn nghỉ phép</button>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-xl font-black">Hồ sơ cá nhân</h2>
+          <div className="mt-4 grid gap-3 text-sm">
+            <div className="rounded-lg bg-slate-50 p-3"><span className="font-black">Mã nhân viên:</span> {account.employeeCode || "Chưa cập nhật"}</div>
+            <div className="rounded-lg bg-slate-50 p-3"><span className="font-black">Số CCCD:</span> {account.idCardNumber || "Chưa cập nhật"}</div>
+            <div className="flex flex-wrap gap-2">
+              {account.idCardFrontImage ? <a className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-blue-600" href={account.idCardFrontImage} target="_blank" rel="noreferrer">Xem CCCD mặt trước</a> : null}
+              {account.idCardBackImage ? <a className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-blue-600" href={account.idCardBackImage} target="_blank" rel="noreferrer">Xem CCCD mặt sau</a> : null}
+              {account.laborContractImage ? <a className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-blue-600" href={account.laborContractImage} target="_blank" rel="noreferrer">Xem hợp đồng</a> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-black">Lịch sử đơn nghỉ phép</h2>
+        <div className="mt-4 grid gap-3">
+          {myLeaveRequests.length === 0 ? <div className="rounded-lg bg-slate-50 p-4 text-sm font-bold text-slate-500">Chưa có đơn nghỉ phép nào.</div> : myLeaveRequests.map((request) => (
+            <div key={request.id} className="rounded-lg border border-slate-200 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="font-black">{leaveTypeLabels[request.type]} • {request.fromDate} → {request.toDate}</div>
+                  <div className="mt-1 text-sm text-slate-500">{request.days} ngày • {request.reason}</div>
+                </div>
+                <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-700">{leaveStatusLabels[request.status]}</div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -668,8 +750,9 @@ export function CompanyPayrollDashboard({
       </div>
       <div className="overflow-x-auto">
         <div className="min-w-[1980px]">
-          <div className="grid bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `180px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
+          <div className="grid bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `180px 110px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
             <div>Nhân sự</div>
+            <div>Mã NV</div>
             <div>Bộ phận</div>
             {monthDays.map((day) => <div key={day.toISOString()} className="text-center">{day.getDate()}</div>)}
             <div className="text-center">Công</div>
@@ -681,8 +764,9 @@ export function CompanyPayrollDashboard({
           {rows.map((row) => {
             const displayType = row.salaryType === "monthly" ? "Tháng" : "Ngày";
             return (
-              <div key={row.account.id} className="grid items-center border-t border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 transition" style={{ gridTemplateColumns: `180px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
+              <div key={row.account.id} className="grid items-center border-t border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 transition" style={{ gridTemplateColumns: `180px 110px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
                 <div className="font-black">{row.account.displayName}</div>
+                <div className="font-bold text-orange-600">{row.account.employeeCode || "Chưa có"}</div>
                 <div className="text-slate-500">{row.account.department}</div>
                 {row.marks.map((mark, index) => <div key={`${row.account.id}-${index}`} className="text-center font-black">{mark}</div>)}
                 <div className="text-center font-bold text-slate-700">{row.work}</div>

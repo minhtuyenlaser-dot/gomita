@@ -25,8 +25,11 @@ import { AccountManagement } from "@/modules/hr/components/AccountManagement";
 import { LoginScreen } from "@/modules/hr/components/LoginScreen";
 import { CompanyPayrollDashboard, ProfileDashboard } from "@/modules/hr/components/ProfileDashboard";
 import { BackupRestoreDashboard } from "@/modules/hr/components/BackupRestoreDashboard";
-import { getMenuForPosition, isWorkerPosition, mustClockIn, positions } from "@/modules/hr/roles";
+import type { LeaveRequest } from "@/modules/hr/leave";
+import { getMenuForPosition, mustClockIn, positions } from "@/modules/hr/roles";
 import { FinanceDashboard } from "@/modules/finance/components/FinanceDashboard";
+import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
+import { getApiUrl } from "@/lib/api";
 import { OrderDashboard } from "@/modules/orders/components/OrderDashboard";
 import { demoOrders, type Order, getAssignedNames } from "@/modules/orders/orderFlow";
 import { AttendanceDashboard } from "@/modules/attendance/components/AttendanceDashboard";
@@ -45,6 +48,24 @@ const iconMap = {
   admin: ShieldCheck
 };
 
+function isValidStoredAccount(value: unknown): value is UserAccount {
+  if (!value || typeof value !== "object") return false;
+  const account = value as Partial<UserAccount>;
+  return typeof account.id === "string" && Array.isArray(account.positionIds) && typeof account.displayName === "string";
+}
+
+function readStoredJson<T>(key: string): T | null {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    console.warn(`Bỏ qua dữ liệu localStorage lỗi ở ${key}.`, error);
+    localStorage.removeItem(key);
+    return null;
+  }
+}
+
 export default function HomePage() {
   const [accounts, setAccounts] = useState<UserAccount[]>(demoAccounts);
   const [currentAccount, setCurrentAccount] = useState<UserAccount | null>(null);
@@ -58,17 +79,16 @@ export default function HomePage() {
 
   // Khôi phục phiên đăng nhập từ localStorage khi F5
   useEffect(() => {
-    const savedSession = localStorage.getItem("gomita_web_session_v3");
-    if (savedSession) {
-      try {
-        const session = JSON.parse(savedSession);
-        setCurrentAccount(session.account);
-        setPositionId(session.positionId);
-        setActiveModule(session.activeModule || "orders");
-      } catch (e) {
-        console.error("Lỗi khôi phục phiên đăng nhập:", e);
-      }
+    const session = readStoredJson<{ account?: UserAccount; positionId?: string; activeModule?: string }>("gomita_web_session_v3");
+    if (!session) return;
+    if (!isValidStoredAccount(session.account)) {
+      console.warn("Phiên đăng nhập cũ không còn hợp lệ, đã tự xóa.");
+      localStorage.removeItem("gomita_web_session_v3");
+      return;
     }
+    setCurrentAccount(session.account);
+    setPositionId(typeof session.positionId === "string" ? session.positionId : "");
+    setActiveModule(typeof session.activeModule === "string" && session.activeModule.length > 0 ? session.activeModule : "orders");
   }, []);
 
   // Tự động ghi nhớ phiên làm việc vào localStorage khi thay đổi
@@ -110,6 +130,10 @@ export default function HomePage() {
   const [orders, setOrders] = useState<Order[]>(demoOrders);
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
   const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+  const [customerDebts, setCustomerDebts] = useState<CustomerDebt[]>([]);
+  const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [attendanceDetails, setAttendanceDetails] = useState<Record<string, { photo: string; gps: string; time: string }>>({});
 
@@ -146,36 +170,52 @@ export default function HomePage() {
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
     function fetchData() {
-      fetch("https://gomita.onrender.com/api/data")
+      fetch(getApiUrl("/api/data"))
         .then((res) => res.json())
         .then((data) => {
           if (data.accounts) setAccounts(data.accounts);
           if (data.orders) setOrders(data.orders);
           if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
           if (data.compensationRequests) setCompensationRequests(data.compensationRequests);
+          if (data.leaveRequests) setLeaveRequests(data.leaveRequests);
+          if (data.cashTransactions) setCashTransactions(data.cashTransactions);
+          if (data.customerDebts) setCustomerDebts(data.customerDebts);
+          if (data.holidayDates) setHolidayDates(data.holidayDates);
           if (data.attendance) setAttendance(data.attendance);
           if (data.attendanceDetails) setAttendanceDetails(data.attendanceDetails);
         })
         .catch((err) => {
           console.warn("API Server offline, sử dụng dữ liệu offline.", err);
           // Cơ chế Fallback offline lấy từ localStorage
-          const savedAccounts = localStorage.getItem("gomita_web_accounts_v2");
-          if (savedAccounts) setAccounts(JSON.parse(savedAccounts));
+          const savedAccounts = readStoredJson<UserAccount[]>("gomita_web_accounts_v2");
+          if (savedAccounts) setAccounts(savedAccounts);
 
-          const savedOrders = localStorage.getItem("gomita_web_orders_v2");
-          if (savedOrders) setOrders(JSON.parse(savedOrders));
+          const savedOrders = readStoredJson<Order[]>("gomita_web_orders_v2");
+          if (savedOrders) setOrders(savedOrders);
 
-          const savedOt = localStorage.getItem("gomita_web_ot_v2");
-          if (savedOt) setOvertimeRequests(JSON.parse(savedOt));
+          const savedOt = readStoredJson<any[]>("gomita_web_ot_v2");
+          if (savedOt) setOvertimeRequests(savedOt);
 
-          const savedComp = localStorage.getItem("gomita_web_comp_v3");
-          if (savedComp) setCompensationRequests(JSON.parse(savedComp));
+          const savedComp = readStoredJson<any[]>("gomita_web_comp_v3");
+          if (savedComp) setCompensationRequests(savedComp);
 
-          const savedAttendance = localStorage.getItem("gomita_web_attendance_v3");
-          if (savedAttendance) setAttendance(JSON.parse(savedAttendance));
+          const savedLeaveRequests = readStoredJson<LeaveRequest[]>("gomita_web_leave_requests_v1");
+          if (savedLeaveRequests) setLeaveRequests(savedLeaveRequests);
 
-          const savedAttendanceDetails = localStorage.getItem("gomita_web_attendance_details_v3");
-          if (savedAttendanceDetails) setAttendanceDetails(JSON.parse(savedAttendanceDetails));
+          const savedCashTransactions = readStoredJson<CashTransaction[]>("gomita_web_cash_transactions_v1");
+          if (savedCashTransactions) setCashTransactions(savedCashTransactions);
+
+          const savedCustomerDebts = readStoredJson<CustomerDebt[]>("gomita_web_customer_debts_v1");
+          if (savedCustomerDebts) setCustomerDebts(savedCustomerDebts);
+
+          const savedHolidayDates = readStoredJson<string[]>("gomita_web_holidays_v1");
+          if (savedHolidayDates) setHolidayDates(savedHolidayDates);
+
+          const savedAttendance = readStoredJson<Record<string, string>>("gomita_web_attendance_v3");
+          if (savedAttendance) setAttendance(savedAttendance);
+
+          const savedAttendanceDetails = readStoredJson<Record<string, { photo: string; gps: string; time: string }>>("gomita_web_attendance_details_v3");
+          if (savedAttendanceDetails) setAttendanceDetails(savedAttendanceDetails);
         });
     }
 
@@ -187,7 +227,7 @@ export default function HomePage() {
   // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay dữ liệu
   useEffect(() => {
     if (accounts === demoAccounts) return;
-    fetch("https://gomita.onrender.com/api/sync", {
+    fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accounts })
@@ -197,7 +237,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (orders === demoOrders) return;
-    fetch("https://gomita.onrender.com/api/sync", {
+    fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orders })
@@ -207,7 +247,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (overtimeRequests.length === 0) return;
-    fetch("https://gomita.onrender.com/api/sync", {
+    fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ overtimeRequests })
@@ -217,7 +257,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (compensationRequests.length === 0) return;
-    fetch("https://gomita.onrender.com/api/sync", {
+    fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ compensationRequests })
@@ -226,8 +266,47 @@ export default function HomePage() {
   }, [compensationRequests]);
 
   useEffect(() => {
+    if (leaveRequests.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leaveRequests })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_leave_requests_v1", JSON.stringify(leaveRequests));
+  }, [leaveRequests]);
+
+  useEffect(() => {
+    if (cashTransactions.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cashTransactions })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_cash_transactions_v1", JSON.stringify(cashTransactions));
+  }, [cashTransactions]);
+
+  useEffect(() => {
+    if (customerDebts.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customerDebts })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_customer_debts_v1", JSON.stringify(customerDebts));
+  }, [customerDebts]);
+
+  useEffect(() => {
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holidayDates })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_holidays_v1", JSON.stringify(holidayDates));
+  }, [holidayDates]);
+
+  useEffect(() => {
     if (Object.keys(attendance).length === 0) return;
-    fetch("https://gomita.onrender.com/api/sync", {
+    fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendance })
@@ -237,7 +316,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (Object.keys(attendanceDetails).length === 0) return;
-    fetch("https://gomita.onrender.com/api/sync", {
+    fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendanceDetails })
@@ -245,7 +324,7 @@ export default function HomePage() {
     localStorage.setItem("gomita_web_attendance_details_v3", JSON.stringify(attendanceDetails));
   }, [attendanceDetails]);
 
-  const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds.includes(position.id)) : [], [currentAccount]);
+  const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds?.includes(position.id)) : [], [currentAccount]);
   const currentPosition = positions.find((position) => position.id === positionId) ?? allowedPositions[0] ?? positions[0];
   const menu = useMemo(() => getMenuForPosition(currentPosition.id), [currentPosition.id]);
 
@@ -304,6 +383,8 @@ export default function HomePage() {
           attendance={attendance} 
           compensationRequests={compensationRequests}
           onCompensationRequestsChange={setCompensationRequests}
+          leaveRequests={leaveRequests}
+          onLeaveRequestsChange={setLeaveRequests}
         />
       )}
       {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} attendance={attendance} />}
@@ -325,9 +406,13 @@ export default function HomePage() {
           overtimeRequests={overtimeRequests} 
           accounts={accounts}
           currentPosition={currentPosition}
+          cashTransactions={cashTransactions}
+          onCashTransactionsChange={setCashTransactions}
+          customerDebts={customerDebts}
+          onCustomerDebtsChange={setCustomerDebts}
         />
       )}
-      {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} />}
+      {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} holidayDates={holidayDates} onHolidayDatesChange={setHolidayDates} leaveRequests={leaveRequests} onLeaveRequestsChange={setLeaveRequests} />}
       {activeModule === "admin" && (
         <BackupRestoreDashboard 
           onDataRestored={(restoredData) => {
@@ -335,6 +420,10 @@ export default function HomePage() {
             if (restoredData.orders) setOrders(restoredData.orders);
             if (restoredData.overtimeRequests) setOvertimeRequests(restoredData.overtimeRequests);
             if (restoredData.compensationRequests) setCompensationRequests(restoredData.compensationRequests);
+            if (restoredData.leaveRequests) setLeaveRequests(restoredData.leaveRequests);
+            if (restoredData.cashTransactions) setCashTransactions(restoredData.cashTransactions);
+            if (restoredData.customerDebts) setCustomerDebts(restoredData.customerDebts);
+            if (restoredData.holidayDates) setHolidayDates(restoredData.holidayDates);
             if (restoredData.attendance) setAttendance(restoredData.attendance);
             if (restoredData.attendanceDetails) setAttendanceDetails(restoredData.attendanceDetails);
           }}
@@ -344,7 +433,7 @@ export default function HomePage() {
     </>
   );
 
-  if (isWorkerPosition(currentPosition.id)) {
+  if (["production_worker", "installer", "workshop_manager", "site_supervisor"].includes(currentPosition.id)) {
     return (
       <main className="min-h-screen bg-slate-50">
         <WorkerTopBar 
@@ -354,7 +443,6 @@ export default function HomePage() {
           positionName={currentPosition.name} 
           onLogout={() => setCurrentAccount(null)} 
           onPositionChange={changePosition} 
-          onClockClick={() => setClockOpen(true)}
           hasClockedInCurrentSlot={hasClockedInCurrentSlot}
         />
         <div className="p-4 pb-24 md:p-6">{content}</div>
@@ -388,7 +476,7 @@ export default function HomePage() {
             })}
           </nav>
 
-          {mustClockIn(currentPosition.id) ? <SidebarClock onClock={() => setClockOpen(true)} onOvertime={() => setOvertimeOpen(true)} hasClockedInCurrentSlot={hasClockedInCurrentSlot} /> : null}
+          {mustClockIn(currentPosition.id) ? <SidebarClock onOvertime={() => setOvertimeOpen(true)} hasClockedInCurrentSlot={hasClockedInCurrentSlot} /> : null}
         </div>
       </aside>
 
@@ -404,9 +492,6 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-4">
-            {mustClockIn(currentPosition.id) && !isWorkerPosition(currentPosition.id) && isAnyClockInSlotOpen && !hasClockedInCurrentSlot ? (
-              <button className="min-h-10 rounded-lg bg-orange-500 px-4 text-xs font-black text-white hover:bg-orange-600 transition animate-pulse" onClick={() => setClockOpen(true)} type="button">CHẤM CÔNG</button>
-            ) : null}
             <RoleSelect allowedPositions={allowedPositions} value={currentPosition.id} onChange={changePosition} />
             <div className="hidden items-center gap-3 md:flex">
               <div className="grid h-11 w-11 place-items-center rounded-full bg-slate-200"><UserCircle className="h-8 w-8 text-slate-500" /></div>
@@ -510,7 +595,7 @@ export default function HomePage() {
   );
 }
 
-function SidebarClock({ onClock, onOvertime, hasClockedInCurrentSlot }: { onClock: () => void; onOvertime: () => void; hasClockedInCurrentSlot: boolean }) {
+function SidebarClock({ onOvertime, hasClockedInCurrentSlot }: { onOvertime: () => void; hasClockedInCurrentSlot: boolean }) {
   const [mounted, setMounted] = useState(false);
   const [timeStr, setTimeStr] = useState("07:30:00");
   const [dateStr, setDateStr] = useState("Thứ 6, 24/05/2024");
@@ -537,20 +622,6 @@ function SidebarClock({ onClock, onOvertime, hasClockedInCurrentSlot }: { onCloc
     return () => clearInterval(interval);
   }, []);
 
-  const isAnySlotOpen = useMemo(() => {
-    const now = new Date();
-    return ["07:30", "11:30", "13:30", "17:30"].some((slot) => {
-      const [hour, minute] = slot.split(":").map(Number);
-      const slotTime = new Date(now);
-      slotTime.setHours(hour, minute, 0, 0);
-      const opensAt = new Date(slotTime);
-      opensAt.setMinutes(opensAt.getMinutes() - 15);
-      const closesAt = new Date(slotTime);
-      closesAt.setHours(closesAt.getHours() + 1);
-      return now >= opensAt && now <= closesAt;
-    });
-  }, [timeStr]);
-
   if (!mounted) {
     return (
       <div className="mt-auto p-4">
@@ -569,25 +640,7 @@ function SidebarClock({ onClock, onOvertime, hasClockedInCurrentSlot }: { onCloc
       <div className="rounded-lg border border-white/15 bg-white/5 p-4 text-center">
         <div className="text-3xl font-black text-orange-400">{timeStr}</div>
         <div className="mt-1 text-sm text-slate-300">{dateStr}</div>
-        
-        {isAnySlotOpen ? (
-          hasClockedInCurrentSlot ? (
-            <div className="mt-4 p-3 rounded-lg bg-green-500/10 border border-green-500/35 text-xs font-bold text-green-400">
-              ✓ Đã hoàn thành chấm công mốc này
-            </div>
-          ) : (
-            <button className="mt-4 min-h-12 w-full rounded-lg bg-orange-500 font-black hover:bg-orange-600 transition" onClick={onClock} type="button">CHẤM CÔNG</button>
-          )
-        ) : (
-          <div className="mt-4 p-3 rounded-lg bg-white/5 border border-white/10 text-xs font-bold text-slate-400">
-            Ngoài khung giờ chấm công quy định (07:30, 11:30, 13:30, 17:30)
-          </div>
-        )}
-        
-        <button className="mt-2 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
-        <div className="mt-3 text-xs text-slate-300">
-          {isAnySlotOpen ? "● Đang trong khung giờ chấm công" : "○ Ngoài khung giờ chấm công"}
-        </div>
+        <button className="mt-4 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
       </div>
     </div>
   );
@@ -600,7 +653,6 @@ function WorkerTopBar({
   positionId,
   onPositionChange,
   onLogout,
-  onClockClick,
   hasClockedInCurrentSlot
 }: {
   account: UserAccount;
@@ -609,7 +661,6 @@ function WorkerTopBar({
   positionId: string;
   onPositionChange: (value: string) => void;
   onLogout: () => void;
-  onClockClick: () => void;
   hasClockedInCurrentSlot: boolean;
 }) {
   const isAnyClockInSlotOpen = useMemo(() => {
@@ -638,15 +689,7 @@ function WorkerTopBar({
         </div>
       </div>
       <div className="flex items-center gap-2 md:gap-8">
-        {isAnyClockInSlotOpen && !hasClockedInCurrentSlot && (
-          <button 
-            className="min-h-9 rounded-lg bg-orange-500 px-3 text-xs font-black text-white hover:bg-orange-600 transition" 
-            onClick={onClockClick} 
-            type="button"
-          >
-            CHẤM CÔNG
-          </button>
-        )}
+        {isAnyClockInSlotOpen && !hasClockedInCurrentSlot ? <div className="hidden text-xs font-bold text-blue-100 md:block">Chấm công trên điện thoại</div> : null}
         <RoleSelect dark allowedPositions={allowedPositions} value={positionId} onChange={onPositionChange} />
         <div className="hidden items-center gap-3 md:flex">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-slate-200"><UserCircle className="h-9 w-9 text-slate-500" /></div>

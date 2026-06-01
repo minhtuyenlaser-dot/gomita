@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { 
-  StyleSheet, 
+import {
+  StyleSheet,
   View, 
   Text, 
   TextInput, 
@@ -8,19 +8,10 @@ import {
   ActivityIndicator, 
   KeyboardAvoidingView, 
   Platform, 
-  ScrollView 
+  ScrollView
 } from "react-native";
 import { Lock, User, Settings, Check } from "lucide-react-native";
-
-export function getApiUrl(serverIp: string, path: string) {
-  const ip = serverIp.trim();
-  if (ip.startsWith("http://") || ip.startsWith("https://")) {
-    return `${ip}${path}`;
-  }
-  // Nếu là domain chữ thì dùng https, IP số cục bộ thì dùng http
-  const protocol = (ip.includes("render.com") || ip.includes("gomita") || !/^[0-9.:]+$/.test(ip)) ? "https" : "http";
-  return `${protocol}://${ip}${path}`;
-}
+import { getApiUrl } from "../lib/api";
 
 export function LoginScreen({ 
   defaultIp, 
