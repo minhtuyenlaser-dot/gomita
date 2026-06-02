@@ -293,7 +293,7 @@ export default function IphoneClockinPage() {
                 <input
                   accept="image/*"
                   capture="user"
-                  className="mt-2 block w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-orange-500 file:px-3 file:py-2 file:font-black file:text-white"
+                  className="hidden"
                   disabled={submitting || isHoliday || !activeSlot}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -303,6 +303,20 @@ export default function IphoneClockinPage() {
                   }}
                   ref={fileInputRef}
                   type="file"
+                />
+                <button
+                  className="mt-2 flex h-12 w-full items-center justify-center rounded-xl bg-orange-500 px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={submitting || isHoliday || !activeSlot}
+                  onClick={() => fileInputRef.current?.click()}
+                  type="button"
+                >
+                  {submitting ? "Đang gửi chấm công..." : "Chụp ảnh chấm công"}
+                </button>
+                <input
+                  className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-500"
+                  disabled
+                  type="text"
+                  value={activeSlot ? `Sẵn sàng chụp cho mốc ${activeSlot}` : "Hiện không có mốc chấm công mở"}
                 />
                 <p className="mt-2 text-xs font-semibold text-slate-500">
                   Dùng Safari trên iPhone để chụp ảnh trực tiếp. Hệ thống sẽ lấy GPS cùng lúc.
