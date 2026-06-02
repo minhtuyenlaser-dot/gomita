@@ -701,7 +701,7 @@ export function WorkerDashboard({
         gps: gpsCoords,
         gpsAddress,
         gpsMeta,
-        time: currentTime
+        time: new Date().toISOString()
       };
 
       const res = await fetch(url, {
