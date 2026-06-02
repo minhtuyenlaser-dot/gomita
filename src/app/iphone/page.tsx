@@ -24,6 +24,9 @@ export default function IphoneClockinPage() {
   const [submitting, setSubmitting] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [accountUsername, setAccountUsername] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [accountPasswordConfirm, setAccountPasswordConfirm] = useState("");
 
   const currentDateKey = useMemo(() => {
     const year = currentTime.getFullYear();
@@ -81,6 +84,7 @@ export default function IphoneClockinPage() {
   useEffect(() => {
     if (!currentAccount) return;
     window.sessionStorage.setItem(sessionStorageKey, JSON.stringify({ account: currentAccount }));
+    setAccountUsername(currentAccount.username || "");
   }, [currentAccount]);
 
   const currentAttendanceStats = useMemo(() => {
@@ -127,6 +131,68 @@ export default function IphoneClockinPage() {
     setCurrentAccount(null);
     window.sessionStorage.removeItem(sessionStorageKey);
     setMessage("Đã đăng xuất.");
+  }
+
+  async function saveAccountCredentials() {
+    if (!currentAccount) return;
+    const nextUsername = accountUsername.trim().toLowerCase();
+    const nextPassword = accountPassword.trim();
+    const confirmPassword = accountPasswordConfirm.trim();
+
+    if (!nextUsername) {
+      setMessage("Tên đăng nhập không được để trống.");
+      return;
+    }
+
+    if (!nextPassword) {
+      setMessage("Mật khẩu mới không được để trống.");
+      return;
+    }
+
+    if (nextPassword !== confirmPassword) {
+      setMessage("Mật khẩu nhập lại không khớp.");
+      return;
+    }
+
+    const hasDuplicate = accounts.some(
+      (account) => account.id !== currentAccount.id && account.username.trim().toLowerCase() === nextUsername
+    );
+    if (hasDuplicate) {
+      setMessage("Tên đăng nhập này đã tồn tại.");
+      return;
+    }
+
+    setSubmitting(true);
+    setMessage("Đang lưu tài khoản...");
+    try {
+      const nextAccounts = accounts.map((account) =>
+        account.id === currentAccount.id
+          ? { ...account, username: nextUsername, password: nextPassword }
+          : account
+      );
+
+      const response = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounts: nextAccounts })
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        setMessage(result?.error || "Không lưu được tài khoản.");
+        return;
+      }
+
+      const nextUser = nextAccounts.find((account) => account.id === currentAccount.id) || currentAccount;
+      setAccounts(nextAccounts);
+      setCurrentAccount(nextUser);
+      setAccountPassword("");
+      setAccountPasswordConfirm("");
+      setMessage("Đã cập nhật tên đăng nhập và mật khẩu.");
+    } catch {
+      setMessage("Không lưu được tài khoản.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function readPhoto(file: File) {
@@ -287,6 +353,48 @@ export default function IphoneClockinPage() {
                       : "Hiện không nằm trong khung giờ chấm công."}
                 </div>
                 <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{todayStatusText}</div>
+              </div>
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="text-sm font-black text-slate-800">Tài khoản</div>
+                <div className="mt-1 text-xs font-semibold text-slate-500">
+                  Đổi tên đăng nhập và mật khẩu của chính bạn.
+                </div>
+                <div className="mt-3 grid gap-3">
+                  <input
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
+                    onChange={(event) => setAccountUsername(event.target.value)}
+                    placeholder="Tên đăng nhập mới"
+                    value={accountUsername}
+                  />
+                  <input
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
+                    onChange={(event) => setAccountPassword(event.target.value)}
+                    placeholder="Mật khẩu mới"
+                    type="password"
+                    value={accountPassword}
+                  />
+                  <input
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
+                    onChange={(event) => setAccountPasswordConfirm(event.target.value)}
+                    placeholder="Nhập lại mật khẩu mới"
+                    type="password"
+                    value={accountPasswordConfirm}
+                  />
+                  <button
+                    className="h-11 rounded-xl bg-slate-900 font-black text-white disabled:opacity-60"
+                    disabled={submitting || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
+                    onClick={saveAccountCredentials}
+                    type="button"
+                  >
+                    Lưu tài khoản
+                  </button>
+                </div>
               </div>
               <div className="mt-4">
                 <label className="block text-sm font-black text-slate-800">Chụp ảnh chấm công</label>

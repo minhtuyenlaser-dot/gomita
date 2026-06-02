@@ -76,6 +76,12 @@ export default function App() {
     setApiData(null);
   };
 
+  const handleUserChange = async (user: any) => {
+    setCurrentUser(user);
+    await AsyncStorage.setItem("gomita_user_session", JSON.stringify(user));
+    await syncWithServer(user.id, serverIp);
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -94,6 +100,7 @@ export default function App() {
           serverIp={serverIp} 
           apiData={apiData}
           onLogout={handleLogout}
+          onUserChange={handleUserChange}
           onRefresh={async () => {
             await syncWithServer(currentUser.id, serverIp);
           }}

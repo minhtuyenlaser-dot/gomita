@@ -33,12 +33,14 @@ export function WorkerDashboard({
   serverIp, 
   apiData, 
   onLogout,
+  onUserChange,
   onRefresh
 }: { 
   user: any; 
   serverIp: string; 
   apiData: any; 
   onLogout: () => void;
+  onUserChange: (user: any) => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
   const [loading, setLoading] = useState(false);
@@ -71,6 +73,13 @@ export function WorkerDashboard({
   const [otTo, setOtTo] = useState("20:00");
   const [otReason, setOtReason] = useState("");
   const [selectedOrderCode, setSelectedOrderCode] = useState("");
+  const [accountUsername, setAccountUsername] = useState(user.username || "");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [accountPasswordConfirm, setAccountPasswordConfirm] = useState("");
+
+  useEffect(() => {
+    setAccountUsername(user.username || "");
+  }, [user.username]);
 
   const monthDays = useMemo(() => {
     const now = new Date();
@@ -234,6 +243,73 @@ export function WorkerDashboard({
     } catch (err) {
       console.warn("Lỗi gửi chấm công bù:", err);
       Alert.alert("Lỗi kết nối", "Không thể kết nối API Server để lưu yêu cầu chấm công bù!");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveAccountCredentials = async () => {
+    const nextUsername = accountUsername.trim().toLowerCase();
+    const nextPassword = accountPassword.trim();
+    const confirmPassword = accountPasswordConfirm.trim();
+
+    if (!nextUsername) {
+      Alert.alert("Thiếu thông tin", "Tên đăng nhập không được để trống.");
+      return;
+    }
+
+    if (!nextPassword) {
+      Alert.alert("Thiếu thông tin", "Mật khẩu mới không được để trống.");
+      return;
+    }
+
+    if (nextPassword !== confirmPassword) {
+      Alert.alert("Không khớp", "Mật khẩu nhập lại không khớp.");
+      return;
+    }
+
+    const accounts = Array.isArray(apiData?.accounts) ? apiData.accounts : [];
+    const hasDuplicate = accounts.some(
+      (account: any) => account.id !== user.id && String(account.username || "").trim().toLowerCase() === nextUsername
+    );
+
+    if (hasDuplicate) {
+      Alert.alert("Trùng tên đăng nhập", "Tên đăng nhập này đã có người dùng khác.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const nextAccounts = accounts.map((account: any) =>
+        account.id === user.id
+          ? { ...account, username: nextUsername, password: nextPassword }
+          : account
+      );
+
+      const response = await fetch(getApiUrl(serverIp, "/api/sync"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounts: nextAccounts })
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result?.success) {
+        Alert.alert("Lỗi", result?.error || "Không lưu được tài khoản.");
+        return;
+      }
+
+      const nextUser = nextAccounts.find((account: any) => account.id === user.id) || {
+        ...user,
+        username: nextUsername,
+        password: nextPassword
+      };
+
+      await onUserChange(nextUser);
+      setAccountPassword("");
+      setAccountPasswordConfirm("");
+      Alert.alert("Thành công", "Đã cập nhật tên đăng nhập và mật khẩu.");
+    } catch (error) {
+      Alert.alert("Lỗi kết nối", error instanceof Error ? error.message : "Không lưu được tài khoản.");
     } finally {
       setLoading(false);
     }
@@ -784,6 +860,50 @@ export function WorkerDashboard({
       </View>
 
       {/* BẢNG LƯƠNG TẠM TÍNH CARD */}
+      <View style={styles.sectionCard}>
+        <View style={styles.sectionHeader}>
+          <LogOut size={20} color="#f97316" />
+          <Text style={styles.sectionTitle}>Tài khoản</Text>
+        </View>
+        <Text style={styles.accountHint}>Đổi tên đăng nhập và mật khẩu của chính bạn.</Text>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setAccountUsername}
+          placeholder="Tên đăng nhập mới"
+          placeholderTextColor="#64748b"
+          style={styles.accountInput}
+          value={accountUsername}
+        />
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setAccountPassword}
+          placeholder="Mật khẩu mới"
+          placeholderTextColor="#64748b"
+          secureTextEntry
+          style={styles.accountInput}
+          value={accountPassword}
+        />
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setAccountPasswordConfirm}
+          placeholder="Nhập lại mật khẩu mới"
+          placeholderTextColor="#64748b"
+          secureTextEntry
+          style={styles.accountInput}
+          value={accountPasswordConfirm}
+        />
+        <TouchableOpacity
+          disabled={loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
+          onPress={saveAccountCredentials}
+          style={[styles.accountSaveBtn, (loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()) && styles.accountSaveBtnDisabled]}
+        >
+          <Text style={styles.accountSaveBtnText}>Lưu tài khoản</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.sectionCard}>
         <View style={styles.sectionHeader}>
           <CircleDollarSign size={20} color="#f97316" />
@@ -1364,6 +1484,40 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 15,
     color: "#f8fafc",
+    fontWeight: "900",
+  },
+  accountHint: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
+  accountInput: {
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e3a66",
+    backgroundColor: "#071a38",
+    color: "#f8fafc",
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  accountSaveBtn: {
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: "#f97316",
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  accountSaveBtnDisabled: {
+    opacity: 0.55,
+  },
+  accountSaveBtnText: {
+    color: "#ffffff",
+    fontSize: 14,
     fontWeight: "900",
   },
   salaryWidget: {
