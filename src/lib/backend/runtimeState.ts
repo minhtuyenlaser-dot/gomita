@@ -3,7 +3,8 @@ import type { LeaveRequest } from "@/modules/hr/leave";
 import { demoOrders, type Order } from "@/modules/orders/orderFlow";
 import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
 import { createSupabaseAdminClient } from "@/lib/backend/supabaseAdmin";
-import type { LegacyJsonSnapshot } from "@/lib/backend/types";
+import type { LegacyJsonSnapshot, NotificationSubscription } from "@/lib/backend/types";
+import { sendWebPushNotification } from "@/lib/backend/webPush";
 
 export type RuntimeState = LegacyJsonSnapshot & {
   schemaVersion: number;
@@ -28,7 +29,8 @@ export function buildDefaultRuntimeState(): RuntimeState {
     attendance: {},
     attendanceDetails: {},
     attendanceCompensationState: {},
-    feedbackEntries: []
+    feedbackEntries: [],
+    pushSubscriptions: []
   };
 }
 
@@ -38,6 +40,165 @@ function mergeState(base: RuntimeState, patch: RuntimePatch): RuntimeState {
     ...patch,
     schemaVersion: CURRENT_SCHEMA_VERSION
   };
+}
+
+function normalizeDisplayText(value: string | undefined) {
+  return (value || "").trim().toLowerCase();
+}
+
+function getAccountByDisplayName(state: RuntimeState, displayName: string) {
+  const normalized = normalizeDisplayText(displayName);
+  if (!normalized) return null;
+  return state.accounts.find((account) => normalizeDisplayText(account.displayName) === normalized) ?? null;
+}
+
+function collectOrderAssigneeIds(state: RuntimeState, order: Order) {
+  const names = new Set<string>();
+  const addNames = (values?: string[]) => {
+    (values || []).forEach((value) => {
+      if (value?.trim()) names.add(value.trim());
+    });
+  };
+
+  switch (order.step) {
+    case "Tiếp nhận":
+    case "Báo giá":
+    case "Hoàn công":
+      addNames([order.saleName]);
+      break;
+    case "Thiết kế":
+      addNames(order.designerNames?.length ? order.designerNames : [order.designerName]);
+      break;
+    case "Ra file":
+      addNames(order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]);
+      break;
+    case "Sản xuất":
+      addNames(order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]);
+      addNames([order.workshopManagerName]);
+      break;
+    case "Lắp đặt":
+      addNames(order.installerNames?.length ? order.installerNames : [order.installerName]);
+      addNames(order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName]);
+      break;
+    case "Nghiệm thu":
+      addNames(order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName]);
+      addNames(order.installerNames?.length ? order.installerNames : [order.installerName]);
+      break;
+  }
+
+  return Array.from(names)
+    .map((name) => getAccountByDisplayName(state, name)?.id ?? null)
+    .filter((value): value is string => Boolean(value));
+}
+
+type PendingPushNotification = {
+  userIds: string[];
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+};
+
+function getNormalizedRequestSlots(request: any) {
+  return Array.isArray(request?.slots) ? [...request.slots].sort().join("|") : "";
+}
+
+function queuePushNotifications(prev: RuntimeState, next: RuntimeState) {
+  const queue: PendingPushNotification[] = [];
+
+  const prevOrders = new Map(prev.orders.map((order) => [order.id, order]));
+  next.orders.forEach((order) => {
+    const prevOrder = prevOrders.get(order.id);
+    const nextUserIds = collectOrderAssigneeIds(next, order);
+    const prevUserIds = prevOrder ? collectOrderAssigneeIds(prev, prevOrder) : [];
+    const assignmentChanged =
+      !prevOrder ||
+      prevOrder.step !== order.step ||
+      prevOrder.assignedTaskNote !== order.assignedTaskNote ||
+      prevUserIds.join("|") !== nextUserIds.join("|");
+
+    if (assignmentChanged && nextUserIds.length > 0) {
+      queue.push({
+        userIds: nextUserIds,
+        title: "Đơn hàng mới được giao",
+        body: `${order.code} • ${order.customerName} • Công đoạn ${order.step}`,
+        url: "/iphone",
+        tag: `order-${order.id}-${order.step}`
+      });
+    }
+  });
+
+  const prevOt = new Map(
+    (prev.overtimeRequests || []).map((request: any) => [request.id || `${request.employeeId}-${request.date}-${request.from}-${request.to}`, request])
+  );
+  (next.overtimeRequests || []).forEach((request: any) => {
+    const key = request.id || `${request.employeeId}-${request.date}-${request.from}-${request.to}`;
+    const before = prevOt.get(key);
+    if (request.status === "approved" && before?.status !== "approved" && request.employeeId) {
+      queue.push({
+        userIds: [request.employeeId],
+        title: "Tăng ca đã được duyệt",
+        body: `${request.date || "Ca tăng ca"} • ${request.from || ""}-${request.to || ""}`.trim(),
+        url: "/iphone",
+        tag: `ot-${key}`
+      });
+    }
+  });
+
+  const prevComp = new Map(
+    (prev.compensationRequests || []).map((request: any) => [
+      request.id || `${request.employeeId}-${request.date}-${getNormalizedRequestSlots(request)}`,
+      request
+    ])
+  );
+  (next.compensationRequests || []).forEach((request: any) => {
+    const key = request.id || `${request.employeeId}-${request.date}-${getNormalizedRequestSlots(request)}`;
+    const before = prevComp.get(key);
+    if (request.status === "approved" && before?.status !== "approved" && request.employeeId) {
+      queue.push({
+        userIds: [request.employeeId],
+        title: "Chấm công bù đã được duyệt",
+        body: `${request.date || ""} • ${Array.isArray(request.slots) ? request.slots.join(", ") : ""}`.trim(),
+        url: "/iphone",
+        tag: `comp-${key}`
+      });
+    }
+  });
+
+  return queue;
+}
+
+async function deliverPushNotifications(state: RuntimeState, queue: PendingPushNotification[]) {
+  const subscriptions = Array.isArray(state.pushSubscriptions) ? state.pushSubscriptions : [];
+  if (queue.length === 0 || subscriptions.length === 0) return state;
+
+  const invalidEndpoints = new Set<string>();
+
+  for (const item of queue) {
+    const targets = subscriptions.filter((subscription) => item.userIds.includes(subscription.userId));
+    for (const subscription of targets) {
+      try {
+        await sendWebPushNotification(subscription, {
+          title: item.title,
+          body: item.body,
+          url: item.url,
+          tag: item.tag
+        });
+      } catch (error: any) {
+        const statusCode = error?.statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          invalidEndpoints.add(subscription.endpoint);
+        }
+      }
+    }
+  }
+
+  if (invalidEndpoints.size > 0) {
+    state.pushSubscriptions = subscriptions.filter((subscription) => !invalidEndpoints.has(subscription.endpoint));
+    await saveRuntimeState(state);
+  }
+
+  return state;
 }
 
 export async function loadRuntimeState(): Promise<RuntimeState> {
@@ -79,7 +240,54 @@ export async function applyRuntimePatch(patch: RuntimePatch) {
   const state = await loadRuntimeState();
   const nextState = mergeState(state, patch);
   await saveRuntimeState(nextState);
+  const pushQueue = queuePushNotifications(state, nextState);
+  await deliverPushNotifications(nextState, pushQueue);
   return nextState;
+}
+
+export async function upsertPushSubscription(payload: {
+  userId: string;
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  deviceLabel?: string;
+}) {
+  const state = await loadRuntimeState();
+  const current = Array.isArray(state.pushSubscriptions) ? state.pushSubscriptions : [];
+  const now = new Date().toISOString();
+  const existing = current.find((item) => item.endpoint === payload.endpoint);
+
+  const nextItem: NotificationSubscription = existing
+    ? {
+        ...existing,
+        userId: payload.userId,
+        keys: payload.keys,
+        deviceLabel: payload.deviceLabel || existing.deviceLabel,
+        updatedAt: now
+      }
+    : {
+        id: `push-${Date.now()}`,
+        userId: payload.userId,
+        endpoint: payload.endpoint,
+        keys: payload.keys,
+        deviceLabel: payload.deviceLabel || "",
+        createdAt: now,
+        updatedAt: now
+      };
+
+  state.pushSubscriptions = existing
+    ? current.map((item) => (item.endpoint === payload.endpoint ? nextItem : item))
+    : [nextItem, ...current];
+
+  await saveRuntimeState(state);
+  return state;
+}
+
+export async function removePushSubscription(endpoint: string) {
+  const state = await loadRuntimeState();
+  const current = Array.isArray(state.pushSubscriptions) ? state.pushSubscriptions : [];
+  state.pushSubscriptions = current.filter((item) => item.endpoint !== endpoint);
+  await saveRuntimeState(state);
+  return state;
 }
 
 export function authenticateRuntimeAccount(state: RuntimeState, username: string, password: string) {

@@ -11,6 +11,7 @@ import {
   TextInput
 } from "react-native";
 import { CameraView, Camera as ExpoCamera } from "expo-camera";
+import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import * as Location from "expo-location";
 import { 
   LogOut, 
@@ -76,6 +77,7 @@ export function WorkerDashboard({
   const [accountUsername, setAccountUsername] = useState(user.username || "");
   const [accountPassword, setAccountPassword] = useState("");
   const [accountPasswordConfirm, setAccountPasswordConfirm] = useState("");
+  const [accountEditorOpen, setAccountEditorOpen] = useState(false);
 
   useEffect(() => {
     setAccountUsername(user.username || "");
@@ -685,7 +687,12 @@ export function WorkerDashboard({
 
     try {
       // Chụp ảnh selfie với tỉ lệ nén tối ưu (25%) để truyền tải dữ liệu nhanh và tiết kiệm dung lượng
-      const photo = await cameraRef.takePictureAsync({ quality: 0.25, base64: true });
+      const photo = await cameraRef.takePictureAsync({ quality: 0.4, base64: false, skipProcessing: true });
+      const compressedPhoto = await manipulateAsync(
+        photo.uri,
+        [{ resize: { width: 960 } }],
+        { compress: 0.3, format: SaveFormat.JPEG, base64: true }
+      );
       
       // Gửi chấm công lên API Server
       const url = getApiUrl(serverIp, "/api/clockin");
@@ -697,7 +704,7 @@ export function WorkerDashboard({
         slot: currentSlot,
         orderCode: activeJobToReport ? activeJobToReport.code : null,
         isCompleted: isCompleted, // Nếu có hỏi tiến độ
-        photo: photo.base64 ? `data:image/jpeg;base64,${photo.base64}` : null,
+        photo: compressedPhoto.base64 ? `data:image/jpeg;base64,${compressedPhoto.base64}` : null,
         gps: gpsCoords,
         gpsAddress,
         gpsMeta,
@@ -865,43 +872,52 @@ export function WorkerDashboard({
           <LogOut size={20} color="#f97316" />
           <Text style={styles.sectionTitle}>Tài khoản</Text>
         </View>
-        <Text style={styles.accountHint}>Đổi tên đăng nhập và mật khẩu của chính bạn.</Text>
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          onChangeText={setAccountUsername}
-          placeholder="Tên đăng nhập mới"
-          placeholderTextColor="#64748b"
-          style={styles.accountInput}
-          value={accountUsername}
-        />
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          onChangeText={setAccountPassword}
-          placeholder="Mật khẩu mới"
-          placeholderTextColor="#64748b"
-          secureTextEntry
-          style={styles.accountInput}
-          value={accountPassword}
-        />
-        <TextInput
-          autoCapitalize="none"
-          autoCorrect={false}
-          onChangeText={setAccountPasswordConfirm}
-          placeholder="Nhập lại mật khẩu mới"
-          placeholderTextColor="#64748b"
-          secureTextEntry
-          style={styles.accountInput}
-          value={accountPasswordConfirm}
-        />
-        <TouchableOpacity
-          disabled={loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
-          onPress={saveAccountCredentials}
-          style={[styles.accountSaveBtn, (loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()) && styles.accountSaveBtnDisabled]}
-        >
-          <Text style={styles.accountSaveBtnText}>Lưu tài khoản</Text>
+        <Text style={styles.accountHint}>Không hiện form đổi mật khẩu liên tục. Bấm nút bên dưới khi cần thay đổi.</Text>
+        <TouchableOpacity onPress={() => setAccountEditorOpen((current) => !current)} style={styles.accountToggleBtn}>
+          <Text style={styles.accountToggleBtnText}>
+            {accountEditorOpen ? "Ẩn đổi tài khoản" : "Đổi tên đăng nhập / mật khẩu"}
+          </Text>
         </TouchableOpacity>
+        {accountEditorOpen ? (
+          <View style={styles.accountEditorWrap}>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setAccountUsername}
+              placeholder="Tên đăng nhập mới"
+              placeholderTextColor="#64748b"
+              style={styles.accountInput}
+              value={accountUsername}
+            />
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setAccountPassword}
+              placeholder="Mật khẩu mới"
+              placeholderTextColor="#64748b"
+              secureTextEntry
+              style={styles.accountInput}
+              value={accountPassword}
+            />
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setAccountPasswordConfirm}
+              placeholder="Nhập lại mật khẩu mới"
+              placeholderTextColor="#64748b"
+              secureTextEntry
+              style={styles.accountInput}
+              value={accountPasswordConfirm}
+            />
+            <TouchableOpacity
+              disabled={loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
+              onPress={saveAccountCredentials}
+              style={[styles.accountSaveBtn, (loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()) && styles.accountSaveBtnDisabled]}
+            >
+              <Text style={styles.accountSaveBtnText}>Lưu tài khoản</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.sectionCard}>
@@ -1491,6 +1507,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     marginBottom: 12,
+  },
+  accountToggleBtn: {
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e3a66",
+    backgroundColor: "#0f274d",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 14,
+  },
+  accountToggleBtnText: {
+    color: "#f8fafc",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  accountEditorWrap: {
+    marginTop: 12,
   },
   accountInput: {
     minHeight: 44,

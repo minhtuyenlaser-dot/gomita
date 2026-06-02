@@ -13,6 +13,13 @@ type RuntimeData = {
 
 const sessionStorageKey = "gomita_iphone_web_session_v1";
 
+function base64UrlToUint8Array(base64Url: string) {
+  const padding = "=".repeat((4 - (base64Url.length % 4)) % 4);
+  const base64 = (base64Url + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+}
+
 export default function IphoneClockinPage() {
   const [accounts, setAccounts] = useState<UserAccount[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
@@ -27,6 +34,10 @@ export default function IphoneClockinPage() {
   const [accountUsername, setAccountUsername] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
   const [accountPasswordConfirm, setAccountPasswordConfirm] = useState("");
+  const [accountEditorOpen, setAccountEditorOpen] = useState(false);
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
 
   const currentDateKey = useMemo(() => {
     const year = currentTime.getFullYear();
@@ -87,6 +98,27 @@ export default function IphoneClockinPage() {
     setAccountUsername(currentAccount.username || "");
   }, [currentAccount]);
 
+  useEffect(() => {
+    const supported =
+      typeof window !== "undefined" &&
+      "serviceWorker" in navigator &&
+      "PushManager" in window &&
+      "Notification" in window;
+    setPushSupported(supported);
+  }, []);
+
+  const syncPushStatus = useCallback(async () => {
+    if (!pushSupported || !currentAccount) return;
+    const registration = await navigator.serviceWorker.register("/push-sw.js");
+    const subscription = await registration.pushManager.getSubscription();
+    setPushEnabled(Boolean(subscription));
+  }, [currentAccount, pushSupported]);
+
+  useEffect(() => {
+    if (!currentAccount || !pushSupported) return;
+    void syncPushStatus();
+  }, [currentAccount, pushSupported, syncPushStatus]);
+
   const currentAttendanceStats = useMemo(() => {
     if (!currentAccount) return { workedSlots: 0, totalSlots: monthDays.length * attendanceSlots.length };
     const workedSlots = monthDays.reduce((total, day) => {
@@ -131,6 +163,7 @@ export default function IphoneClockinPage() {
     setCurrentAccount(null);
     window.sessionStorage.removeItem(sessionStorageKey);
     setMessage("Đã đăng xuất.");
+    setPushEnabled(false);
   }
 
   async function saveAccountCredentials() {
@@ -202,6 +235,74 @@ export default function IphoneClockinPage() {
       reader.onerror = () => reject(new Error("Không đọc được ảnh."));
       reader.readAsDataURL(file);
     });
+  }
+
+  async function enablePushNotifications() {
+    if (!currentAccount || !pushSupported) return;
+    setPushBusy(true);
+    try {
+      const keyResponse = await fetch("/api/push/public-key", { cache: "no-store" });
+      const keyPayload = await keyResponse.json();
+      if (!keyResponse.ok || !keyPayload?.publicKey) {
+        setMessage(keyPayload?.error || "Máy chủ chưa cấu hình thông báo.");
+        return;
+      }
+
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setMessage("Bạn chưa cấp quyền thông báo cho trình duyệt.");
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.register("/push-sw.js");
+      const existing = await registration.pushManager.getSubscription();
+      const subscription =
+        existing ||
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: base64UrlToUint8Array(String(keyPayload.publicKey))
+        }));
+
+      await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentAccount.id,
+          deviceLabel: "iphone-web",
+          subscription: subscription.toJSON()
+        })
+      });
+
+      setPushEnabled(true);
+      setMessage("Đã bật thông báo cho thiết bị này.");
+    } catch {
+      setMessage("Không bật được thông báo trên thiết bị này.");
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function disablePushNotifications() {
+    if (!pushSupported) return;
+    setPushBusy(true);
+    try {
+      const registration = await navigator.serviceWorker.register("/push-sw.js");
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await fetch("/api/push/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: subscription.endpoint })
+        });
+        await subscription.unsubscribe();
+      }
+      setPushEnabled(false);
+      setMessage("Đã tắt thông báo trên thiết bị này.");
+    } catch {
+      setMessage("Không tắt được thông báo trên thiết bị này.");
+    } finally {
+      setPushBusy(false);
+    }
   }
 
   async function getCurrentGpsText() {
@@ -355,46 +456,95 @@ export default function IphoneClockinPage() {
                 <div className="mt-2 text-xs font-semibold leading-5 text-slate-500">{todayStatusText}</div>
               </div>
               <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-sm font-black text-slate-800">Tài khoản</div>
-                <div className="mt-1 text-xs font-semibold text-slate-500">
-                  Đổi tên đăng nhập và mật khẩu của chính bạn.
-                </div>
-                <div className="mt-3 grid gap-3">
-                  <input
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
-                    onChange={(event) => setAccountUsername(event.target.value)}
-                    placeholder="Tên đăng nhập mới"
-                    value={accountUsername}
-                  />
-                  <input
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
-                    onChange={(event) => setAccountPassword(event.target.value)}
-                    placeholder="Mật khẩu mới"
-                    type="password"
-                    value={accountPassword}
-                  />
-                  <input
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
-                    onChange={(event) => setAccountPasswordConfirm(event.target.value)}
-                    placeholder="Nhập lại mật khẩu mới"
-                    type="password"
-                    value={accountPasswordConfirm}
-                  />
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-black text-slate-800">Tài khoản</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">
+                      Đổi tên đăng nhập và mật khẩu của chính bạn khi cần.
+                    </div>
+                  </div>
                   <button
-                    className="h-11 rounded-xl bg-slate-900 font-black text-white disabled:opacity-60"
-                    disabled={submitting || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
-                    onClick={saveAccountCredentials}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"
+                    onClick={() => setAccountEditorOpen((current) => !current)}
                     type="button"
                   >
-                    Lưu tài khoản
+                    {accountEditorOpen ? "Ẩn đổi mật khẩu" : "Đổi tài khoản"}
                   </button>
                 </div>
+                {accountEditorOpen ? (
+                  <div className="mt-3 grid gap-3">
+                    <input
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
+                      onChange={(event) => setAccountUsername(event.target.value)}
+                      placeholder="Tên đăng nhập mới"
+                      value={accountUsername}
+                    />
+                    <input
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
+                      onChange={(event) => setAccountPassword(event.target.value)}
+                      placeholder="Mật khẩu mới"
+                      type="password"
+                      value={accountPassword}
+                    />
+                    <input
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      className="h-11 rounded-xl border border-slate-200 bg-white px-4 outline-none focus:border-orange-400"
+                      onChange={(event) => setAccountPasswordConfirm(event.target.value)}
+                      placeholder="Nhập lại mật khẩu mới"
+                      type="password"
+                      value={accountPasswordConfirm}
+                    />
+                    <button
+                      className="h-11 rounded-xl bg-slate-900 font-black text-white disabled:opacity-60"
+                      disabled={submitting || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
+                      onClick={saveAccountCredentials}
+                      type="button"
+                    >
+                      Lưu tài khoản
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-black text-slate-800">Thông báo</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">
+                      Nhận thông báo giao việc mới, duyệt tăng ca và chấm công bù ngay trên điện thoại.
+                    </div>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-[11px] font-black ${pushEnabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                    {pushEnabled ? "Đang bật" : "Chưa bật"}
+                  </span>
+                </div>
+                <div className="mt-3 flex gap-3">
+                  <button
+                    className="h-11 flex-1 rounded-xl bg-orange-500 font-black text-white disabled:opacity-60"
+                    disabled={!pushSupported || pushBusy || pushEnabled}
+                    onClick={enablePushNotifications}
+                    type="button"
+                  >
+                    {pushBusy && !pushEnabled ? "Đang bật..." : "Bật thông báo"}
+                  </button>
+                  <button
+                    className="h-11 flex-1 rounded-xl border border-slate-200 bg-white font-black text-slate-700 disabled:opacity-60"
+                    disabled={!pushSupported || pushBusy || !pushEnabled}
+                    onClick={disablePushNotifications}
+                    type="button"
+                  >
+                    {pushBusy && pushEnabled ? "Đang tắt..." : "Tắt thông báo"}
+                  </button>
+                </div>
+                {!pushSupported ? (
+                  <p className="mt-2 text-xs font-semibold text-amber-600">
+                    Trình duyệt hiện tại chưa hỗ trợ Web Push. Dùng Safari đã thêm ra màn hình chính hoặc Chrome Android.
+                  </p>
+                ) : null}
               </div>
               <div className="mt-4">
                 <label className="block text-sm font-black text-slate-800">Chụp ảnh chấm công</label>

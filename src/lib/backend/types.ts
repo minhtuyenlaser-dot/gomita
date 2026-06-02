@@ -20,6 +20,19 @@ export type FeedbackEntry = {
   createdAt: string;
 };
 
+export type NotificationSubscription = {
+  id: string;
+  userId: string;
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  deviceLabel?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type LegacyJsonSnapshot = {
   accounts: UserAccount[];
   orders: Order[];
@@ -33,6 +46,7 @@ export type LegacyJsonSnapshot = {
   attendanceDetails: Record<string, LegacyAttendanceDetail>;
   attendanceCompensationState?: Record<string, unknown>;
   feedbackEntries?: FeedbackEntry[];
+  pushSubscriptions?: NotificationSubscription[];
 };
 
 export type LegacyExportRow = Record<string, unknown>;

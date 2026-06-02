@@ -4,7 +4,13 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Quản lý GOMITA",
-  description: "Phần mềm quản lý công ty nội thất GOMITA"
+  description: "Phần mềm quản lý công ty nội thất GOMITA",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "GOMITA"
+  }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

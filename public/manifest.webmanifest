@@ -1,0 +1,12 @@
+{
+  "name": "GOMITA Worker",
+  "short_name": "GOMITA",
+  "start_url": "/iphone",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#f97316",
+  "lang": "vi",
+  "scope": "/",
+  "description": "Web điện thoại cho nhân sự GOMITA: chấm công, xem công và nhận thông báo.",
+  "icons": []
+}
