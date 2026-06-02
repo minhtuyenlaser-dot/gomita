@@ -27,7 +27,8 @@ export function buildDefaultRuntimeState(): RuntimeState {
     holidayDates: [],
     attendance: {},
     attendanceDetails: {},
-    attendanceCompensationState: {}
+    attendanceCompensationState: {},
+    feedbackEntries: []
   };
 }
 
@@ -137,6 +138,33 @@ function toAttendanceKey(userId: string, item: { date?: string; day?: number; sl
   return `${userId}-${dayToken}-${item.slot}`;
 }
 
+function normalizeAttendanceTime(dayValue: string, rawTime?: string) {
+  if (rawTime) {
+    const parsed = new Date(rawTime);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+
+    const match = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (match) {
+      const localDateString = toCurrentLocalDateString();
+      const parts = localDateString.split("-");
+      const year = Number(parts[0]);
+      const month = Number(parts[1]);
+      const day = Number(dayValue);
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const second = Number(match[3] || "0");
+      const combined = new Date(year, month - 1, day, hour, minute, second);
+      if (!Number.isNaN(combined.getTime())) {
+        return combined.toISOString();
+      }
+    }
+  }
+
+  return new Date().toISOString();
+}
+
 export async function applyClockIn(payload: {
   userId: string;
   date: string;
@@ -165,13 +193,7 @@ export async function applyClockIn(payload: {
       gps: payload.gps || "",
       gpsAddress: payload.gpsAddress || "",
       gpsMeta: payload.gpsMeta || null,
-      time:
-        payload.time ||
-        new Date().toLocaleTimeString("vi-VN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        })
+      time: normalizeAttendanceTime(String(payload.date), payload.time)
     };
   }
 

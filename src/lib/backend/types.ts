@@ -11,6 +11,15 @@ export type LegacyAttendanceDetail = {
   time: string;
 };
 
+export type FeedbackEntry = {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderPosition: string;
+  content: string;
+  createdAt: string;
+};
+
 export type LegacyJsonSnapshot = {
   accounts: UserAccount[];
   orders: Order[];
@@ -23,6 +32,7 @@ export type LegacyJsonSnapshot = {
   attendance: Record<string, string>;
   attendanceDetails: Record<string, LegacyAttendanceDetail>;
   attendanceCompensationState?: Record<string, unknown>;
+  feedbackEntries?: FeedbackEntry[];
 };
 
 export type LegacyExportRow = Record<string, unknown>;

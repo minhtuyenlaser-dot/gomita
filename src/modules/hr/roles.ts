@@ -55,6 +55,7 @@ export function getMenuForPosition(positionId: string): MenuItem[] {
       { id: "finance", label: "Kế toán", icon: "finance" },
       { id: "reports", label: "Bảng lương công ty", icon: "reports" },
       { id: "admin", label: "Sao lưu & Phục hồi", icon: "admin" },
+      { id: "feedback", label: "Góp ý PM", icon: "feedback" },
       profileMenu
     ];
   }

@@ -227,6 +227,33 @@ export function AccountManagement({
     return detail.gpsAddress || detail.gpsMeta?.address || detail.gps || "Chưa có vị trí";
   }
 
+  function formatAttendanceTime(detail: AttendanceDetail | null, attendanceKey: string | null) {
+    const rawTime = detail?.time;
+    if (!rawTime) return "Chưa có thời gian lưu";
+    const parsed = new Date(rawTime);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleString("vi-VN");
+    }
+    const parts = attendanceKey?.split("-") || [];
+    const dayToken = parts.length >= 3 ? Number(parts[parts.length - 2]) : NaN;
+    const timeMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!Number.isNaN(dayToken) && timeMatch) {
+      const now = new Date();
+      const fallback = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        dayToken,
+        Number(timeMatch[1]),
+        Number(timeMatch[2]),
+        Number(timeMatch[3] || "0")
+      );
+      if (!Number.isNaN(fallback.getTime())) {
+        return fallback.toLocaleString("vi-VN");
+      }
+    }
+    return "Chưa có thời gian lưu";
+  }
+
   function openAttendanceModal(account: UserAccount) {
     setSelectedAttendanceAccount(account);
     const firstKey = attendanceMonthDays
@@ -545,7 +572,7 @@ export function AccountManagement({
                     <div className="mt-3 rounded-lg bg-white p-3 text-sm">
                       <div><span className="font-black">Mốc:</span> {selectedAttendanceKey.split("-").slice(-2).join(" • ")}</div>
                       <div className="mt-2"><span className="font-black">Trạng thái:</span> {getAttendanceStatusLabel(attendance[selectedAttendanceKey])}</div>
-                      <div className="mt-2"><span className="font-black">Thời gian:</span> {selectedAttendanceDetail?.time ? new Date(selectedAttendanceDetail.time).toLocaleString("vi-VN") : "Chưa có thời gian lưu"}</div>
+                      <div className="mt-2"><span className="font-black">Thời gian:</span> {formatAttendanceTime(selectedAttendanceDetail, selectedAttendanceKey)}</div>
                       <div className="mt-2 flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 text-orange-500" /><span><span className="font-black">GPS:</span> {getAttendanceGpsText(selectedAttendanceDetail)}</span></div>
                     </div>
                     <div className="mt-4 rounded-lg bg-white p-3">

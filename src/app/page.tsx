@@ -10,6 +10,7 @@ import {
   LineChart,
   LogOut,
   Menu,
+  MessageSquareMore,
   ReceiptText,
   Settings,
   ShieldCheck,
@@ -29,6 +30,7 @@ import { getMenuForPosition, mustClockIn, positions } from "@/modules/hr/roles";
 import { FinanceDashboard } from "@/modules/finance/components/FinanceDashboard";
 import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
 import { getApiUrl } from "@/lib/api";
+import type { FeedbackEntry } from "@/lib/backend/types";
 import { OrderDashboard } from "@/modules/orders/components/OrderDashboard";
 import { demoOrders, type Order, getAssignedNames } from "@/modules/orders/orderFlow";
 import { AttendanceDashboard } from "@/modules/attendance/components/AttendanceDashboard";
@@ -44,7 +46,8 @@ const iconMap = {
   settings: Settings,
   production: Folder,
   archive: Folder,
-  admin: ShieldCheck
+  admin: ShieldCheck,
+  feedback: MessageSquareMore
 };
 
 function isValidStoredAccount(value: unknown): value is UserAccount {
@@ -119,9 +122,12 @@ export default function HomePage() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [customerDebts, setCustomerDebts] = useState<CustomerDebt[]>([]);
+  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntry[]>([]);
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [attendanceDetails, setAttendanceDetails] = useState<Record<string, { photo: string; gps: string; time: string }>>({});
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackText, setFeedbackText] = useState("");
 
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
@@ -137,6 +143,7 @@ export default function HomePage() {
           if (data.leaveRequests) setLeaveRequests(data.leaveRequests);
           if (data.cashTransactions) setCashTransactions(data.cashTransactions);
           if (data.customerDebts) setCustomerDebts(data.customerDebts);
+          if (data.feedbackEntries) setFeedbackEntries(data.feedbackEntries);
           if (data.holidayDates) setHolidayDates(data.holidayDates);
           if (data.attendance) setAttendance(data.attendance);
           if (data.attendanceDetails) setAttendanceDetails(data.attendanceDetails);
@@ -217,6 +224,15 @@ export default function HomePage() {
   }, [customerDebts]);
 
   useEffect(() => {
+    if (feedbackEntries.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedbackEntries })
+    }).catch(() => {});
+  }, [feedbackEntries]);
+
+  useEffect(() => {
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -245,6 +261,10 @@ export default function HomePage() {
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds?.includes(position.id)) : [], [currentAccount]);
   const currentPosition = positions.find((position) => position.id === positionId) ?? allowedPositions[0] ?? positions[0];
   const menu = useMemo(() => getMenuForPosition(currentPosition.id), [currentPosition.id]);
+  const sortedFeedbackEntries = useMemo(
+    () => [...feedbackEntries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    [feedbackEntries]
+  );
 
   // Bộ lọc các đơn hàng được giao cho người dùng hiện tại để chọn khi tăng ca
   const assignedOrders = useMemo(() => {
@@ -272,6 +292,22 @@ export default function HomePage() {
     setPositionId(value);
     const nextMenu = getMenuForPosition(value);
     setActiveModule(nextMenu[0]?.id ?? "orders");
+  }
+
+  function submitFeedback() {
+    if (!currentAccount || !feedbackText.trim()) return;
+    const entry: FeedbackEntry = {
+      id: `feedback-${Date.now()}`,
+      senderId: currentAccount.id,
+      senderName: currentAccount.displayName,
+      senderPosition: currentPosition.name,
+      content: feedbackText.trim(),
+      createdAt: new Date().toISOString()
+    };
+    setFeedbackEntries((current) => [entry, ...current]);
+    setFeedbackText("");
+    setFeedbackOpen(false);
+    setToast("Đã gửi góp ý PM.");
   }
 
   const content = (
@@ -331,6 +367,7 @@ export default function HomePage() {
         />
       )}
       {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} holidayDates={holidayDates} onHolidayDatesChange={setHolidayDates} leaveRequests={leaveRequests} onLeaveRequestsChange={setLeaveRequests} attendance={attendance} attendanceDetails={attendanceDetails} />}
+      {activeModule === "feedback" && <FeedbackDashboard feedbackEntries={sortedFeedbackEntries} />}
       {activeModule === "admin" && (
         <BackupRestoreDashboard 
           onDataRestored={(restoredData) => {
@@ -341,6 +378,7 @@ export default function HomePage() {
             if (restoredData.leaveRequests) setLeaveRequests(restoredData.leaveRequests);
             if (restoredData.cashTransactions) setCashTransactions(restoredData.cashTransactions);
             if (restoredData.customerDebts) setCustomerDebts(restoredData.customerDebts);
+            if (restoredData.feedbackEntries) setFeedbackEntries(restoredData.feedbackEntries);
             if (restoredData.holidayDates) setHolidayDates(restoredData.holidayDates);
             if (restoredData.attendance) setAttendance(restoredData.attendance);
             if (restoredData.attendanceDetails) setAttendanceDetails(restoredData.attendanceDetails);
@@ -363,7 +401,15 @@ export default function HomePage() {
           onPositionChange={changePosition} 
         />
         <div className="p-4 pb-24 md:p-6">{content}</div>
+        <FeedbackLauncher onOpen={() => setFeedbackOpen(true)} />
         <WorkerBottomNav activeModule={activeModule} onChange={setActiveModule} />
+        <FeedbackComposer
+          open={feedbackOpen}
+          value={feedbackText}
+          onChange={setFeedbackText}
+          onClose={() => setFeedbackOpen(false)}
+          onSubmit={submitFeedback}
+        />
       </main>
     );
   }
@@ -409,6 +455,10 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-4">
+            <button className="hidden min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black text-slate-700 hover:bg-slate-50 md:flex" onClick={() => setFeedbackOpen(true)} type="button">
+              <MessageSquareMore className="h-4 w-4 text-orange-500" />
+              Góp ý PM
+            </button>
             <RoleSelect allowedPositions={allowedPositions} value={currentPosition.id} onChange={changePosition} />
             <div className="hidden items-center gap-3 md:flex">
               <div className="grid h-11 w-11 place-items-center rounded-full bg-slate-200"><UserCircle className="h-8 w-8 text-slate-500" /></div>
@@ -434,6 +484,15 @@ export default function HomePage() {
           {content}
         </div>
       </section>
+
+      <FeedbackLauncher onOpen={() => setFeedbackOpen(true)} />
+      <FeedbackComposer
+        open={feedbackOpen}
+        value={feedbackText}
+        onChange={setFeedbackText}
+        onClose={() => setFeedbackOpen(false)}
+        onSubmit={submitFeedback}
+      />
 
       {overtimeOpen ? (
         <OvertimeModal 
@@ -568,6 +627,89 @@ function WorkerBottomNav({ activeModule, onChange }: { activeModule: string; onC
         );
       })}
     </nav>
+  );
+}
+
+function FeedbackLauncher({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      className="fixed bottom-4 right-4 z-20 flex min-h-12 items-center gap-2 rounded-full bg-orange-500 px-4 font-black text-white shadow-lg hover:bg-orange-600"
+      onClick={onOpen}
+      type="button"
+    >
+      <MessageSquareMore className="h-4 w-4" />
+      Góp ý PM
+    </button>
+  );
+}
+
+function FeedbackComposer({
+  open,
+  value,
+  onChange,
+  onClose,
+  onSubmit
+}: {
+  open: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+      <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-xl font-black">Góp ý phần mềm</h3>
+            <p className="text-sm text-slate-500">Nội dung này lưu tạm để Giám đốc xem và xử lý.</p>
+          </div>
+          <button className="rounded-full border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" onClick={onClose} type="button">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <textarea
+          className="mt-4 min-h-40 w-full rounded-xl border border-slate-200 p-4 outline-none focus:border-orange-400"
+          placeholder="Nhập góp ý, lỗi gặp phải, đề xuất sửa..."
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <div className="mt-4 flex justify-end gap-3">
+          <button className="min-h-11 rounded-lg border border-slate-200 px-4 font-black text-slate-700" onClick={onClose} type="button">Đóng</button>
+          <button className="min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={!value.trim()} onClick={onSubmit} type="button">Gửi góp ý</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeedbackDashboard({ feedbackEntries }: { feedbackEntries: FeedbackEntry[] }) {
+  return (
+    <section className="grid gap-5">
+      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-black">Góp ý phần mềm</h2>
+        <p className="mt-1 text-sm text-slate-500">Danh sách góp ý tạm thời để Giám đốc xem, không ảnh hưởng tới dữ liệu nghiệp vụ chính.</p>
+      </div>
+      <div className="grid gap-3">
+        {feedbackEntries.length === 0 ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm font-bold text-slate-500 shadow-sm">Chưa có góp ý nào.</div>
+        ) : (
+          feedbackEntries.map((entry) => (
+            <article key={entry.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="font-black text-slate-900">{entry.senderName}</div>
+                  <div className="text-sm text-slate-500">{entry.senderPosition}</div>
+                </div>
+                <div className="text-sm font-bold text-slate-500">{new Date(entry.createdAt).toLocaleString("vi-VN")}</div>
+              </div>
+              <div className="mt-3 rounded-lg bg-slate-50 p-4 text-sm text-slate-700">{entry.content}</div>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
