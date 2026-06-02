@@ -330,7 +330,7 @@ export default function HomePage() {
           onCustomerDebtsChange={setCustomerDebts}
         />
       )}
-      {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} holidayDates={holidayDates} onHolidayDatesChange={setHolidayDates} leaveRequests={leaveRequests} onLeaveRequestsChange={setLeaveRequests} />}
+      {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} holidayDates={holidayDates} onHolidayDatesChange={setHolidayDates} leaveRequests={leaveRequests} onLeaveRequestsChange={setLeaveRequests} attendance={attendance} attendanceDetails={attendanceDetails} />}
       {activeModule === "admin" && (
         <BackupRestoreDashboard 
           onDataRestored={(restoredData) => {

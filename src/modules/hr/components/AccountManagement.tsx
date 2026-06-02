@@ -1,12 +1,16 @@
 "use client";
 
-import { Edit3, Lock, Plus, Save, Trash2, UserRound, X, XCircle } from "lucide-react";
+import { Edit3, Image, Lock, MapPin, Plus, Save, Trash2, UserRound, X, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
 import { hasDuplicateUsername, suggestEmployeeCode, validateAccount } from "../accounts";
 import type { LeaveRequest } from "../leave";
 import { leaveStatusLabels, leaveTypeLabels } from "../leave";
 import { positions } from "../roles";
+
+type AttendanceDetail = { photo?: string; gps?: string; time?: string; gpsAddress?: string; gpsMeta?: { lat?: number; lng?: number; address?: string } };
+type Slot = "07:30" | "11:30" | "13:30" | "17:30";
+const attendanceSlots: Slot[] = ["07:30", "11:30", "13:30", "17:30"];
 
 type Draft = Pick<UserAccount, "displayName" | "username" | "password" | "department" | "positionIds" | "salaryType" | "salaryValue" | "employeeCode" | "idCardNumber" | "idCardFrontImage" | "idCardBackImage" | "laborContractImage" | "laborContractNote">;
 
@@ -36,7 +40,9 @@ export function AccountManagement({
   holidayDates,
   onHolidayDatesChange,
   leaveRequests,
-  onLeaveRequestsChange
+  onLeaveRequestsChange,
+  attendance,
+  attendanceDetails
 }: {
   accounts: UserAccount[];
   currentAccountId: string;
@@ -46,10 +52,14 @@ export function AccountManagement({
   onHolidayDatesChange: (dates: string[]) => void;
   leaveRequests: LeaveRequest[];
   onLeaveRequestsChange: (requests: LeaveRequest[]) => void;
+  attendance: Record<string, string>;
+  attendanceDetails: Record<string, AttendanceDetail>;
 }) {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [selectedAttendanceAccount, setSelectedAttendanceAccount] = useState<UserAccount | null>(null);
+  const [selectedAttendanceKey, setSelectedAttendanceKey] = useState<string | null>(null);
   const [holidayMonth, setHolidayMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -68,6 +78,12 @@ export function AccountManagement({
     });
   }, [holidayMonth]);
   const suggestedEmployeeCode = useMemo(() => suggestEmployeeCode(accounts, draft.department, draft.positionIds), [accounts, draft.department, draft.positionIds]);
+  const attendanceMonthDays = useMemo(() => {
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Array.from({ length: daysInMonth }, (_, index) => index + 1);
+  }, []);
+  const selectedAttendanceDetail = selectedAttendanceKey ? attendanceDetails[selectedAttendanceKey] : null;
 
   function saveAccount() {
     const normalizedEmployeeCode = ((draft.employeeCode || "").trim() || suggestEmployeeCode(accounts, draft.department, draft.positionIds)).toUpperCase();
@@ -197,6 +213,26 @@ export function AccountManagement({
     const reader = new FileReader();
     reader.onload = () => onDone(typeof reader.result === "string" ? reader.result : "");
     reader.readAsDataURL(file);
+  }
+
+  function getAttendanceStatusLabel(kind?: string) {
+    if (kind === "normal") return "Đã chấm công";
+    if (kind === "compensated") return "Chấm công bù";
+    if (kind === "leave_locked") return "Nghỉ";
+    return "Chưa chấm";
+  }
+
+  function getAttendanceGpsText(detail: AttendanceDetail | null) {
+    if (!detail) return "Chưa có vị trí";
+    return detail.gpsAddress || detail.gpsMeta?.address || detail.gps || "Chưa có vị trí";
+  }
+
+  function openAttendanceModal(account: UserAccount) {
+    setSelectedAttendanceAccount(account);
+    const firstKey = attendanceMonthDays
+      .flatMap((day) => attendanceSlots.map((slot) => `${account.id}-${day}-${slot}`))
+      .find((key) => attendance[key] || attendanceDetails[key]?.photo || attendanceDetails[key]?.time);
+    setSelectedAttendanceKey(firstKey ?? `${account.id}-1-07:30`);
   }
 
   return (
@@ -403,7 +439,7 @@ export function AccountManagement({
           return (
             <div key={account.id} className="grid grid-cols-[1.3fr_1fr_0.9fr_1.1fr_1.2fr_0.8fr_1.4fr] items-center border-t border-slate-200 px-4 py-4 text-sm">
               <div>
-                <div className="font-black">{account.displayName}</div>
+                <button className="font-black text-left text-slate-900 hover:text-orange-600" onClick={() => openAttendanceModal(account)} type="button">{account.displayName}</button>
                 <div className="text-slate-500">{account.department}</div>
               </div>
               <div>
@@ -454,6 +490,86 @@ export function AccountManagement({
         })}
         </div>
       </div>
+
+      {selectedAttendanceAccount ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+          <div className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h3 className="text-xl font-black">Bảng chấm công nhân sự</h3>
+                <p className="text-sm text-slate-500">
+                  {selectedAttendanceAccount.displayName} • {selectedAttendanceAccount.employeeCode || "Chưa có mã NV"}
+                </p>
+              </div>
+              <button className="rounded-full border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" onClick={() => setSelectedAttendanceAccount(null)} type="button">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-5 xl:grid-cols-[minmax(0,1.8fr)_340px]">
+              <div className="min-h-0 overflow-auto rounded-xl border border-slate-200">
+                <div className="min-w-[1240px]">
+                  <div className="grid border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-600" style={{ gridTemplateColumns: `110px repeat(${attendanceMonthDays.length}, 34px)` }}>
+                    <div>Mốc giờ</div>
+                    {attendanceMonthDays.map((day) => <div key={day} className="text-center">{day}</div>)}
+                  </div>
+                  {attendanceSlots.map((slot) => (
+                    <div key={slot} className="grid items-center border-b border-slate-100 px-3 py-2" style={{ gridTemplateColumns: `110px repeat(${attendanceMonthDays.length}, 34px)` }}>
+                      <div className="text-sm font-black text-slate-800">{slot}</div>
+                      {attendanceMonthDays.map((day) => {
+                        const key = `${selectedAttendanceAccount.id}-${day}-${slot}`;
+                        const kind = attendance[key];
+                        const detail = attendanceDetails[key];
+                        const active = selectedAttendanceKey === key;
+                        return (
+                          <button
+                            key={key}
+                            className={`mx-auto flex h-7 w-7 items-center justify-center rounded-full border transition ${active ? "border-orange-500 ring-2 ring-orange-100" : "border-transparent hover:border-slate-200"} ${kind === "normal" ? "bg-green-500" : kind === "compensated" ? "bg-blue-500" : kind === "leave_locked" ? "bg-amber-500" : detail ? "bg-violet-500" : "bg-slate-300"}`}
+                            onClick={() => setSelectedAttendanceKey(key)}
+                            title={`${day}/${new Date().getMonth() + 1} ${slot}`}
+                            type="button"
+                          >
+                            <span className="sr-only">{key}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-black text-slate-900">Chi tiết mốc chấm công</div>
+                {selectedAttendanceKey ? (
+                  <>
+                    <div className="mt-3 rounded-lg bg-white p-3 text-sm">
+                      <div><span className="font-black">Mốc:</span> {selectedAttendanceKey.split("-").slice(-2).join(" • ")}</div>
+                      <div className="mt-2"><span className="font-black">Trạng thái:</span> {getAttendanceStatusLabel(attendance[selectedAttendanceKey])}</div>
+                      <div className="mt-2"><span className="font-black">Thời gian:</span> {selectedAttendanceDetail?.time ? new Date(selectedAttendanceDetail.time).toLocaleString("vi-VN") : "Chưa có thời gian lưu"}</div>
+                      <div className="mt-2 flex items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 text-orange-500" /><span><span className="font-black">GPS:</span> {getAttendanceGpsText(selectedAttendanceDetail)}</span></div>
+                    </div>
+                    <div className="mt-4 rounded-lg bg-white p-3">
+                      <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900">
+                        <Image className="h-4 w-4 text-orange-500" />
+                        Ảnh chấm công
+                      </div>
+                      {selectedAttendanceDetail?.photo ? (
+                        <a href={selectedAttendanceDetail.photo} target="_blank" rel="noreferrer">
+                          <img alt="Ảnh chấm công" className="max-h-[360px] w-full rounded-lg object-contain" src={selectedAttendanceDetail.photo} />
+                        </a>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">
+                          Chưa có ảnh lưu cho mốc này.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
