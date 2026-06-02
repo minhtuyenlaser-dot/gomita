@@ -230,27 +230,58 @@ export function AccountManagement({
   function formatAttendanceTime(detail: AttendanceDetail | null, attendanceKey: string | null) {
     const rawTime = detail?.time;
     if (!rawTime) return "Chưa có thời gian lưu";
-    const parsed = new Date(rawTime);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toLocaleString("vi-VN");
+
+    const formatDisplayTime = (
+      year: number,
+      month: number,
+      day: number,
+      hour: number,
+      minute: number,
+      second: number
+    ) =>
+      `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")} ${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}`;
+
+    const fullDateTimeMatch = rawTime.match(
+      /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/
+    );
+    if (fullDateTimeMatch) {
+      return formatDisplayTime(
+        Number(fullDateTimeMatch[1]),
+        Number(fullDateTimeMatch[2]),
+        Number(fullDateTimeMatch[3]),
+        Number(fullDateTimeMatch[4]),
+        Number(fullDateTimeMatch[5]),
+        Number(fullDateTimeMatch[6] || "0")
+      );
     }
+
     const parts = attendanceKey?.split("-") || [];
     const dayToken = parts.length >= 3 ? Number(parts[parts.length - 2]) : NaN;
     const timeMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
     if (!Number.isNaN(dayToken) && timeMatch) {
       const now = new Date();
-      const fallback = new Date(
+      return formatDisplayTime(
         now.getFullYear(),
-        now.getMonth(),
+        now.getMonth() + 1,
         dayToken,
         Number(timeMatch[1]),
         Number(timeMatch[2]),
         Number(timeMatch[3] || "0")
       );
-      if (!Number.isNaN(fallback.getTime())) {
-        return fallback.toLocaleString("vi-VN");
-      }
     }
+
+    const parsed = new Date(rawTime);
+    if (!Number.isNaN(parsed.getTime())) {
+      return formatDisplayTime(
+        parsed.getFullYear(),
+        parsed.getMonth() + 1,
+        parsed.getDate(),
+        parsed.getHours(),
+        parsed.getMinutes(),
+        parsed.getSeconds()
+      );
+    }
+
     return "Chưa có thời gian lưu";
   }
 

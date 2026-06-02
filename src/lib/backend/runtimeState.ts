@@ -139,15 +139,34 @@ function toAttendanceKey(userId: string, item: { date?: string; day?: number; sl
 }
 
 function normalizeAttendanceTime(dayValue: string, rawTime?: string) {
+  const localDateString = toCurrentLocalDateString();
+
+  const buildLocalTimestamp = (year: number, month: number, day: number, hour: number, minute: number, second: number) => {
+    const safeMonth = String(month).padStart(2, "0");
+    const safeDay = String(day).padStart(2, "0");
+    const safeHour = String(hour).padStart(2, "0");
+    const safeMinute = String(minute).padStart(2, "0");
+    const safeSecond = String(second).padStart(2, "0");
+    return `${year}-${safeMonth}-${safeDay} ${safeHour}:${safeMinute}:${safeSecond}`;
+  };
+
   if (rawTime) {
-    const parsed = new Date(rawTime);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toISOString();
+    const dateTimeMatch = rawTime.match(
+      /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/
+    );
+    if (dateTimeMatch) {
+      return buildLocalTimestamp(
+        Number(dateTimeMatch[1]),
+        Number(dateTimeMatch[2]),
+        Number(dateTimeMatch[3]),
+        Number(dateTimeMatch[4]),
+        Number(dateTimeMatch[5]),
+        Number(dateTimeMatch[6] || "0")
+      );
     }
 
     const match = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
     if (match) {
-      const localDateString = toCurrentLocalDateString();
       const parts = localDateString.split("-");
       const year = Number(parts[0]);
       const month = Number(parts[1]);
@@ -155,14 +174,31 @@ function normalizeAttendanceTime(dayValue: string, rawTime?: string) {
       const hour = Number(match[1]);
       const minute = Number(match[2]);
       const second = Number(match[3] || "0");
-      const combined = new Date(year, month - 1, day, hour, minute, second);
-      if (!Number.isNaN(combined.getTime())) {
-        return combined.toISOString();
-      }
+      return buildLocalTimestamp(year, month, day, hour, minute, second);
+    }
+
+    const parsed = new Date(rawTime);
+    if (!Number.isNaN(parsed.getTime())) {
+      return buildLocalTimestamp(
+        parsed.getFullYear(),
+        parsed.getMonth() + 1,
+        parsed.getDate(),
+        parsed.getHours(),
+        parsed.getMinutes(),
+        parsed.getSeconds()
+      );
     }
   }
 
-  return new Date().toISOString();
+  const now = new Date();
+  return buildLocalTimestamp(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds()
+  );
 }
 
 export async function applyClockIn(payload: {
