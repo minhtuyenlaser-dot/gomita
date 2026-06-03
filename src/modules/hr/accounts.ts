@@ -37,7 +37,7 @@ function getEmployeeCodePrefix(department: string, positionIds: string[]) {
   const normalizedDepartment = department.trim().toLowerCase();
   const normalizedPositions = positionIds.map((item) => item.trim().toLowerCase());
 
-  if (normalizedPositions.includes("accountant") || normalizedDepartment.includes("kế toán")) return "A";
+  if (normalizedPositions.includes("accountant_manager") || normalizedPositions.includes("accountant") || normalizedDepartment.includes("kế toán")) return "A";
   if (normalizedPositions.includes("sale") || normalizedPositions.includes("sale_manager") || normalizedDepartment.includes("sale")) return "S";
   if (
     normalizedPositions.includes("production_worker") ||
@@ -48,8 +48,8 @@ function getEmployeeCodePrefix(department: string, positionIds: string[]) {
     normalizedDepartment.includes("xưởng") ||
     normalizedDepartment.includes("giám sát")
   ) return "T";
-  if (normalizedPositions.includes("hr") || normalizedDepartment.includes("nhân sự")) return "H";
-  if (normalizedPositions.includes("designer") || normalizedDepartment.includes("thiết kế")) return "D";
+  if (normalizedPositions.includes("hr_manager") || normalizedPositions.includes("hr") || normalizedDepartment.includes("nhân sự")) return "H";
+  if (normalizedPositions.includes("designer") || normalizedPositions.includes("design_manager") || normalizedDepartment.includes("thiết kế")) return "D";
   if (normalizedPositions.includes("director") || normalizedDepartment.includes("giám đốc")) return "GD";
   return "N";
 }

@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   SafeAreaView,
   StyleSheet,
-  ActivityIndicator, 
-  View, 
+  ActivityIndicator,
+  View,
   Text,
   StatusBar
 } from "react-native";
@@ -18,7 +18,6 @@ export default function App() {
   const [serverIp, setServerIp] = useState(defaultServerHost);
   const [apiData, setApiData] = useState<any>(null);
 
-  // Khôi phục session đăng nhập và server IP
   useEffect(() => {
     async function restoreSession() {
       try {
@@ -31,43 +30,47 @@ export default function App() {
         if (savedUser) {
           const user = JSON.parse(savedUser);
           setCurrentUser(user);
-          await syncWithServer(user.id, savedIp || serverIp);
+          await loadMobileBootstrap(user.id, savedIp || defaultServerHost);
         }
-      } catch (err) {
-        console.warn("Lỗi khôi phục phiên đăng nhập:", err);
+      } catch (error) {
+        console.warn("Lỗi khôi phục phiên đăng nhập:", error);
       } finally {
         setLoading(false);
       }
     }
-    restoreSession();
+
+    void restoreSession();
   }, []);
 
-  async function syncWithServer(userId: string, targetIp: string) {
+  async function loadMobileBootstrap(userId: string, targetIp: string) {
     try {
-      const url = getApiUrl(targetIp, "/api/data");
-      const res = await fetch(url, { headers: { "Cache-Control": "no-cache" } });
-      const data = await res.json();
-      setApiData(data);
-      
-      // Đồng bộ thông tin cá nhân mới nhất của user
-      const freshUser = data.accounts.find((acc: any) => acc.id === userId);
-      if (freshUser) {
-        setCurrentUser(freshUser);
-        await AsyncStorage.setItem("gomita_user_session", JSON.stringify(freshUser));
+      const response = await fetch(
+        getApiUrl(targetIp, `/api/mobile/bootstrap?userId=${encodeURIComponent(userId)}`),
+        { headers: { "Cache-Control": "no-cache" } }
+      );
+      const payload = await response.json();
+
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.error || "Không tải được dữ liệu di động.");
       }
-    } catch (err) {
-      console.warn("Không kết nối được server, đang dùng chế độ Offline.", err);
+
+      setApiData(payload);
+      if (payload?.account) {
+        setCurrentUser(payload.account);
+        await AsyncStorage.setItem("gomita_user_session", JSON.stringify(payload.account));
+      }
+    } catch (error) {
+      console.warn("Không tải được bootstrap di động, giữ dữ liệu gần nhất.", error);
     }
   }
 
   const handleLoginSuccess = async (user: any, customIp: string) => {
     setCurrentUser(user);
     setServerIp(customIp);
+    setApiData((current: any) => current || {});
     await AsyncStorage.setItem("gomita_user_session", JSON.stringify(user));
     await AsyncStorage.setItem("gomita_server_ip", customIp);
-    setLoading(true);
-    await syncWithServer(user.id, customIp);
-    setLoading(false);
+    void loadMobileBootstrap(user.id, customIp);
   };
 
   const handleLogout = async () => {
@@ -79,7 +82,7 @@ export default function App() {
   const handleUserChange = async (user: any) => {
     setCurrentUser(user);
     await AsyncStorage.setItem("gomita_user_session", JSON.stringify(user));
-    await syncWithServer(user.id, serverIp);
+    void loadMobileBootstrap(user.id, serverIp);
   };
 
   if (loading) {
@@ -95,21 +98,18 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#071a38" />
       {currentUser ? (
-        <WorkerDashboard 
-          user={currentUser} 
-          serverIp={serverIp} 
+        <WorkerDashboard
+          user={currentUser}
+          serverIp={serverIp}
           apiData={apiData}
           onLogout={handleLogout}
           onUserChange={handleUserChange}
           onRefresh={async () => {
-            await syncWithServer(currentUser.id, serverIp);
+            await loadMobileBootstrap(currentUser.id, serverIp);
           }}
         />
       ) : (
-        <LoginScreen 
-          defaultIp={serverIp}
-          onLoginSuccess={handleLoginSuccess}
-        />
+        <LoginScreen defaultIp={serverIp} onLoginSuccess={handleLoginSuccess} />
       )}
     </SafeAreaView>
   );
@@ -118,18 +118,18 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#071a38",
+    backgroundColor: "#071a38"
   },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#071a38",
+    backgroundColor: "#071a38"
   },
   loadingText: {
     marginTop: 12,
     color: "#cbd5e1",
     fontSize: 15,
-    fontWeight: "bold",
+    fontWeight: "bold"
   }
 });

@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import type { UserAccount } from "../accounts";
 import type { LeaveRequest, LeaveType } from "../leave";
 import { leaveStatusLabels, leaveTypeLabels } from "../leave";
-import type { Position } from "../roles";
+import { canUseOvertime, type Position } from "../roles";
 import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
@@ -100,6 +100,7 @@ export function ProfileDashboard({
   
   // Tính tổng giờ tăng ca thực tế đã duyệt của tháng này từ Database
   const overtime = useMemo(() => {
+    if (!canUseOvertime(position.id)) return 0;
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
@@ -112,7 +113,7 @@ export function ProfileDashboard({
         return reqDate.getMonth() === currentMonth && reqDate.getFullYear() === currentYear;
       })
       .reduce((sum, req) => sum + (Number(req.hours) || 0), 0);
-  }, [overtimeRequests, account.id]);
+  }, [account.id, overtimeRequests, position.id]);
 
   const salaryType = account.salaryType ?? "daily";
   const salaryValue = account.salaryValue ?? (position.id === "hr" ? 420000 : position.id === "accountant" ? 400000 : 350000);
@@ -717,14 +718,17 @@ export function CompanyPayrollDashboard({
     const work = marks.reduce((total, mark) => total + (mark === "X" ? 1 : mark === "/" ? 0.5 : 0), 0);
     
     // Giờ tăng ca (OT) trong tháng hiện tại
-    const otHours = overtimeRequests
+    const primaryPositionId = account.positionIds[0] || "";
+    const otHours = canUseOvertime(primaryPositionId)
+      ? overtimeRequests
       .filter((req) => {
         if (req.userId !== account.id) return false;
         if (req.status !== "approved") return false;
         const reqDate = new Date(req.createdAt || req.id.replace("ot-", ""));
         return reqDate.getMonth() === currentMonth && reqDate.getFullYear() === currentYear;
       })
-      .reduce((sum, req) => sum + (Number(req.hours) || 0), 0);
+      .reduce((sum, req) => sum + (Number(req.hours) || 0), 0)
+      : 0;
 
     const salaryType = account.salaryType ?? "daily";
     const salaryValue = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);

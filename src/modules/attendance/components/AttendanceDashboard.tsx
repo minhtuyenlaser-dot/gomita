@@ -2,7 +2,7 @@
 
 import { CalendarDays, CheckCircle2, Clock, Send, UserCheck, AlertCircle, MapPin, Camera, Image, ExternalLink } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { Position } from "@/modules/hr/roles";
+import { positions as roleDefinitions, type Position } from "@/modules/hr/roles";
 import type { ApprovalRole, AttendanceSlot, CompensationRequest } from "../types";
 import { approveCompensation, getRequiredApprovals, attendanceSlots } from "../compensationRules";
 
@@ -14,10 +14,12 @@ const approvalNames: Record<ApprovalRole, string> = {
 
 const approverByPosition: Record<string, ApprovalRole | null> = {
   hr: "hr",
+  hr_manager: "department_manager",
   sale_manager: "department_manager",
   design_manager: "department_manager",
   workshop_manager: "department_manager",
   supervisor_lead: "department_manager",
+  accountant_manager: "department_manager",
   director: "director",
   admin: "director"
 };
@@ -58,7 +60,7 @@ export function AttendanceDashboard({
       time: string;
     }> = [];
 
-    const isHrOrDirectorOrAdmin = ["hr", "director", "admin"].includes(position.id);
+    const isHrOrDirectorOrAdmin = ["hr", "hr_manager", "director", "admin"].includes(position.id);
     const userDept = position.department;
 
     Object.entries(attendanceDetails).forEach(([key, details]: [string, any]) => {
@@ -98,7 +100,7 @@ export function AttendanceDashboard({
   }, [attendanceDetails, accounts, position]);
 
   const currentApprovalRole = approverByPosition[position.id] ?? null;
-  const isHrOrDirector = position.id === "hr" || position.id === "director";
+  const isHrOrDirector = position.id === "hr" || position.id === "hr_manager" || position.id === "director";
 
   // Lọc danh sách thợ và nhân viên cần chấm công (không tính Giám đốc)
   const workers = useMemo(() => {
@@ -186,7 +188,7 @@ export function AttendanceDashboard({
 
     // Xác định PositionLevel của thợ
     const workerPosition = worker.positionIds[0] ?? "production_worker";
-    const level = worker.positionIds.includes("hr") ? "department_head" : "staff";
+    const level = roleDefinitions.find((item) => item.id === workerPosition)?.level ?? "staff";
 
     const nextRequest: CompensationRequest = {
       id: `comp-${Date.now()}`,
@@ -555,7 +557,7 @@ export function AttendanceDashboard({
               <div>
                 <h2 className="text-lg font-black text-slate-800">Nhật ký Ảnh chụp chấm công</h2>
                 <p className="text-sm text-slate-500">
-                  {["hr", "director", "admin"].includes(position.id)
+                  {["hr", "hr_manager", "director", "admin"].includes(position.id)
                     ? "Danh sách ảnh chụp và GPS lúc chấm công của toàn bộ nhân viên."
                     : `Danh sách ảnh chụp và GPS lúc chấm công của nhân viên thuộc bộ phận: ${position.department}.`}
                 </p>

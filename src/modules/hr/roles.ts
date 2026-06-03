@@ -20,17 +20,19 @@ export type Position = {
 export const positions: Position[] = [
   { id: "admin", name: "Quản trị hệ thống", department: "Quản trị", level: "admin" },
   { id: "director", name: "Giám đốc", department: "Giám đốc", level: "director" },
-  { id: "sale_manager", name: "Quản lý Sale", department: "Phòng Sale", level: "department_head" },
+  { id: "sale_manager", name: "Trưởng phòng Sale", department: "Phòng Sale", level: "department_head" },
   { id: "sale", name: "Nhân viên Sale", department: "Phòng Sale", level: "staff" },
   { id: "design_manager", name: "Trưởng phòng thiết kế", department: "Phòng Thiết kế", level: "department_head" },
   { id: "designer", name: "Thiết kế", department: "Phòng Thiết kế", level: "staff" },
   { id: "workshop_manager", name: "Quản lý xưởng", department: "Xưởng", level: "department_head" },
   { id: "file_operator", name: "Ra file", department: "Xưởng", level: "staff" },
   { id: "production_worker", name: "Thợ sản xuất", department: "Xưởng", level: "staff" },
-  { id: "supervisor_lead", name: "Trưởng giám sát", department: "Giám sát", level: "team_lead" },
+  { id: "supervisor_lead", name: "Trưởng phòng giám sát", department: "Giám sát", level: "department_head" },
   { id: "installer", name: "Thợ lắp đặt", department: "Giám sát", level: "staff" },
+  { id: "accountant_manager", name: "Trưởng phòng kế toán", department: "Kế toán", level: "department_head" },
   { id: "accountant", name: "Kế toán", department: "Kế toán", level: "staff" },
-  { id: "hr", name: "Nhân sự", department: "Nhân sự", level: "department_head" }
+  { id: "hr_manager", name: "Trưởng phòng nhân sự", department: "Nhân sự", level: "department_head" },
+  { id: "hr", name: "Nhân viên nhân sự", department: "Nhân sự", level: "staff" }
 ];
 
 export type MenuItem = {
@@ -45,7 +47,7 @@ const profileMenu: MenuItem = { id: "profile", label: "Thông tin cá nhân", ic
 
 export function getMenuForPosition(positionId: string): MenuItem[] {
   const position = positions.find((p) => p.id === positionId);
-  const isManager = position ? (position.level === "department_head" || position.level === "team_lead") : false;
+  const isManager = position ? position.level === "department_head" || position.level === "team_lead" : false;
 
   if (positionId === "director") {
     return [
@@ -60,11 +62,19 @@ export function getMenuForPosition(positionId: string): MenuItem[] {
     ];
   }
 
-  if (positionId === "hr") {
+  if (positionId === "hr" || positionId === "hr_manager") {
     return [
       { id: "hr", label: "Nhân sự", icon: "hr" },
       { id: "attendance", label: "Duyệt công bù", icon: "reports" },
       { id: "reports", label: "Bảng lương công ty", icon: "reports" },
+      profileMenu
+    ];
+  }
+
+  if (positionId === "accountant_manager") {
+    return [
+      { id: "attendance", label: "Duyệt công bù", icon: "reports" },
+      { id: "finance", label: "Kế toán", icon: "finance" },
       profileMenu
     ];
   }
@@ -100,14 +110,22 @@ export function isWorkerPosition(positionId: string) {
   return positionId === "installer" || positionId === "production_worker";
 }
 
+export function isDepartmentHeadPosition(positionId: string) {
+  return ["sale_manager", "design_manager", "workshop_manager", "supervisor_lead", "accountant_manager", "hr_manager"].includes(positionId);
+}
+
 export function mustClockIn(positionId: string) {
   return positionId !== "director";
 }
 
+export function canUseOvertime(positionId: string) {
+  return !isDepartmentHeadPosition(positionId) && positionId !== "director" && positionId !== "admin";
+}
+
 export function canSeePricing(positionId: string, currentUserName: string, saleName: string) {
-  return ["director", "accountant", "sale_manager"].includes(positionId) || (positionId === "sale" && currentUserName === saleName);
+  return ["director", "accountant", "accountant_manager", "sale_manager"].includes(positionId) || (positionId === "sale" && currentUserName === saleName);
 }
 
 export function isCompanyWideOrderRole(positionId: string) {
-  return ["admin", "director", "sale_manager", "design_manager", "workshop_manager", "accountant"].includes(positionId);
+  return ["admin", "director", "sale_manager", "design_manager", "workshop_manager", "supervisor_lead"].includes(positionId);
 }

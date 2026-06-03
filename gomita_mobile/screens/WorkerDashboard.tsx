@@ -13,7 +13,7 @@ import {
 import { CameraView, Camera as ExpoCamera } from "expo-camera";
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import * as Location from "expo-location";
-import { 
+import {
   LogOut, 
   CheckCircle2, 
   Camera, 
@@ -25,9 +25,20 @@ import {
   CheckCircle
 } from "lucide-react-native";
 import { getApiUrl } from "../lib/api";
+import { enqueuePendingAction, flushPendingActions } from "../lib/pendingQueue";
 
 const slots = ["07:30", "11:30", "13:30", "17:30"];
 const screenWidth = Dimensions.get("window").width;
+const overtimeHiddenPositionIds = [
+  "director",
+  "admin",
+  "sale_manager",
+  "design_manager",
+  "hr_manager",
+  "accountant_manager",
+  "supervisor_lead",
+  "workshop_manager"
+];
 
 export function WorkerDashboard({ 
   user, 
@@ -83,6 +94,9 @@ export function WorkerDashboard({
     setAccountUsername(user.username || "");
   }, [user.username]);
 
+  const primaryPositionId = user.positionIds?.[0] || "";
+  const canUseOvertimeCurrent = !overtimeHiddenPositionIds.includes(primaryPositionId);
+
   const monthDays = useMemo(() => {
     const now = new Date();
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
@@ -95,6 +109,17 @@ export function WorkerDashboard({
       ...attendanceOverrides
     };
   }, [apiData, attendanceOverrides]);
+
+  const flushPendingQueue = useCallback(async () => {
+    try {
+      const result = await flushPendingActions(serverIp);
+      if (result.processed > 0) {
+        await onRefresh();
+      }
+    } catch (error) {
+      console.warn("Lỗi đồng bộ nền:", error);
+    }
+  }, [onRefresh, serverIp]);
 
   const compensationState = apiData?.attendanceCompensationState?.[user.id] || null;
   const lockedThroughDate = compensationState?.lockedThroughDate || null;
@@ -118,6 +143,7 @@ export function WorkerDashboard({
     const source = attendanceSource || effectiveAttendance;
     const list: Array<{ date: string; slot: string; day: number; isIgnored: boolean }> = [];
     const currentDay = new Date().getDate();
+    const currentSlotIndex = slots.indexOf(currentSlot);
 
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
@@ -125,6 +151,8 @@ export function WorkerDashboard({
 
       slots.forEach((slot) => {
         const date = toDateString(day);
+        const slotIndex = slots.indexOf(slot);
+        if (dayNum === currentDay && currentSlotIndex >= 0 && slotIndex >= currentSlotIndex) return;
         const key = `${user.id}-${dayNum}-${slot}`;
         const value = source[key];
         const isLocked = Boolean(lockedThroughDate && date <= lockedThroughDate);
@@ -142,9 +170,17 @@ export function WorkerDashboard({
     });
 
     return list;
-  }, [effectiveAttendance, hasPendingCompRequest, lockedThroughDate, monthDays, toDateString, user.id]);
+  }, [currentSlot, effectiveAttendance, hasPendingCompRequest, lockedThroughDate, monthDays, toDateString, user.id]);
 
   const missingSlots = useMemo(() => buildPromptableMissingSlots(), [buildPromptableMissingSlots]);
+
+  useEffect(() => {
+    void flushPendingQueue();
+    const timer = setInterval(() => {
+      void flushPendingQueue();
+    }, 12000);
+    return () => clearInterval(timer);
+  }, [flushPendingQueue]);
 
   const uniqueMissingDays = useMemo(() => {
     const daysMap = new Map<number, Date>();
@@ -431,7 +467,7 @@ export function WorkerDashboard({
   }, [effectiveAttendance, monthDays, user.id, today]);
 
   const otHours = useMemo(() => {
-    if (!apiData || !apiData.overtimeRequests) return 0;
+    if (!canUseOvertimeCurrent || !apiData || !apiData.overtimeRequests) return 0;
     const now = new Date();
     return apiData.overtimeRequests
       .filter((req: any) => 
@@ -440,7 +476,7 @@ export function WorkerDashboard({
         new Date(req.createdAt).getMonth() === now.getMonth()
       )
       .reduce((sum: number, req: any) => sum + (Number(req.hours) || 0), 0);
-  }, [apiData, user.id]);
+  }, [apiData, canUseOvertimeCurrent, user.id]);
 
   const salaryType = user.salaryType ?? "daily";
   const salaryValue = user.salaryValue ?? (user.positionIds.includes("hr") ? 420000 : user.positionIds.includes("accountant") ? 400000 : 350000);
@@ -754,6 +790,270 @@ export function WorkerDashboard({
   };
 
   // NÚT BÁO CÁO HOÀN THÀNH ĐỘC LẬP CLICK
+  const submitCompensationsLean = async () => {
+    if (selectedCompSlots.length === 0 || !compReason.trim()) return;
+
+    const grouped: Record<string, string[]> = {};
+    selectedCompSlots.forEach((item) => {
+      if (!grouped[item.date]) grouped[item.date] = [];
+      grouped[item.date].push(item.slot);
+    });
+
+    const payload = {
+      userId: user.id,
+      reason: compReason.trim(),
+      items: Object.entries(grouped).map(([date, slotList]) => ({ date, slots: slotList }))
+    };
+
+    setLoading(true);
+    try {
+      const response = await fetch(getApiUrl(serverIp, "/api/compensation/request"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Không gửi được yêu cầu chấm công bù.");
+      }
+
+      await fetch(getApiUrl(serverIp, "/api/attendance-compensation-response"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id, decision: "reset" })
+      }).catch(() => {});
+
+      setCompOpen(false);
+      setSelectedCompSlots([]);
+      setCompReason("");
+      await onRefresh();
+      Alert.alert("Thành công", "Đã gửi yêu cầu chấm công bù.");
+    } catch (error) {
+      console.warn("Lỗi gửi chấm công bù:", error);
+      await enqueuePendingAction({
+        id: `pending-comp-${Date.now()}`,
+        type: "compensation_request",
+        payload
+      });
+      setCompOpen(false);
+      setSelectedCompSlots([]);
+      setCompReason("");
+      Alert.alert("Đã lưu tạm", "Yêu cầu chấm công bù đã được lưu trên thiết bị để đồng bộ nền.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveAccountCredentialsLean = async () => {
+    const nextUsername = accountUsername.trim().toLowerCase();
+    const nextPassword = accountPassword.trim();
+    const confirmPassword = accountPasswordConfirm.trim();
+
+    if (!nextUsername) {
+      Alert.alert("Thiếu thông tin", "Tên đăng nhập không được để trống.");
+      return;
+    }
+    if (!nextPassword) {
+      Alert.alert("Thiếu thông tin", "Mật khẩu mới không được để trống.");
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      Alert.alert("Không khớp", "Mật khẩu nhập lại không khớp.");
+      return;
+    }
+
+    const usernameDirectory = Array.isArray(apiData?.usernameDirectory) ? apiData.usernameDirectory : [];
+    const hasDuplicate = usernameDirectory.some(
+      (account: any) => account.id !== user.id && String(account.username || "").trim().toLowerCase() === nextUsername
+    );
+    if (hasDuplicate) {
+      Alert.alert("Trùng tên đăng nhập", "Tên đăng nhập này đã có người dùng khác.");
+      return;
+    }
+
+    const payload = {
+      userId: user.id,
+      username: nextUsername,
+      password: nextPassword
+    };
+
+    setLoading(true);
+    try {
+      const response = await fetch(getApiUrl(serverIp, "/api/account/self"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.account) {
+        throw new Error(result?.error || "Không lưu được tài khoản.");
+      }
+
+      await onUserChange(result.account);
+      setAccountPassword("");
+      setAccountPasswordConfirm("");
+      Alert.alert("Thành công", "Đã cập nhật tên đăng nhập và mật khẩu.");
+    } catch (error) {
+      console.warn("Lỗi cập nhật tài khoản:", error);
+      await enqueuePendingAction({
+        id: `pending-account-${Date.now()}`,
+        type: "account_update",
+        payload
+      });
+      setAccountPassword("");
+      setAccountPasswordConfirm("");
+      await onUserChange({ ...user, username: nextUsername, password: nextPassword });
+      Alert.alert("Đã lưu tạm", "Thay đổi tài khoản đã được lưu trên thiết bị và sẽ tự đồng bộ lại.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitOvertimeRequestLean = async () => {
+    if (!canUseOvertimeCurrent) {
+      Alert.alert("Không áp dụng", "Nhóm trưởng bộ phận không sử dụng chức năng tăng ca.");
+      return;
+    }
+    if (!otReason.trim()) {
+      Alert.alert("Thiếu thông tin", "Bạn cần nhập lý do tăng ca.");
+      return;
+    }
+
+    const payload = {
+      userId: user.id,
+      from: otFrom,
+      to: otTo,
+      reason: otReason.trim(),
+      orderCode: selectedOrderCode
+    };
+
+    setLoading(true);
+    try {
+      const response = await fetch(getApiUrl(serverIp, "/api/overtime/request"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.request) {
+        throw new Error(result?.error || "Không gửi được đăng ký tăng ca.");
+      }
+
+      setOtOpen(false);
+      setOtReason("");
+      setOtFrom("18:00");
+      setOtTo("20:00");
+      await onRefresh();
+      Alert.alert("Đăng ký thành công", `Đã đăng ký tăng ca ${result.request.hours} giờ.`);
+    } catch (error) {
+      console.warn("Lỗi đăng ký tăng ca:", error);
+      await enqueuePendingAction({
+        id: `pending-ot-${Date.now()}`,
+        type: "overtime_request",
+        payload
+      });
+      setOtOpen(false);
+      setOtReason("");
+      setOtFrom("18:00");
+      setOtTo("20:00");
+      Alert.alert("Đã lưu tạm", "Đăng ký tăng ca đã được lưu trên thiết bị để đồng bộ nền.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const captureAndClockinLean = async () => {
+    if (!cameraRef) return;
+    setLoading(true);
+
+    try {
+      const photo = await cameraRef.takePictureAsync({ quality: 0.4, base64: false, skipProcessing: true });
+      const compressedPhoto = await manipulateAsync(
+        photo.uri,
+        [{ resize: { width: 960 } }],
+        { compress: 0.3, format: SaveFormat.JPEG, base64: true }
+      );
+
+      const photoData = compressedPhoto.base64 ? `data:image/jpeg;base64,${compressedPhoto.base64}` : "";
+      const metadataPayload = {
+        userId: user.id,
+        date: today,
+        slot: currentSlot,
+        orderCode: activeJobToReport ? activeJobToReport.code : null,
+        isCompleted: Boolean(activeJobToReport && !askModalOpen),
+        gps: gpsCoords,
+        gpsAddress,
+        gpsMeta,
+        time: new Date().toISOString()
+      };
+
+      const currentKey = `${user.id}-${today}-${currentSlot}`;
+      const nextAttendance = { ...effectiveAttendance, [currentKey]: "normal" };
+      const applyLocalClockin = async () => {
+        setAttendanceOverrides((current) => ({ ...current, [currentKey]: "normal" }));
+        setShowCamera(false);
+        setActiveJobToReport(null);
+        setTimeout(() => {
+          promptCompensationIfNeeded(nextAttendance);
+        }, 250);
+      };
+
+      try {
+        const response = await fetch(getApiUrl(serverIp, "/api/clockin"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(metadataPayload)
+        });
+        const result = await response.json();
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error || "Không gửi được chấm công.");
+        }
+
+        await applyLocalClockin();
+        if (photoData) {
+          fetch(getApiUrl(serverIp, "/api/clockin-photo"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: user.id,
+              date: today,
+              slot: currentSlot,
+              photo: photoData
+            })
+          }).catch(async () => {
+            await enqueuePendingAction({
+              id: `pending-photo-${Date.now()}`,
+              type: "clockin_photo",
+              payload: { userId: user.id, date: today, slot: currentSlot, photo: photoData }
+            });
+          });
+        }
+        await onRefresh();
+        Alert.alert("Chấm công thành công", `Đã ghi nhận mốc ${currentSlot} lúc ${currentTime}.`);
+      } catch (error) {
+        await enqueuePendingAction({
+          id: `pending-clockin-${Date.now()}`,
+          type: "clockin_record",
+          payload: metadataPayload
+        });
+        if (photoData) {
+          await enqueuePendingAction({
+            id: `pending-photo-${Date.now()}-2`,
+            type: "clockin_photo",
+            payload: { userId: user.id, date: today, slot: currentSlot, photo: photoData }
+          });
+        }
+        await applyLocalClockin();
+        Alert.alert("Đã lưu tạm", "Chấm công đã được lưu trên thiết bị và sẽ tự đồng bộ lại khi server ổn định.");
+      }
+    } catch (error) {
+      console.warn("Lỗi chấm công:", error);
+      Alert.alert("Lỗi", error instanceof Error ? error.message : "Không thể chụp ảnh chấm công.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleReportDoneIndependent = async (job: any) => {
     Alert.alert(
       "Xác nhận báo xong",
@@ -813,9 +1113,11 @@ export function WorkerDashboard({
           <Clock size={14} color="#f97316" />
           <Text style={styles.shiftBadgeText}>Mốc chấm hiện tại: {currentSlot}</Text>
         </View>
-        <TouchableOpacity style={styles.overtimeActionBtn} onPress={() => setOtOpen(true)}>
-          <Text style={styles.overtimeActionText}>Đăng ký tăng ca</Text>
-        </TouchableOpacity>
+        {canUseOvertimeCurrent ? (
+          <TouchableOpacity style={styles.overtimeActionBtn} onPress={() => setOtOpen(true)}>
+            <Text style={styles.overtimeActionText}>Đăng ký tăng ca</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* DUY NHẤT 1 NÚT CHẤM CÔNG LỚN */}
@@ -911,7 +1213,7 @@ export function WorkerDashboard({
             />
             <TouchableOpacity
               disabled={loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
-              onPress={saveAccountCredentials}
+              onPress={saveAccountCredentialsLean}
               style={[styles.accountSaveBtn, (loading || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()) && styles.accountSaveBtnDisabled]}
             >
               <Text style={styles.accountSaveBtnText}>Lưu tài khoản</Text>
@@ -1195,7 +1497,7 @@ export function WorkerDashboard({
                 styles.submitCompBtn,
                 (selectedCompSlots.length === 0 || !compReason.trim()) ? styles.btnDisabled : styles.btnActive
               ]}
-              onPress={submitCompensations}
+              onPress={submitCompensationsLean}
               disabled={selectedCompSlots.length === 0 || !compReason.trim() || loading}
             >
               {loading ? (
@@ -1258,7 +1560,7 @@ export function WorkerDashboard({
               <TouchableOpacity style={[styles.modalBtn, styles.modalBtnOrange]} onPress={() => setOtOpen(false)}>
                 <Text style={styles.modalBtnText}>Đóng</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalBtn, styles.modalBtnGreen]} onPress={submitOvertimeRequest} disabled={loading}>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalBtnGreen]} onPress={submitOvertimeRequestLean} disabled={loading}>
                 {loading ? <ActivityIndicator size="small" color="#ffffff" /> : <Text style={styles.modalBtnText}>Gửi đăng ký</Text>}
               </TouchableOpacity>
             </View>
@@ -1286,7 +1588,7 @@ export function WorkerDashboard({
           <View style={styles.cameraFooter}>
             <TouchableOpacity 
               style={styles.captureCircleBtn}
-              onPress={captureAndClockin}
+              onPress={captureAndClockinLean}
               disabled={loading}
             >
               {loading ? (

@@ -4,6 +4,10 @@ import type { PositionLevel } from "@/modules/hr/roles";
 export const attendanceSlots: AttendanceSlot[] = ["07:30", "11:30", "13:30", "17:30"];
 
 export function getRequiredApprovals(level: PositionLevel, missingCountInMonth: number): ApprovalRole[] {
+  if (level === "department_head" || level === "team_lead") {
+    return ["director"];
+  }
+
   if (missingCountInMonth > 8) {
     return ["hr", "department_manager", "director"];
   }
@@ -34,12 +38,24 @@ export function isSlotOpen(slot: AttendanceSlot, now = new Date()) {
   return now >= opensAt && now <= closesAt;
 }
 
+export function getLatestCompensationEligibleSlot(now = new Date()) {
+  let latest: AttendanceSlot | null = null;
+  attendanceSlots.forEach((slot) => {
+    const [hour, minute] = slot.split(":").map(Number);
+    const slotDate = new Date(now);
+    slotDate.setHours(hour, minute, 0, 0);
+    if (now >= slotDate) {
+      latest = slot;
+    }
+  });
+  return latest;
+}
+
 export function canApproveCompensation(request: CompensationRequest, role: ApprovalRole) {
   if (request.status !== "pending") return false;
   if (!request.requiredApprovals.includes(role)) return false;
   if (request.approvals.some((approval) => approval.role === role)) return false;
-
-  return true; // Bỏ kiểm tra duyệt tuần tự, cho phép duyệt song song không phân biệt trước sau!
+  return true;
 }
 
 export function approveCompensation(request: CompensationRequest, role: ApprovalRole, approverName: string): CompensationRequest {

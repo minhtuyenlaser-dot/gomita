@@ -5,6 +5,8 @@ import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
 import { createSupabaseAdminClient } from "@/lib/backend/supabaseAdmin";
 import type { LegacyJsonSnapshot, NotificationSubscription } from "@/lib/backend/types";
 import { sendWebPushNotification } from "@/lib/backend/webPush";
+import { canUseOvertime, positions } from "@/modules/hr/roles";
+import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 
 export type RuntimeState = LegacyJsonSnapshot & {
   schemaVersion: number;
@@ -346,6 +348,65 @@ function toAttendanceKey(userId: string, item: { date?: string; day?: number; sl
   return `${userId}-${dayToken}-${item.slot}`;
 }
 
+function stripAttendancePhotos(details: RuntimeState["attendanceDetails"]) {
+  return Object.fromEntries(
+    Object.entries(details || {}).map(([key, value]) => [
+      key,
+      {
+        ...value,
+        photo: value?.photo ? "__deferred__" : ""
+      }
+    ])
+  );
+}
+
+function getAccountById(state: RuntimeState, userId: string) {
+  return state.accounts.find((account) => account.id === userId) ?? null;
+}
+
+function getAssignedOrdersForUser(state: RuntimeState, userId: string) {
+  const account = getAccountById(state, userId);
+  if (!account) return [];
+  const name = account.displayName;
+  return state.orders.filter((order) => {
+    return (
+      (Array.isArray(order.installerNames) && order.installerNames.includes(name)) ||
+      (Array.isArray(order.productionWorkerNames) && order.productionWorkerNames.includes(name)) ||
+      (Array.isArray(order.supervisorNames) && order.supervisorNames.includes(name)) ||
+      (Array.isArray(order.designerNames) && order.designerNames.includes(name)) ||
+      (Array.isArray(order.fileOperatorNames) && order.fileOperatorNames.includes(name)) ||
+      (order.saleName || "").split(",").map((item) => item.trim()).includes(name)
+    );
+  });
+}
+
+export async function buildMobileBootstrap(userId: string) {
+  const state = await loadRuntimeState();
+  const account = getAccountById(state, userId);
+  if (!account) {
+    throw new Error("Không tìm thấy tài khoản.");
+  }
+
+  const attendance = Object.fromEntries(
+    Object.entries(state.attendance || {}).filter(([key]) => key.startsWith(`${userId}-`))
+  );
+  const attendanceDetails = Object.fromEntries(
+    Object.entries(stripAttendancePhotos(state.attendanceDetails || {})).filter(([key]) => key.startsWith(`${userId}-`))
+  );
+
+  return {
+    account,
+    usernameDirectory: state.accounts.map((item) => ({ id: item.id, username: item.username })),
+    holidayDates: state.holidayDates || [],
+    attendance,
+    attendanceDetails,
+    attendanceCompensationState: state.attendanceCompensationState ? { [userId]: state.attendanceCompensationState[userId] } : {},
+    compensationRequests: (state.compensationRequests || []).filter((request: any) => request.employeeId === userId),
+    overtimeRequests: (state.overtimeRequests || []).filter((request: any) => request.userId === userId),
+    orders: getAssignedOrdersForUser(state, userId)
+  };
+}
+
 function normalizeAttendanceTime(dayValue: string, rawTime?: string) {
   const localDateString = toCurrentLocalDateString();
 
@@ -454,6 +515,149 @@ export async function applyClockIn(payload: {
 
   await saveRuntimeState(state);
   return state;
+}
+
+export async function attachAttendancePhoto(payload: {
+  userId: string;
+  date: string;
+  slot: string;
+  photo: string;
+}) {
+  const state = await loadRuntimeState();
+  const key = `${payload.userId}-${payload.date}-${payload.slot}`;
+  const current = state.attendanceDetails[key] || {
+    gps: "",
+    gpsAddress: "",
+    gpsMeta: null,
+    time: normalizeAttendanceTime(String(payload.date))
+  };
+  state.attendanceDetails[key] = {
+    ...current,
+    photo: payload.photo
+  };
+  await saveRuntimeState(state);
+  return state.attendanceDetails[key];
+}
+
+export async function updateOwnRuntimeAccount(payload: {
+  userId: string;
+  username: string;
+  password: string;
+}) {
+  const state = await loadRuntimeState();
+  const nextUsername = payload.username.trim().toLowerCase();
+  const nextPassword = payload.password.trim();
+  if (!nextUsername) throw new Error("Tên đăng nhập không được để trống.");
+  if (!nextPassword) throw new Error("Mật khẩu không được để trống.");
+
+  const duplicate = state.accounts.some(
+    (account) => account.id !== payload.userId && account.username.trim().toLowerCase() === nextUsername
+  );
+  if (duplicate) {
+    throw new Error("Tên đăng nhập này đã tồn tại.");
+  }
+
+  let updatedAccount = null as RuntimeState["accounts"][number] | null;
+  state.accounts = state.accounts.map((account) => {
+    if (account.id !== payload.userId) return account;
+    updatedAccount = {
+      ...account,
+      username: nextUsername,
+      password: nextPassword
+    };
+    return updatedAccount;
+  });
+
+  if (!updatedAccount) {
+    throw new Error("Không tìm thấy tài khoản.");
+  }
+
+  await saveRuntimeState(state);
+  return updatedAccount;
+}
+
+function roundOvertimeHours(from: string, to: string) {
+  const [fromHour, fromMinute] = from.split(":").map(Number);
+  const [toHour, toMinute] = to.split(":").map(Number);
+  let diffMinutes = (toHour * 60 + toMinute) - (fromHour * 60 + fromMinute);
+  if (diffMinutes < 0) diffMinutes += 24 * 60;
+  const roundedQuarterHours = Math.floor(diffMinutes / 15);
+  return roundedQuarterHours * 0.25;
+}
+
+export async function createOvertimeRequest(payload: {
+  userId: string;
+  from: string;
+  to: string;
+  reason: string;
+  orderCode?: string;
+}) {
+  const state = await loadRuntimeState();
+  const account = getAccountById(state, payload.userId);
+  if (!account) throw new Error("Không tìm thấy nhân sự.");
+  const primaryPosition = account.positionIds[0] || "";
+  if (!canUseOvertime(primaryPosition)) {
+    throw new Error("Vị trí hiện tại không được đăng ký tăng ca.");
+  }
+  if (!payload.reason.trim()) throw new Error("Bạn cần nhập lý do tăng ca.");
+
+  const hours = roundOvertimeHours(payload.from, payload.to);
+  if (hours <= 0) {
+    throw new Error("Tăng ca chưa đủ 15 phút nên không được tính.");
+  }
+
+  const nextRequest = {
+    id: `ot-${Date.now()}`,
+    userId: payload.userId,
+    userDisplayName: account.displayName,
+    from: payload.from,
+    to: payload.to,
+    hours,
+    orderCode: payload.orderCode || "",
+    reason: payload.reason.trim(),
+    status: "approved",
+    createdAt: new Date().toISOString()
+  };
+
+  state.overtimeRequests = [nextRequest, ...(state.overtimeRequests || [])];
+  await saveRuntimeState(state);
+  return nextRequest;
+}
+
+export async function createCompensationBatch(payload: {
+  userId: string;
+  reason: string;
+  items: Array<{ date: string; slots: string[] }>;
+}) {
+  const state = await loadRuntimeState();
+  const account = getAccountById(state, payload.userId);
+  if (!account) throw new Error("Không tìm thấy nhân sự.");
+  if (!payload.reason.trim()) throw new Error("Bạn cần nhập lý do chấm công bù.");
+
+  const primaryPosition = account.positionIds[0] || "";
+  const level = positions.find((item) => item.id === primaryPosition)?.level ?? "staff";
+  const submissionSize = payload.items.reduce((total, item) => total + item.slots.length, 0);
+  const groupId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const requests = payload.items.map((item, index) => ({
+    id: `comp-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    groupId,
+    employeeId: payload.userId,
+    employeeName: account.displayName,
+    employeePositionLevel: level,
+    date: item.date,
+    slots: item.slots,
+    reason: payload.reason.trim(),
+    missingCountInMonth: submissionSize,
+    requiredApprovals: getRequiredApprovals(level, submissionSize),
+    approvals: [],
+    status: "pending",
+    createdAt: new Date().toISOString()
+  }));
+
+  state.compensationRequests = [...requests, ...(state.compensationRequests || [])];
+  await saveRuntimeState(state);
+  return requests;
 }
 
 export async function applyReportDone(payload: { orderCode: string; workerName: string }) {

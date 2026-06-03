@@ -6,9 +6,11 @@ import type { AttendanceSlot } from "@/modules/attendance/types";
 import type { UserAccount } from "@/modules/hr/accounts";
 
 type RuntimeData = {
+  account?: UserAccount;
   accounts?: UserAccount[];
   attendance?: Record<string, string>;
   holidayDates?: string[];
+  usernameDirectory?: Array<{ id: string; username: string }>;
 };
 
 const sessionStorageKey = "gomita_iphone_web_session_v1";
@@ -22,6 +24,7 @@ function base64UrlToUint8Array(base64Url: string) {
 
 export default function IphoneClockinPage() {
   const [accounts, setAccounts] = useState<UserAccount[]>([]);
+  const [usernameDirectory, setUsernameDirectory] = useState<Array<{ id: string; username: string }>>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [username, setUsername] = useState("");
@@ -62,17 +65,23 @@ export default function IphoneClockinPage() {
     return currentTime.getDay() === 0 || holidayDates.includes(currentDateKey);
   }, [currentDateKey, currentTime, holidayDates]);
 
-  const fetchRuntimeData = useCallback(async () => {
-    const response = await fetch("/api/data", { cache: "no-store" });
+  const fetchRuntimeData = useCallback(async (userId?: string) => {
+    if (!userId) return;
+    const response = await fetch(`/api/mobile/bootstrap?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
     const data = (await response.json()) as RuntimeData;
-    setAccounts(Array.isArray(data.accounts) ? data.accounts : []);
+    setAccounts(data.account ? [data.account] : []);
     setAttendance(data.attendance || {});
     setHolidayDates(Array.isArray(data.holidayDates) ? data.holidayDates : []);
+    setUsernameDirectory(Array.isArray(data.usernameDirectory) ? data.usernameDirectory : []);
+    if (data.account) {
+      setCurrentAccount(data.account);
+    }
   }, []);
 
   useEffect(() => {
-    void fetchRuntimeData();
-  }, [fetchRuntimeData]);
+    if (!currentAccount?.id) return;
+    void fetchRuntimeData(currentAccount.id);
+  }, [currentAccount?.id, fetchRuntimeData]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
@@ -151,7 +160,7 @@ export default function IphoneClockinPage() {
       setCurrentAccount(result.account as UserAccount);
       setMessage("Đăng nhập thành công.");
       setPassword("");
-      await fetchRuntimeData();
+      await fetchRuntimeData(result.account.id);
     } catch {
       setMessage("Không kết nối được máy chủ.");
     } finally {
@@ -187,7 +196,7 @@ export default function IphoneClockinPage() {
       return;
     }
 
-    const hasDuplicate = accounts.some(
+    const hasDuplicate = usernameDirectory.some(
       (account) => account.id !== currentAccount.id && account.username.trim().toLowerCase() === nextUsername
     );
     if (hasDuplicate) {
@@ -235,6 +244,63 @@ export default function IphoneClockinPage() {
       reader.onerror = () => reject(new Error("Không đọc được ảnh."));
       reader.readAsDataURL(file);
     });
+  }
+
+  async function saveAccountCredentialsLean() {
+    if (!currentAccount) return;
+    const nextUsername = accountUsername.trim().toLowerCase();
+    const nextPassword = accountPassword.trim();
+    const confirmPassword = accountPasswordConfirm.trim();
+
+    if (!nextUsername) {
+      setMessage("Tên đăng nhập không được để trống.");
+      return;
+    }
+    if (!nextPassword) {
+      setMessage("Mật khẩu mới không được để trống.");
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      setMessage("Mật khẩu nhập lại không khớp.");
+      return;
+    }
+
+    const hasDuplicate = usernameDirectory.some(
+      (account) => account.id !== currentAccount.id && account.username.trim().toLowerCase() === nextUsername
+    );
+    if (hasDuplicate) {
+      setMessage("Tên đăng nhập này đã tồn tại.");
+      return;
+    }
+
+    setSubmitting(true);
+    setMessage("Đang lưu tài khoản...");
+    try {
+      const response = await fetch("/api/account/self", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentAccount.id,
+          username: nextUsername,
+          password: nextPassword
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.account) {
+        setMessage(result?.error || "Không lưu được tài khoản.");
+        return;
+      }
+
+      setAccounts([result.account]);
+      setCurrentAccount(result.account);
+      setAccountPassword("");
+      setAccountPasswordConfirm("");
+      setMessage("Đã cập nhật tên đăng nhập và mật khẩu.");
+    } catch {
+      setMessage("Không lưu được tài khoản.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function enablePushNotifications() {
@@ -347,6 +413,50 @@ export default function IphoneClockinPage() {
         return;
       }
       setAttendance(result.attendance || {});
+      setMessage(`Đã chấm công mốc ${activeSlot}.`);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Chấm công thất bại.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitClockinLean(file: File) {
+    if (!currentAccount || !activeSlot) return;
+    setSubmitting(true);
+    setMessage("Đang gửi chấm công...");
+    try {
+      const [photo, gps] = await Promise.all([readPhoto(file), getCurrentGpsText()]);
+      const response = await fetch("/api/clockin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentAccount.id,
+          date: String(currentTime.getDate()),
+          slot: activeSlot,
+          gps,
+          time: new Date().toISOString()
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        setMessage(result?.error || "Chấm công thất bại.");
+        return;
+      }
+
+      fetch("/api/clockin-photo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentAccount.id,
+          date: currentTime.getDate(),
+          slot: activeSlot,
+          photo
+        })
+      }).catch(() => {});
+
+      await fetchRuntimeData(currentAccount.id);
       setMessage(`Đã chấm công mốc ${activeSlot}.`);
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (error) {
@@ -502,7 +612,7 @@ export default function IphoneClockinPage() {
                     <button
                       className="h-11 rounded-xl bg-slate-900 font-black text-white disabled:opacity-60"
                       disabled={submitting || !accountUsername.trim() || !accountPassword.trim() || !accountPasswordConfirm.trim()}
-                      onClick={saveAccountCredentials}
+                      onClick={saveAccountCredentialsLean}
                       type="button"
                     >
                       Lưu tài khoản
@@ -556,7 +666,7 @@ export default function IphoneClockinPage() {
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     if (file) {
-                      void submitClockin(file);
+                      void submitClockinLean(file);
                     }
                   }}
                   ref={fileInputRef}

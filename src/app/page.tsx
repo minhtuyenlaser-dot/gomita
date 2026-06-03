@@ -26,7 +26,7 @@ import { LoginScreen } from "@/modules/hr/components/LoginScreen";
 import { CompanyPayrollDashboard, ProfileDashboard } from "@/modules/hr/components/ProfileDashboard";
 import { BackupRestoreDashboard } from "@/modules/hr/components/BackupRestoreDashboard";
 import type { LeaveRequest } from "@/modules/hr/leave";
-import { getMenuForPosition, mustClockIn, positions } from "@/modules/hr/roles";
+import { canUseOvertime, getMenuForPosition, mustClockIn, positions } from "@/modules/hr/roles";
 import { FinanceDashboard } from "@/modules/finance/components/FinanceDashboard";
 import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
 import { getApiUrl } from "@/lib/api";
@@ -504,7 +504,7 @@ export default function HomePage() {
             })}
           </nav>
 
-          {mustClockIn(currentPosition.id) ? <SidebarClock onOvertime={() => setOvertimeOpen(true)} /> : null}
+          {mustClockIn(currentPosition.id) ? <SidebarClock canUseOvertime={canUseOvertime(currentPosition.id)} onOvertime={() => setOvertimeOpen(true)} /> : null}
         </div>
       </aside>
 
@@ -582,7 +582,7 @@ export default function HomePage() {
   );
 }
 
-function SidebarClock({ onOvertime }: { onOvertime: () => void }) {
+function SidebarClock({ onOvertime, canUseOvertime }: { onOvertime: () => void; canUseOvertime: boolean }) {
   const [mounted, setMounted] = useState(false);
   const [timeStr, setTimeStr] = useState("07:30:00");
   const [dateStr, setDateStr] = useState("Thứ 6, 24/05/2024");
@@ -627,7 +627,9 @@ function SidebarClock({ onOvertime }: { onOvertime: () => void }) {
       <div className="rounded-lg border border-white/15 bg-white/5 p-4 text-center">
         <div className="text-3xl font-black text-orange-400">{timeStr}</div>
         <div className="mt-1 text-sm text-slate-300">{dateStr}</div>
-        <button className="mt-4 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
+        {canUseOvertime ? (
+          <button className="mt-4 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
+        ) : null}
       </div>
     </div>
   );

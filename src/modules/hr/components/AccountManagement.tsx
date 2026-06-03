@@ -65,8 +65,8 @@ export function AccountManagement({
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
   const canApprove = currentPositionId === "director";
-  const canReviewLeave = currentPositionId === "director" || currentPositionId === "hr";
-  const canEdit = currentPositionId === "hr" || currentPositionId === "director";
+  const canReviewLeave = currentPositionId === "director" || currentPositionId === "hr" || currentPositionId === "hr_manager";
+  const canEdit = currentPositionId === "hr" || currentPositionId === "hr_manager" || currentPositionId === "director";
   const holidayMonthDays = useMemo(() => {
     const [yearText, monthText] = holidayMonth.split("-");
     const year = Number(yearText);

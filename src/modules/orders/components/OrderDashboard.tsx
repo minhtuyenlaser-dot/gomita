@@ -20,7 +20,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UserAccount } from "@/modules/hr/accounts";
 import type { Position } from "@/modules/hr/roles";
-import { isWorkerPosition, positions } from "@/modules/hr/roles";
+import { isCompanyWideOrderRole, isWorkerPosition, positions } from "@/modules/hr/roles";
 import { attendanceSlots, getSlotWindow, isSlotOpen, getRequiredApprovals } from "@/modules/attendance/compensationRules";
 import type { AttendanceSlot } from "@/modules/attendance/types";
 import {
@@ -99,6 +99,9 @@ export function OrderDashboard({
   const [showArchived, setShowArchived] = useState(false);
   const visibleOrders = useMemo(() => {
     const targetStatus = showArchived ? "archived" : "active";
+    if (isCompanyWideOrderRole(position.id)) {
+      return orders.filter((order) => order.status === targetStatus);
+    }
     return orders.filter((order) => order.status === targetStatus && canSeeOrder(position.id, currentUserName, order));
   }, [currentUserName, orders, position.id, showArchived]);
   const canceledOrders = useMemo(() => orders.filter((order) => order.status === "canceled"), [orders]);
@@ -109,6 +112,8 @@ export function OrderDashboard({
   const [assignOrder, setAssignOrder] = useState<Order | null>(null);
   const [moveOrder, setMoveOrder] = useState<Order | null>(null);
   const [showCanceled, setShowCanceled] = useState(false);
+  const [draggingOrderId, setDraggingOrderId] = useState("");
+  const [dragOverStep, setDragOverStep] = useState<OrderStep | null>(null);
   const selectedOrder = visibleOrders.find((order) => order.id === selectedOrderId) ?? visibleOrders[0];
 
   if (isWorkerPosition(position.id)) {
@@ -128,7 +133,7 @@ export function OrderDashboard({
     );
   }
 
-  const allowedSteps = visibleOrderStepsFor(position.id);
+  const allowedSteps = isCompanyWideOrderRole(position.id) ? orderSteps : visibleOrderStepsFor(position.id);
 
   function showNotice(type: Notice["type"], text: string) {
     setNotice({ type, text });
@@ -160,6 +165,18 @@ export function OrderDashboard({
   function approveSelected(order: Order) {
     updateOrder(order.id, moveToNextStep);
     showNotice("success", `Đã xác nhận và chuyển ${order.code} sang ${order.pendingStep ?? "bước tiếp theo"}.`);
+  }
+
+  function handleDropNextStep(order: Order, targetStep: OrderStep) {
+    setDragOverStep(null);
+    setDraggingOrderId("");
+    const currentIndex = orderSteps.indexOf(order.step);
+    const targetIndex = orderSteps.indexOf(targetStep);
+    if (currentIndex < 0 || targetIndex !== currentIndex + 1) {
+      showNotice("warning", "Chá»‰ Ä‘Æ°á»£c kÃ©o tháº£ Ä‘Æ¡n hÃ ng sang cÃ´t tiáº¿p theo.");
+      return;
+    }
+    moveSelected(order);
   }
 
   return (
@@ -197,13 +214,43 @@ export function OrderDashboard({
               {orderSteps.map((step, index) => {
                 const stepOrders = allowedSteps.includes(step) ? visibleOrders.filter((order) => order.step === step) : [];
                 return (
-                  <div key={step} className={`min-h-[560px] border-r border-slate-200 bg-gradient-to-b ${stepStyles[index]}`}>
+                  <div
+                    key={step}
+                    className={`min-h-[560px] border-r border-slate-200 bg-gradient-to-b ${stepStyles[index]} ${dragOverStep === step ? "ring-2 ring-orange-300 ring-inset" : ""}`}
+                    onDragLeave={() => {
+                      if (dragOverStep === step) setDragOverStep(null);
+                    }}
+                    onDragOver={(event) => {
+                      if (!draggingOrderId) return;
+                      event.preventDefault();
+                      setDragOverStep(step);
+                    }}
+                    onDrop={() => {
+                      if (!draggingOrderId) return;
+                      const order = visibleOrders.find((item) => item.id === draggingOrderId);
+                      if (order) {
+                        handleDropNextStep(order, step);
+                      }
+                    }}
+                  >
                     <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b border-slate-200 bg-white/70 px-3 backdrop-blur">
                       <span className="text-xs font-bold text-slate-800 tracking-tight">{index + 1}. {step}</span>
                       <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-slate-500">{stepOrders.length}</span>
                     </div>
                     <div className="grid gap-3 p-3">
-                      {stepOrders.map((order) => <KanbanCard key={order.id} order={order} selected={order.id === selectedOrder?.id} onSelect={setSelectedOrderId} />)}
+                      {stepOrders.map((order) => (
+                        <KanbanCard
+                          key={order.id}
+                          order={order}
+                          selected={order.id === selectedOrder?.id}
+                          onDragEnd={() => {
+                            setDraggingOrderId("");
+                            setDragOverStep(null);
+                          }}
+                          onDragStart={() => setDraggingOrderId(order.id)}
+                          onSelect={setSelectedOrderId}
+                        />
+                      ))}
                     </div>
                   </div>
                 );
@@ -581,11 +628,30 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
   URL.revokeObjectURL(url);
 }
 
-function KanbanCard({ order, selected, onSelect }: { order: Order; selected: boolean; onSelect: (id: string) => void }) {
+function KanbanCard({
+  order,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragEnd
+}: {
+  order: Order;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}) {
   const status = getWorkStatusMeta(order);
   const workers = getCurrentStepWorkers(order);
   return (
-    <button className={`group relative rounded-lg border bg-white p-2 text-left shadow-sm transition duration-150 hover:z-20 hover:scale-[1.06] hover:shadow-xl ${selected ? "border-orange-400 ring-2 ring-orange-100" : "border-slate-200"}`} onClick={() => onSelect(order.id)} type="button">
+    <button
+      className={`group relative rounded-lg border bg-white p-2 text-left shadow-sm transition duration-150 hover:z-20 hover:scale-[1.06] hover:shadow-xl ${selected ? "border-orange-400 ring-2 ring-orange-100" : "border-slate-200"}`}
+      draggable
+      onClick={() => onSelect(order.id)}
+      onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      type="button"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="break-words text-[11px] font-black leading-5">{order.code}</div>
         <span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${status.className}`}>{status.label}</span>
