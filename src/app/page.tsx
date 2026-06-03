@@ -19,7 +19,7 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { demoAccounts, type UserAccount } from "@/modules/hr/accounts";
 import { AccountManagement } from "@/modules/hr/components/AccountManagement";
 import { LoginScreen } from "@/modules/hr/components/LoginScreen";
@@ -128,6 +128,14 @@ export default function HomePage() {
   const [attendanceDetails, setAttendanceDetails] = useState<Record<string, { photo: string; gps: string; time: string }>>({});
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
+  const hasLoadedRemoteRef = useRef(false);
+  const remoteSnapshotsRef = useRef<Record<string, string>>({});
+
+  const serializeSyncValue = (value: unknown) => JSON.stringify(value ?? null);
+  const markRemoteSnapshot = (key: string, value: unknown) => {
+    remoteSnapshotsRef.current[key] = serializeSyncValue(value);
+  };
+  const isRemoteSnapshot = (key: string, value: unknown) => remoteSnapshotsRef.current[key] === serializeSyncValue(value);
 
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
@@ -136,17 +144,51 @@ export default function HomePage() {
         .then((res) => res.json())
         .then((data) => {
           setBackendError("");
-          if (data.accounts) setAccounts(data.accounts);
-          if (data.orders) setOrders(data.orders);
-          if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
-          if (data.compensationRequests) setCompensationRequests(data.compensationRequests);
-          if (data.leaveRequests) setLeaveRequests(data.leaveRequests);
-          if (data.cashTransactions) setCashTransactions(data.cashTransactions);
-          if (data.customerDebts) setCustomerDebts(data.customerDebts);
-          if (data.feedbackEntries) setFeedbackEntries(data.feedbackEntries);
-          if (data.holidayDates) setHolidayDates(data.holidayDates);
-          if (data.attendance) setAttendance(data.attendance);
-          if (data.attendanceDetails) setAttendanceDetails(data.attendanceDetails);
+          if (data.accounts) {
+            markRemoteSnapshot("accounts", data.accounts);
+            setAccounts(data.accounts);
+          }
+          if (data.orders) {
+            markRemoteSnapshot("orders", data.orders);
+            setOrders(data.orders);
+          }
+          if (data.overtimeRequests) {
+            markRemoteSnapshot("overtimeRequests", data.overtimeRequests);
+            setOvertimeRequests(data.overtimeRequests);
+          }
+          if (data.compensationRequests) {
+            markRemoteSnapshot("compensationRequests", data.compensationRequests);
+            setCompensationRequests(data.compensationRequests);
+          }
+          if (data.leaveRequests) {
+            markRemoteSnapshot("leaveRequests", data.leaveRequests);
+            setLeaveRequests(data.leaveRequests);
+          }
+          if (data.cashTransactions) {
+            markRemoteSnapshot("cashTransactions", data.cashTransactions);
+            setCashTransactions(data.cashTransactions);
+          }
+          if (data.customerDebts) {
+            markRemoteSnapshot("customerDebts", data.customerDebts);
+            setCustomerDebts(data.customerDebts);
+          }
+          if (data.feedbackEntries) {
+            markRemoteSnapshot("feedbackEntries", data.feedbackEntries);
+            setFeedbackEntries(data.feedbackEntries);
+          }
+          if (data.holidayDates) {
+            markRemoteSnapshot("holidayDates", data.holidayDates);
+            setHolidayDates(data.holidayDates);
+          }
+          if (data.attendance) {
+            markRemoteSnapshot("attendance", data.attendance);
+            setAttendance(data.attendance);
+          }
+          if (data.attendanceDetails) {
+            markRemoteSnapshot("attendanceDetails", data.attendanceDetails);
+            setAttendanceDetails(data.attendanceDetails);
+          }
+          hasLoadedRemoteRef.current = true;
         })
         .catch((err) => {
           console.error("Không kết nối được backend trung tâm.", err);
@@ -161,101 +203,124 @@ export default function HomePage() {
 
   // Tự động đồng bộ ngược lại backend trung tâm
   useEffect(() => {
-    if (accounts === demoAccounts) return;
+    if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accounts })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("accounts", accounts))
+      .catch(() => {});
   }, [accounts]);
 
   useEffect(() => {
-    if (orders === demoOrders) return;
+    if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orders })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("orders", orders))
+      .catch(() => {});
   }, [orders]);
 
   useEffect(() => {
-    if (overtimeRequests.length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("overtimeRequests", overtimeRequests)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ overtimeRequests })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("overtimeRequests", overtimeRequests))
+      .catch(() => {});
   }, [overtimeRequests]);
 
   useEffect(() => {
-    if (compensationRequests.length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("compensationRequests", compensationRequests)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ compensationRequests })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("compensationRequests", compensationRequests))
+      .catch(() => {});
   }, [compensationRequests]);
 
   useEffect(() => {
-    if (leaveRequests.length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("leaveRequests", leaveRequests)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leaveRequests })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("leaveRequests", leaveRequests))
+      .catch(() => {});
   }, [leaveRequests]);
 
   useEffect(() => {
-    if (cashTransactions.length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("cashTransactions", cashTransactions)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cashTransactions })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("cashTransactions", cashTransactions))
+      .catch(() => {});
   }, [cashTransactions]);
 
   useEffect(() => {
-    if (customerDebts.length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("customerDebts", customerDebts)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ customerDebts })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("customerDebts", customerDebts))
+      .catch(() => {});
   }, [customerDebts]);
 
   useEffect(() => {
-    if (feedbackEntries.length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("feedbackEntries", feedbackEntries)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedbackEntries })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("feedbackEntries", feedbackEntries))
+      .catch(() => {});
   }, [feedbackEntries]);
 
   useEffect(() => {
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("holidayDates", holidayDates)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ holidayDates })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("holidayDates", holidayDates))
+      .catch(() => {});
   }, [holidayDates]);
 
   useEffect(() => {
-    if (Object.keys(attendance).length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("attendance", attendance)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendance })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("attendance", attendance))
+      .catch(() => {});
   }, [attendance]);
 
   useEffect(() => {
-    if (Object.keys(attendanceDetails).length === 0) return;
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("attendanceDetails", attendanceDetails)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ attendanceDetails })
-    }).catch(() => {});
+    })
+      .then(() => markRemoteSnapshot("attendanceDetails", attendanceDetails))
+      .catch(() => {});
   }, [attendanceDetails]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds?.includes(position.id)) : [], [currentAccount]);
