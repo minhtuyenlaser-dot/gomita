@@ -37,11 +37,21 @@ export function buildDefaultRuntimeState(): RuntimeState {
 }
 
 function mergeState(base: RuntimeState, patch: RuntimePatch): RuntimeState {
-  return {
+  const nextState = {
     ...base,
     ...patch,
     schemaVersion: CURRENT_SCHEMA_VERSION
   };
+
+  if (Array.isArray(patch.accounts) && patch.accounts.length === 0 && Array.isArray(base.accounts) && base.accounts.length > 0) {
+    nextState.accounts = base.accounts;
+  }
+
+  if (Array.isArray(patch.orders) && patch.orders.length === 0 && Array.isArray(base.orders) && base.orders.length > 0) {
+    nextState.orders = base.orders;
+  }
+
+  return nextState;
 }
 
 function normalizeDisplayText(value: string | undefined) {

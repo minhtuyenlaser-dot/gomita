@@ -565,7 +565,7 @@ export function WorkerDashboard({
         {
           text: "Có",
           onPress: () => {
-            setSelectedCompSlots(pendingSlots.map((item) => ({ date: item.date, slot: item.slot })));
+            setSelectedCompSlots([]);
             setCompOpen(true);
           }
         }

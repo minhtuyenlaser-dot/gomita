@@ -128,7 +128,11 @@ export function AttendanceDashboard({
         // Nếu không có bản ghi chấm công (chưa chấm)
         const attendanceKind = attendance[key];
         const hasPendingOrApproved = compensationRequests.some(
-          (req) => req.employeeId === selectedWorkerId && req.date === dateString && req.slots.includes(slot)
+          (req) =>
+            req.employeeId === selectedWorkerId &&
+            req.date === dateString &&
+            req.slots.includes(slot) &&
+            req.status !== "rejected"
         );
         const canHrOverrideLocked = isHrOrDirector && attendanceKind === "leave_locked";
         if (attendanceKind === "normal" || attendanceKind === "compensated" || hasPendingOrApproved) return;

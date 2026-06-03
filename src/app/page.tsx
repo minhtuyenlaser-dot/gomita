@@ -130,12 +130,51 @@ export default function HomePage() {
   const [feedbackText, setFeedbackText] = useState("");
   const hasLoadedRemoteRef = useRef(false);
   const remoteSnapshotsRef = useRef<Record<string, string>>({});
+  const accountsRef = useRef(accounts);
+  const ordersRef = useRef(orders);
 
   const serializeSyncValue = (value: unknown) => JSON.stringify(value ?? null);
   const markRemoteSnapshot = (key: string, value: unknown) => {
     remoteSnapshotsRef.current[key] = serializeSyncValue(value);
   };
   const isRemoteSnapshot = (key: string, value: unknown) => remoteSnapshotsRef.current[key] === serializeSyncValue(value);
+  const getCollectionSize = (value: unknown) => {
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length;
+    return 0;
+  };
+  const parseRemoteSnapshot = (key: string) => {
+    const raw = remoteSnapshotsRef.current[key];
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return null;
+    }
+  };
+  const shouldRejectSuspiciousEmptyState = (key: string, nextValue: unknown, currentValue: unknown) => {
+    if (!["accounts", "orders"].includes(key)) return false;
+    const nextSize = getCollectionSize(nextValue);
+    if (nextSize > 0) return false;
+    const currentSize = getCollectionSize(currentValue);
+    const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
+    return currentSize > 0 || previousRemoteSize > 0;
+  };
+  const shouldSkipDangerousEmptySync = (key: string, value: unknown) => {
+    if (!["accounts", "orders"].includes(key)) return false;
+    const nextSize = getCollectionSize(value);
+    if (nextSize > 0) return false;
+    const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
+    return previousRemoteSize > 0;
+  };
+
+  useEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
+
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
 
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
@@ -145,12 +184,20 @@ export default function HomePage() {
         .then((data) => {
           setBackendError("");
           if (data.accounts) {
+            if (shouldRejectSuspiciousEmptyState("accounts", data.accounts, accountsRef.current)) {
+              setBackendError("Backend vừa trả về danh sách nhân sự rỗng bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đăng nhập.");
+            } else {
             markRemoteSnapshot("accounts", data.accounts);
             setAccounts(data.accounts);
+            }
           }
           if (data.orders) {
+            if (shouldRejectSuspiciousEmptyState("orders", data.orders, ordersRef.current)) {
+              setBackendError("Backend vừa trả về danh sách đơn hàng rỗng bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đang chạy.");
+            } else {
             markRemoteSnapshot("orders", data.orders);
             setOrders(data.orders);
+            }
           }
           if (data.overtimeRequests) {
             markRemoteSnapshot("overtimeRequests", data.overtimeRequests);
@@ -203,7 +250,7 @@ export default function HomePage() {
 
   // Tự động đồng bộ ngược lại backend trung tâm
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts)) return;
+    if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts) || shouldSkipDangerousEmptySync("accounts", accounts)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -214,7 +261,7 @@ export default function HomePage() {
   }, [accounts]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders)) return;
+    if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders) || shouldSkipDangerousEmptySync("orders", orders)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
