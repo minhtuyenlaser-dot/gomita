@@ -126,14 +126,15 @@ export function AttendanceDashboard({
       attendanceSlots.forEach((slot) => {
         const key = `${selectedWorkerId}-${d}-${slot}`;
         // Nếu không có bản ghi chấm công (chưa chấm)
-        if (!attendance[key]) {
+        const attendanceKind = attendance[key];
+        const hasPendingOrApproved = compensationRequests.some(
+          (req) => req.employeeId === selectedWorkerId && req.date === dateString && req.slots.includes(slot)
+        );
+        const canHrOverrideLocked = isHrOrDirector && attendanceKind === "leave_locked";
+        if (attendanceKind === "normal" || attendanceKind === "compensated" || hasPendingOrApproved) return;
+        if (!attendanceKind || canHrOverrideLocked) {
+          missingSlotsForDay.push(slot);
           // Kiểm tra xem đã có yêu cầu công bù nào cho mốc này chưa
-          const hasPendingOrApproved = compensationRequests.some(
-            (req) => req.employeeId === selectedWorkerId && req.date === dateString && req.slots.includes(slot)
-          );
-          if (!hasPendingOrApproved) {
-            missingSlotsForDay.push(slot);
-          }
         }
       });
       
@@ -145,7 +146,7 @@ export function AttendanceDashboard({
       }
     }
     return list;
-  }, [selectedWorkerId, attendance, compensationRequests]);
+  }, [selectedWorkerId, attendance, compensationRequests, isHrOrDirector]);
 
   const availableDates = realMissingAttendance;
   const selectedMissingItem = realMissingAttendance.find((item) => item.date === selectedDate);
@@ -190,6 +191,7 @@ export function AttendanceDashboard({
     const workerPosition = worker.positionIds[0] ?? "production_worker";
     const level = roleDefinitions.find((item) => item.id === workerPosition)?.level ?? "staff";
 
+    const createdAt = new Date().toISOString();
     const nextRequest: CompensationRequest = {
       id: `comp-${Date.now()}`,
       employeeId: selectedWorkerId,
@@ -200,10 +202,22 @@ export function AttendanceDashboard({
       reason: reason.trim(),
       missingCountInMonth: monthCount,
       requiredApprovals: getRequiredApprovals(level, monthCount),
-      approvals: [],
-      status: "pending",
-      createdAt: new Date().toISOString()
+      approvals: isHrOrDirector
+        ? [{ role: currentApprovalRole ?? "hr", approverName: position.name, approvedAt: createdAt }]
+        : [],
+      status: isHrOrDirector ? "approved" : "pending",
+      createdAt
     };
+
+    if (isHrOrDirector) {
+      const dayNumber = Number(selectedDate.split("-")[2]);
+      const nextAttendance = { ...attendance };
+      selectedSlots.forEach((slot) => {
+        const key = `${selectedWorkerId}-${dayNumber}-${slot}`;
+        nextAttendance[key] = "compensated";
+      });
+      onAttendanceChange(nextAttendance);
+    }
 
     onCompensationRequestsChange([nextRequest, ...compensationRequests]);
     setSelectedDate("");
