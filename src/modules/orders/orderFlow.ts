@@ -105,6 +105,16 @@ const baseAssignment = {
   installerName: "Lê Văn Lắp Đặt"
 };
 
+const emptyAssignment = {
+  saleName: "",
+  designerName: "",
+  fileOperatorName: "",
+  workshopManagerName: "",
+  supervisorName: "",
+  productionWorkerName: "",
+  installerName: ""
+};
+
 const completeRequiredInfo = {
   volume: "Thi công nội thất phòng khách, bếp, 3 phòng ngủ.",
   customerRequest: "Gỗ MDF An Cường, màu sáng, thi công gọn sạch.",
@@ -239,6 +249,17 @@ export function buildOrder(input: CreateOrderInput, existingCodes: string[]): Or
     }),
     saleName,
     assignee: saleName,
+    designerName: emptyAssignment.designerName,
+    fileOperatorName: emptyAssignment.fileOperatorName,
+    workshopManagerName: emptyAssignment.workshopManagerName,
+    supervisorName: emptyAssignment.supervisorName,
+    productionWorkerName: emptyAssignment.productionWorkerName,
+    installerName: emptyAssignment.installerName,
+    designerNames: [],
+    fileOperatorNames: [],
+    supervisorNames: [],
+    productionWorkerNames: [],
+    installerNames: [],
     volume: "",
     customerRequest: "",
     materialNote: "",
@@ -346,8 +367,8 @@ export function moveToNextStep(order: Order): Order {
   else if (nextStep === "Ra file") nextAssignee = order.fileOperatorName;
   else if (nextStep === "Sản xuất") nextAssignee = order.productionWorkerName;
   else if (nextStep === "Lắp đặt") nextAssignee = order.installerName;
-  else if (nextStep === "Nghiệm thu") nextAssignee = order.supervisorName || "Phạm Văn Giám Sát";
-  else if (nextStep === "Hoàn công") nextAssignee = "Trần Thị Kế Toán";
+  else if (nextStep === "Nghiệm thu") nextAssignee = order.supervisorName || order.installerName || "";
+  else if (nextStep === "Hoàn công") nextAssignee = "";
   else if (nextStep === "Báo giá" || nextStep === "Tiếp nhận") nextAssignee = order.saleName;
 
   if (!updatedLogs.some(log => log.step === nextStep)) {

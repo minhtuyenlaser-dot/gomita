@@ -69,6 +69,46 @@ export function canManagerAssign(positionId: string, step: OrderStep): boolean {
   return false;
 }
 
+function keepValidName(name: string | undefined, validNames: Set<string>) {
+  const normalized = name?.trim() ?? "";
+  return normalized && validNames.has(normalized) ? normalized : "";
+}
+
+function keepValidNames(names: (string | undefined)[], validNames: Set<string>) {
+  return names
+    .map((name) => name?.trim() ?? "")
+    .filter((name) => name && validNames.has(name));
+}
+
+function sanitizeOrderForDisplay(order: Order, validNames: Set<string>): Order {
+  const saleNames = keepValidNames(order.saleName ? order.saleName.split(",") : [], validNames);
+  const designerNames = keepValidNames(order.designerNames?.length ? order.designerNames : [order.designerName], validNames);
+  const fileOperatorNames = keepValidNames(order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName], validNames);
+  const productionWorkerNames = keepValidNames(order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName], validNames);
+  const installerNames = keepValidNames(order.installerNames?.length ? order.installerNames : [order.installerName], validNames);
+  const supervisorNames = keepValidNames(order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName], validNames);
+
+  return {
+    ...order,
+    saleName: saleNames.join(", "),
+    designerName: designerNames[0] ?? "",
+    designerNames,
+    fileOperatorName: fileOperatorNames[0] ?? "",
+    fileOperatorNames,
+    workshopManagerName: keepValidName(order.workshopManagerName, validNames),
+    supervisorName: supervisorNames[0] ?? "",
+    supervisorNames,
+    productionWorkerName: productionWorkerNames[0] ?? "",
+    productionWorkerNames,
+    installerName: installerNames[0] ?? "",
+    installerNames,
+    historyLogs: (order.historyLogs || []).map((log) => ({
+      ...log,
+      assignee: keepValidName(log.assignee, validNames)
+    }))
+  };
+}
+
 export function OrderDashboard({ 
   accounts, 
   position, 
@@ -97,14 +137,22 @@ export function OrderDashboard({
   onAttendanceChange: (att: Record<string, string>) => void;
 }) {
   const [showArchived, setShowArchived] = useState(false);
+  const validAccountNames = useMemo(
+    () => new Set(accounts.map((account) => account.displayName.trim()).filter(Boolean)),
+    [accounts]
+  );
+  const normalizedOrders = useMemo(
+    () => orders.map((order) => sanitizeOrderForDisplay(order, validAccountNames)),
+    [orders, validAccountNames]
+  );
   const visibleOrders = useMemo(() => {
     const targetStatus = showArchived ? "archived" : "active";
     if (isCompanyWideOrderRole(position.id)) {
-      return orders.filter((order) => order.status === targetStatus);
+      return normalizedOrders.filter((order) => order.status === targetStatus);
     }
-    return orders.filter((order) => order.status === targetStatus && canSeeOrder(position.id, currentUserName, order));
-  }, [currentUserName, orders, position.id, showArchived]);
-  const canceledOrders = useMemo(() => orders.filter((order) => order.status === "canceled"), [orders]);
+    return normalizedOrders.filter((order) => order.status === targetStatus && canSeeOrder(position.id, currentUserName, order));
+  }, [currentUserName, normalizedOrders, position.id, showArchived]);
+  const canceledOrders = useMemo(() => normalizedOrders.filter((order) => order.status === "canceled"), [normalizedOrders]);
   const [selectedOrderId, setSelectedOrderId] = useState(visibleOrders[0]?.id ?? "");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
