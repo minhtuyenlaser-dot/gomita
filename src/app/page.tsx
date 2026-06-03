@@ -454,7 +454,7 @@ export default function HomePage() {
     </>
   );
 
-  if (["production_worker", "installer", "workshop_manager", "site_supervisor"].includes(currentPosition.id)) {
+  if (["production_worker", "installer", "site_supervisor"].includes(currentPosition.id)) {
     return (
       <main className="min-h-screen bg-slate-50">
         <WorkerTopBar 
