@@ -13,6 +13,8 @@ export function FinanceDashboard({
   setOrders, 
   overtimeRequests = [], 
   accounts = [],
+  attendance = {},
+  attendanceDetails = {},
   currentPosition,
   cashTransactions = [],
   onCashTransactionsChange,
@@ -23,6 +25,8 @@ export function FinanceDashboard({
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>; 
   overtimeRequests: any[];
   accounts: UserAccount[];
+  attendance?: Record<string, string>;
+  attendanceDetails?: Record<string, { photo: string; gps: string; time: string }>;
   currentPosition?: Position;
   cashTransactions?: CashTransaction[];
   onCashTransactionsChange?: React.Dispatch<React.SetStateAction<CashTransaction[]>>;
@@ -98,6 +102,11 @@ export function FinanceDashboard({
 
   function normalizeMonth(value?: string) {
     return (value || "").slice(0, 7);
+  }
+
+  function extractLocalDateText(value?: string) {
+    const match = (value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : "";
   }
 
   function getPositionById(positionId?: string) {
@@ -237,13 +246,38 @@ export function FinanceDashboard({
     return total;
   }
 
+  const workedDatesByUserMonth = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    Object.entries(attendance || {}).forEach(([key, kind]) => {
+      if (kind !== "normal" && kind !== "compensated") return;
+      const match = key.match(/^(.*)-(\d+)-(\d{2}:\d{2})$/);
+      if (!match) return;
+      const userId = match[1];
+      const details = attendanceDetails[key];
+      const dateText = extractLocalDateText(details?.time);
+      if (!dateText) return;
+      const monthKey = normalizeMonth(dateText);
+      if (!monthKey) return;
+      const mapKey = `${userId}:${monthKey}`;
+      if (!map.has(mapKey)) map.set(mapKey, new Set<string>());
+      map.get(mapKey)?.add(dateText);
+    });
+    return map;
+  }, [attendance, attendanceDetails]);
+
+  function getActualWorkedDaysForUser(userId?: string, monthKey?: string) {
+    if (!userId || !monthKey) return 0;
+    return workedDatesByUserMonth.get(`${userId}:${monthKey}`)?.size ?? 0;
+  }
+
   function getHourlyRateForAssignee(displayName?: string, dateLike?: string) {
     if (!displayName) return 0;
     const account = accounts.find((item) => item.status === "active" && item.displayName === displayName);
     if (!account || !account.salaryValue) return 0;
     if ((account.salaryType ?? "daily") === "monthly") {
-      const maxWorkDays = getMaxWorkDaysForDate(dateLike);
-      return maxWorkDays > 0 ? account.salaryValue / maxWorkDays / 8 : 0;
+      const monthKey = normalizeMonth(dateLike) || reportMonth;
+      const actualWorkDays = getActualWorkedDaysForUser(account.id, monthKey);
+      return actualWorkDays > 0 ? account.salaryValue / actualWorkDays / 8 : 0;
     }
     return account.salaryValue / 8;
   }
@@ -422,10 +456,10 @@ export function FinanceDashboard({
     downloadCsv(`thu-chi-${cashExportMonth}.csv`, rows);
   }
 
-  function getMonthlySalary(account: UserAccount) {
+  function getMonthlySalary(account: UserAccount, actualWorkDays: number) {
     if (!account.salaryValue) return 0;
     if ((account.salaryType ?? "daily") === "monthly") return account.salaryValue;
-    return account.salaryValue * getMaxWorkDaysForDate(`${reportMonth}-01`);
+    return account.salaryValue * actualWorkDays;
   }
 
   const orderFinancialRows = useMemo(() => {
@@ -477,11 +511,11 @@ export function FinanceDashboard({
   }, [cashTransactions, reportMonth, orderFinancialRows]);
 
   const efficiencyRows = useMemo(() => {
-    const maxWorkDays = getMaxWorkDaysForDate(`${reportMonth}-01`);
     const activeAccounts = accounts.filter((item) => item.status === "active" && item.salaryValue);
     return activeAccounts.map((account) => {
-      const monthlySalary = getMonthlySalary(account);
-      const availableHours = maxWorkDays * 8;
+      const actualWorkDays = getActualWorkedDaysForUser(account.id, reportMonth);
+      const monthlySalary = getMonthlySalary(account, actualWorkDays);
+      const availableHours = actualWorkDays * 8;
       const hourlyRate = availableHours > 0 ? monthlySalary / availableHours : 0;
       let assignedHours = 0;
 
@@ -508,6 +542,7 @@ export function FinanceDashboard({
         account,
         department: getDepartmentLabel(account),
         monthlySalary,
+        actualWorkDays,
         availableHours,
         assignedHours,
         idleHours,
@@ -516,7 +551,7 @@ export function FinanceDashboard({
         utilizationRatio
       };
     });
-  }, [accounts, orders, overtimeRequests, reportMonth]);
+  }, [accounts, orders, overtimeRequests, reportMonth, workedDatesByUserMonth]);
 
   const filteredEfficiencyRows = useMemo(() => {
     return efficiencyRows.filter((row) => {

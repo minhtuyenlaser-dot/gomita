@@ -491,6 +491,8 @@ export default function HomePage() {
           setOrders={setOrders} 
           overtimeRequests={overtimeRequests} 
           accounts={accounts}
+          attendance={attendance}
+          attendanceDetails={attendanceDetails}
           currentPosition={currentPosition}
           cashTransactions={cashTransactions}
           onCashTransactionsChange={setCashTransactions}
