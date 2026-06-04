@@ -6,7 +6,7 @@ import type { Position } from "@/modules/hr/roles";
 import type { CashTransaction, CashTransactionType, CustomerDebt, CustomerDebtStage, CustomerDebtStatus } from "@/modules/finance/types";
 import { customerDebtStageLabels, customerDebtStatusLabels } from "@/modules/finance/types";
 import { useState, useMemo } from "react";
-import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck } from "lucide-react";
+import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck, Download } from "lucide-react";
 
 export function FinanceDashboard({ 
   orders, 
@@ -40,6 +40,7 @@ export function FinanceDashboard({
   const [debtDueDate, setDebtDueDate] = useState("");
   const [debtStatus, setDebtStatus] = useState<CustomerDebtStatus>("pending");
   const [debtNote, setDebtNote] = useState("");
+  const [cashExportMonth, setCashExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
 
   // Form thêm vật tư mới
   const [newMatName, setNewMatName] = useState("");
@@ -68,6 +69,26 @@ export function FinanceDashboard({
       return summary;
     }, { planned: 0, collected: 0, remaining: 0, overdue: 0 });
   }, [customerDebts]);
+
+  function formatCurrency(value: number) {
+    return `${value.toLocaleString("vi-VN")} đ`;
+  }
+
+  function toCsvValue(value: string | number) {
+    const text = String(value ?? "");
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  function downloadCsv(filename: string, rows: Array<Array<string | number>>) {
+    const content = rows.map((row) => row.map(toCsvValue).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   // Tính giờ làm việc hành chính (bỏ qua nghỉ trưa 11h30-13h30, tối/đêm, Chủ Nhật)
   function calculateWorkingHours(startStr?: string, endStr?: string): number {
@@ -190,6 +211,70 @@ export function FinanceDashboard({
     return account.salaryValue / 8;
   }
 
+  function buildOrderCostSnapshot(order?: Order) {
+    if (!order) {
+      return {
+        laborCost: 0,
+        materialCost: 0,
+        accessorySales: 0,
+        accessoryCost: 0,
+        transportCost: 0,
+        loaderCost: 0,
+        quoteValue: 0,
+        estimateValue: 0,
+        directSpent: 0,
+        profit: 0
+      };
+    }
+
+    const logsWithTime = (order.historyLogs || []).map((log) => {
+      const regularHours = calculateWorkingHours(log.startedAt, log.completedAt);
+      const overtimeHours = overtimeRequests
+        .filter((req) => req.orderCode === order.code && req.userDisplayName === log.assignee && req.status === "approved")
+        .reduce((sum, req) => sum + (req.hours || 0), 0);
+      const hourlyRate = getHourlyRateForAssignee(log.assignee, log.completedAt || log.startedAt);
+      return regularHours * hourlyRate + overtimeHours * hourlyRate * 1.5;
+    });
+
+    const laborCost = logsWithTime.reduce((sum, cost) => sum + cost, 0);
+    const materialCost = (order.materialsList || []).reduce((sum, mat) => sum + mat.price, 0);
+    let accessorySales = 0;
+    let accessoryCost = 0;
+    (order.externalAccessories || []).forEach((acc) => {
+      if (!acc.name.trim()) return;
+      accessorySales += acc.sellPrice || 0;
+      accessoryCost += acc.actualCost || acc.costPrice || 0;
+    });
+    const transportCost = order.installationCosts?.transport || 0;
+    const loaderCost = order.installationCosts?.loader || 0;
+    const quoteValue = order.quotation?.quoteValue || 0;
+    const estimateValue = order.quotation?.estimateValue || 0;
+    const directSpent = materialCost + accessoryCost + laborCost + transportCost + loaderCost;
+    const profit = quoteValue + accessorySales - directSpent;
+
+    return {
+      laborCost,
+      materialCost,
+      accessorySales,
+      accessoryCost,
+      transportCost,
+      loaderCost,
+      quoteValue,
+      estimateValue,
+      directSpent,
+      profit
+    };
+  }
+
+  function getBudgetAlertTone(order?: Order) {
+    const snapshot = buildOrderCostSnapshot(order);
+    if (!snapshot.estimateValue) return "normal" as const;
+    const ratio = snapshot.directSpent / snapshot.estimateValue;
+    if (ratio > 0.95) return "purple" as const;
+    if (ratio > 0.75) return "red" as const;
+    return "normal" as const;
+  }
+
   // Tính toán số liệu tài chính cho đơn hàng được chọn
   const financeStats = useMemo(() => {
     if (!selectedOrder) return { laborCost: 0, materialCost: 0, accessorySales: 0, accessoryCost: 0, profit: 0, totalWorkdays: 0, logsWithTime: [] };
@@ -257,6 +342,49 @@ export function FinanceDashboard({
     };
   }, [selectedOrder, overtimeRequests, accounts]);
 
+  const selectedOrderSnapshot = useMemo(
+    () => buildOrderCostSnapshot(selectedOrder),
+    [selectedOrder, overtimeRequests, accounts]
+  );
+
+  function exportOrdersData() {
+    const rows: Array<Array<string | number>> = [
+      ["Mã đơn", "Khách hàng", "Sale quản lý", "Giá dự toán", "Giá báo khách", "Chi trực tiếp hiện tại", "Tỷ lệ chi/dự toán", "Bước hiện tại"]
+    ];
+    orders.forEach((order) => {
+      const snapshot = buildOrderCostSnapshot(order);
+      const ratio = snapshot.estimateValue > 0 ? `${((snapshot.directSpent / snapshot.estimateValue) * 100).toFixed(1)}%` : "";
+      rows.push([
+        order.code,
+        order.customerName,
+        order.saleName || "",
+        snapshot.estimateValue,
+        snapshot.quoteValue,
+        snapshot.directSpent,
+        ratio,
+        order.step
+      ]);
+    });
+    downloadCsv(`du-lieu-don-hang-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  }
+
+  function exportMonthlyCashflow() {
+    const rows: Array<Array<string | number>> = [["Ngày", "Loại", "Nội dung", "Số tiền", "Tài khoản", "Người nhập"]];
+    cashTransactions
+      .filter((item) => item.createdAt.slice(0, 7) === cashExportMonth)
+      .forEach((item) => {
+        rows.push([
+          item.createdAt.slice(0, 10),
+          item.type,
+          item.note,
+          item.amount,
+          item.accountName,
+          item.createdBy
+        ]);
+      });
+    downloadCsv(`thu-chi-${cashExportMonth}.csv`, rows);
+  }
+
   return (
     <section className="grid gap-6 text-slate-900">
       {/* 1. Thanh Tổng hợp */}
@@ -290,6 +418,39 @@ export function FinanceDashboard({
           <div className="mt-1 text-xs text-slate-400">Lãi gộp sau chi phí nhân công, vật tư, phụ kiện</div>
         </div>
       </div>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-800">Xuất dữ liệu kế toán</h3>
+            <p className="mt-1 text-xs text-slate-500">Tải dữ liệu đơn hàng và dữ liệu thu chi theo tháng để đối chiếu.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={exportOrdersData}
+              className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-xs font-black text-slate-700 transition hover:bg-slate-50"
+            >
+              <Download className="h-4 w-4" />
+              Tải dữ liệu đơn hàng
+            </button>
+            <input
+              type="month"
+              value={cashExportMonth}
+              onChange={(event) => setCashExportMonth(event.target.value)}
+              className="h-10 rounded-lg border border-slate-200 px-3 text-sm font-bold outline-none focus:border-orange-400"
+            />
+            <button
+              type="button"
+              onClick={exportMonthlyCashflow}
+              className="flex min-h-10 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-xs font-black text-emerald-700 transition hover:bg-emerald-100"
+            >
+              <Download className="h-4 w-4" />
+              Tải dữ liệu thu chi tháng
+            </button>
+          </div>
+        </div>
+      </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -384,24 +545,80 @@ export function FinanceDashboard({
             Xem lại toàn bộ đơn hàng
           </h3>
           <div className="grid gap-2">
-            {orders.map(order => (
-              <button 
-                key={order.id} 
-                className={`w-full rounded-lg border p-3 text-left transition ${order.id === selectedOrderId ? "border-orange-500 bg-orange-50/50 text-orange-950 font-bold" : "border-slate-100 bg-white hover:bg-slate-50 text-slate-700"}`}
-                onClick={() => setSelectedOrderId(order.id)}
-                type="button"
-              >
-                <div className="text-sm font-black">{order.code}</div>
-                <div className="mt-1 text-xs text-slate-500">{order.customerName} - {order.area}</div>
-                <span className="mt-2 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{order.step}</span>
-              </button>
-            ))}
+            {orders.map(order => {
+              const tone = getBudgetAlertTone(order);
+              const toneClass =
+                tone === "purple"
+                  ? "border-purple-300 bg-purple-50 text-purple-950 hover:bg-purple-100"
+                  : tone === "red"
+                    ? "border-red-300 bg-red-50 text-red-950 hover:bg-red-100"
+                    : "border-slate-100 bg-white hover:bg-slate-50 text-slate-700";
+              const ratioLabel = (() => {
+                const snapshot = buildOrderCostSnapshot(order);
+                if (!snapshot.estimateValue) return "Chưa có dự toán";
+                return `${((snapshot.directSpent / snapshot.estimateValue) * 100).toFixed(0)}% dự toán`;
+              })();
+              return (
+                <button
+                  key={order.id}
+                  className={`w-full rounded-lg border p-3 text-left transition ${order.id === selectedOrderId ? "border-orange-500 bg-orange-50/50 text-orange-950 font-bold" : toneClass}`}
+                  onClick={() => setSelectedOrderId(order.id)}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm font-black">{order.code}</div>
+                    <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-black">{ratioLabel}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">{order.customerName} - {order.area}</div>
+                  <div className="mt-1 text-[11px] font-semibold text-slate-500">Sale: {order.saleName || "Chưa giao"}</div>
+                  <span className="mt-2 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">{order.step}</span>
+                </button>
+              );
+            })}
           </div>
         </aside>
 
         {/* 3. Panel Chi Tiết Theo Dõi & Hạch Toán Bên Phải */}
         {selectedOrder ? (
           <section className="grid gap-6">
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">{selectedOrder.code}</h3>
+                  <p className="mt-1 text-sm text-slate-500">{selectedOrder.customerName} - {selectedOrder.area}</p>
+                </div>
+                <div className={`rounded-full px-3 py-1 text-xs font-black ${
+                  getBudgetAlertTone(selectedOrder) === "purple"
+                    ? "bg-purple-100 text-purple-700"
+                    : getBudgetAlertTone(selectedOrder) === "red"
+                      ? "bg-red-100 text-red-700"
+                      : "bg-emerald-100 text-emerald-700"
+                }`}>
+                  {selectedOrderSnapshot.estimateValue > 0
+                    ? `${((selectedOrderSnapshot.directSpent / selectedOrderSnapshot.estimateValue) * 100).toFixed(0)}% dự toán`
+                    : "Chưa có dự toán"}
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs font-bold text-slate-500">Sale quản lý</div>
+                  <div className="mt-1 text-sm font-black text-slate-900">{selectedOrder.saleName || "Chưa giao"}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs font-bold text-slate-500">Giá dự toán</div>
+                  <div className="mt-1 text-sm font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.estimateValue)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs font-bold text-slate-500">Giá báo khách</div>
+                  <div className="mt-1 text-sm font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.quoteValue)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs font-bold text-slate-500">Chi trực tiếp hiện tại</div>
+                  <div className="mt-1 text-sm font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.directSpent)}</div>
+                </div>
+              </div>
+            </div>
+
             {currentPosition?.id === "director" && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm text-slate-900">
                 <div className="flex items-center gap-2">
@@ -414,9 +631,19 @@ export function FinanceDashboard({
                   </div>
                 </div>
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (window.confirm(`[CẢNH BÁO] Bạn có chắc chắn muốn XÓA VĨNH VIỄN đơn hàng ${selectedOrder.code} của khách hàng ${selectedOrder.customerName} không?\n\nMọi dữ liệu liên quan sẽ bị xóa sạch và không thể khôi phục!`)) {
-                      setOrders(curr => curr.filter(o => o.id !== selectedOrder.id));
+                      const response = await fetch("/api/orders/delete", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ orderId: selectedOrder.id })
+                      });
+                      const payload = await response.json();
+                      if (!response.ok || !payload?.db?.orders) {
+                        window.alert(payload?.error || "Không xóa được đơn hàng.");
+                        return;
+                      }
+                      setOrders(payload.db.orders);
                       setSelectedOrderId("");
                     }
                   }}

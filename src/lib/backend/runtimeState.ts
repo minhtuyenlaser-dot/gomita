@@ -51,7 +51,34 @@ function mergeState(base: RuntimeState, patch: RuntimePatch): RuntimeState {
     nextState.orders = base.orders;
   }
 
+  if (Array.isArray(patch.accounts) && isSuspiciousCollectionShrink(base.accounts, patch.accounts, (item) => item.id || item.username)) {
+    nextState.accounts = base.accounts;
+  }
+
+  if (Array.isArray(patch.orders) && isSuspiciousCollectionShrink(base.orders, patch.orders, (item) => item.id || item.code)) {
+    nextState.orders = base.orders;
+  }
+
   return nextState;
+}
+
+function isSuspiciousCollectionShrink<T>(
+  baseItems: T[] | undefined,
+  nextItems: T[] | undefined,
+  getKey: (item: T) => string | undefined
+) {
+  if (!Array.isArray(baseItems) || !Array.isArray(nextItems)) return false;
+  if (baseItems.length < 5) return false;
+  if (nextItems.length >= baseItems.length) return false;
+  if (nextItems.length === 0) return true;
+
+  const shrinkRatio = nextItems.length / baseItems.length;
+  const baseKeys = new Set(baseItems.map((item) => getKey(item)).filter(Boolean));
+  const nextKeys = nextItems.map((item) => getKey(item)).filter(Boolean);
+  const overlapCount = nextKeys.filter((key) => baseKeys.has(key)).length;
+  const overlapRatio = nextKeys.length > 0 ? overlapCount / nextKeys.length : 0;
+
+  return shrinkRatio < 0.5 || overlapRatio < 0.8;
 }
 
 function normalizeDisplayText(value: string | undefined) {
@@ -691,6 +718,19 @@ export async function applyReportDone(payload: { orderCode: string; workerName: 
   });
   await saveRuntimeState(state);
   return state;
+}
+
+export async function deleteRuntimeOrder(payload: { orderId: string }) {
+  const state = await loadRuntimeState();
+  const targetOrder = state.orders.find((order) => order.id === payload.orderId);
+  if (!targetOrder) {
+    throw new Error("Không tìm thấy đơn hàng cần xóa.");
+  }
+
+  state.orders = state.orders.filter((order) => order.id !== payload.orderId);
+  state.customerDebts = (state.customerDebts || []).filter((item) => item.orderId !== payload.orderId);
+  await saveRuntimeState(state);
+  return { state, deletedOrder: targetOrder };
 }
 
 export async function applyAttendanceCompensationResponse(payload: {

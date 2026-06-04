@@ -167,6 +167,22 @@ export default function HomePage() {
     const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
     return previousRemoteSize > 0;
   };
+  const shouldRejectSuspiciousShrinkState = (key: string, nextValue: unknown, currentValue: unknown) => {
+    if (!["accounts", "orders"].includes(key)) return false;
+    const nextSize = getCollectionSize(nextValue);
+    const currentSize = getCollectionSize(currentValue);
+    if (currentSize < 5 || nextSize >= currentSize) return false;
+    if (nextSize === 0) return true;
+    return nextSize / currentSize < 0.5;
+  };
+  const shouldSkipSuspiciousShrinkSync = (key: string, value: unknown) => {
+    if (!["accounts", "orders"].includes(key)) return false;
+    const nextSize = getCollectionSize(value);
+    const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
+    if (previousRemoteSize < 5 || nextSize >= previousRemoteSize) return false;
+    if (nextSize === 0) return true;
+    return nextSize / previousRemoteSize < 0.5;
+  };
 
   useEffect(() => {
     accountsRef.current = accounts;
@@ -186,6 +202,8 @@ export default function HomePage() {
           if (data.accounts) {
             if (shouldRejectSuspiciousEmptyState("accounts", data.accounts, accountsRef.current)) {
               setBackendError("Backend vừa trả về danh sách nhân sự rỗng bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đăng nhập.");
+            } else if (shouldRejectSuspiciousShrinkState("accounts", data.accounts, accountsRef.current)) {
+              setBackendError("Backend vừa trả về danh sách nhân sự bị thu nhỏ bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu.");
             } else {
             markRemoteSnapshot("accounts", data.accounts);
             setAccounts(data.accounts);
@@ -194,6 +212,8 @@ export default function HomePage() {
           if (data.orders) {
             if (shouldRejectSuspiciousEmptyState("orders", data.orders, ordersRef.current)) {
               setBackendError("Backend vừa trả về danh sách đơn hàng rỗng bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đang chạy.");
+            } else if (shouldRejectSuspiciousShrinkState("orders", data.orders, ordersRef.current)) {
+              setBackendError("Backend vừa trả về danh sách đơn hàng bị thu nhỏ bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đang chạy.");
             } else {
             markRemoteSnapshot("orders", data.orders);
             setOrders(data.orders);
@@ -250,7 +270,7 @@ export default function HomePage() {
 
   // Tự động đồng bộ ngược lại backend trung tâm
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts) || shouldSkipDangerousEmptySync("accounts", accounts)) return;
+    if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts) || shouldSkipDangerousEmptySync("accounts", accounts) || shouldSkipSuspiciousShrinkSync("accounts", accounts)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -261,7 +281,7 @@ export default function HomePage() {
   }, [accounts]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders) || shouldSkipDangerousEmptySync("orders", orders)) return;
+    if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders) || shouldSkipDangerousEmptySync("orders", orders) || shouldSkipSuspiciousShrinkSync("orders", orders)) return;
     fetch(getApiUrl("/api/sync"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
