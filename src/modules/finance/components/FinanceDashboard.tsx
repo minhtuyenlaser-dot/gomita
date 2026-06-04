@@ -1359,7 +1359,7 @@ export function FinanceDashboard({
                     <h3 className="text-xl font-black text-slate-900">{selectedOrder.code}</h3>
                     <button
                       type="button"
-                      onClick={() => exportOrderToExcel(selectedOrder, accounts, overtimeRequests)}
+                      onClick={() => exportOrderToExcel(selectedOrder, accounts, overtimeRequests, cashTransactions)}
                       title="Tải toàn bộ dữ liệu đơn hàng (Excel)"
                       className="flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
                     >
