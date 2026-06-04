@@ -85,6 +85,7 @@ export type Order = {
   materialsList?: Array<{ name: string; price: number }>;
   incurredCosts?: Array<{ note: string; amount: number }>;
   historyLogs?: Array<{ step: OrderStep; assignee: string; startedAt?: string; completedAt?: string; }>;
+  customLaborCost?: number;
 };
 
 

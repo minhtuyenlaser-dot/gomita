@@ -5,7 +5,7 @@ import type { UserAccount } from "@/modules/hr/accounts";
 import { positions, type Position } from "@/modules/hr/roles";
 import type { CashTransaction, CashTransactionType, CustomerDebt, CustomerDebtStage, CustomerDebtStatus } from "@/modules/finance/types";
 import { customerDebtStageLabels, customerDebtStatusLabels } from "@/modules/finance/types";
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck, Download, Pencil, Save, X } from "lucide-react";
 
 export function FinanceDashboard({ 
@@ -71,6 +71,7 @@ export function FinanceDashboard({
   const [editingDebtStatus, setEditingDebtStatus] = useState<CustomerDebtStatus>("pending");
   const [editingDebtNote, setEditingDebtNote] = useState("");
   const [showLaborDetails, setShowLaborDetails] = useState(false);
+  const [showLaborBreakdown, setShowLaborBreakdown] = useState(false);
 
   // Form thêm phát sinh mới
   const [incurredNote, setIncurredNote] = useState("");
@@ -301,7 +302,20 @@ export function FinanceDashboard({
   }
 
   function saveCashEdit() {
-    if (!onCashTransactionsChange || !editingCashId || editingCashAmount <= 0) return;
+    if (!editingCashId || editingCashAmount <= 0) return;
+    
+    // Nếu là dòng tổng nhân công ảo, ta ghi nhận số tiền tự chỉnh sửa này vào customLaborCost của đơn hàng
+    if (selectedOrder && editingCashId === `auto-labor-total-${selectedOrder.id}`) {
+      setOrders((current) =>
+        current.map((o) =>
+          o.id === selectedOrder.id ? { ...o, customLaborCost: editingCashAmount } : o
+        )
+      );
+      setEditingCashId(null);
+      return;
+    }
+
+    if (!onCashTransactionsChange) return;
     onCashTransactionsChange((current) =>
       current.map((item) =>
         item.id === editingCashId
@@ -449,20 +463,24 @@ export function FinanceDashboard({
     const filteredLogs = (order.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
     
     let laborCost = 0;
-    filteredLogs.forEach((log) => {
-      const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
-      const assignees = getAssigneeListForStep(order, log.step);
-      const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
-      
-      finalAssignees.forEach((name) => {
-        const personOT = overtimeRequests
-          .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
-          .reduce((sum, req) => sum + (req.hours || 0), 0);
-        const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
-        const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
-        laborCost += cost;
+    if (order.customLaborCost !== undefined) {
+      laborCost = order.customLaborCost;
+    } else {
+      filteredLogs.forEach((log) => {
+        const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
+        const assignees = getAssigneeListForStep(order, log.step);
+        const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
+        
+        finalAssignees.forEach((name) => {
+          const personOT = overtimeRequests
+            .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
+            .reduce((sum, req) => sum + (req.hours || 0), 0);
+          const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
+          const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+          laborCost += cost;
+        });
       });
-    });
+    }
 
     const materialCost = (order.materialsList || []).reduce((sum, mat) => sum + mat.price, 0);
     let accessorySales = 0;
@@ -825,13 +843,9 @@ export function FinanceDashboard({
     return cashTransactions.filter((item) => item.orderId === selectedOrder.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer"));
   }, [cashTransactions, selectedOrder]);
 
-  const displayedOrderExpenseRows = useMemo(() => {
+  const autoLaborRows = useMemo(() => {
     if (!selectedOrder) return [];
     
-    const manualExpenses = cashTransactions.filter(
-      (item) => item.orderId === selectedOrder.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer")
-    );
-
     const getLatestDateForStep = (step: string) => {
       const logs = (selectedOrder.historyLogs || []).filter((log) => log.step === step);
       if (logs.length === 0) return new Date().toISOString().slice(0, 10);
@@ -843,7 +857,7 @@ export function FinanceDashboard({
       return (latest.completedAt || latest.startedAt || new Date().toISOString()).slice(0, 10);
     };
 
-    const autoLabor: CashTransaction[] = [
+    return [
       {
         id: `auto-labor-design-${selectedOrder.id}`,
         type: "cash_out",
@@ -888,10 +902,33 @@ export function FinanceDashboard({
         createdBy: "",
         isAuto: true
       }
-    ];
+    ] as CashTransaction[];
+  }, [selectedOrder, overtimeRequests]);
 
-    return [...autoLabor, ...manualExpenses];
-  }, [selectedOrder, cashTransactions, overtimeRequests, reportMonth, workedDatesByUserMonth]);
+  const displayedOrderExpenseRows = useMemo(() => {
+    if (!selectedOrder) return [];
+    
+    const manualExpenses = cashTransactions.filter(
+      (item) => item.orderId === selectedOrder.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer")
+    );
+
+    const totalLaborCalculated = autoLaborRows.reduce((sum, item) => sum + item.amount, 0);
+    const laborAmount = selectedOrder.customLaborCost !== undefined ? selectedOrder.customLaborCost : totalLaborCalculated;
+
+    const laborRow: CashTransaction = {
+      id: `auto-labor-total-${selectedOrder.id}`,
+      type: "cash_out",
+      accountName: "Quỹ tiền mặt",
+      note: "Nhân công",
+      createdAt: new Date().toISOString(),
+      amount: laborAmount,
+      category: "Nhân công trực tiếp",
+      createdBy: "",
+      isAuto: true
+    };
+
+    return [laborRow, ...manualExpenses];
+  }, [selectedOrder, cashTransactions, autoLaborRows]);
 
   const totalIncurred = useMemo(() => {
     if (!selectedOrder || !selectedOrder.incurredCosts) return 0;
@@ -1703,63 +1740,135 @@ export function FinanceDashboard({
                           </td>
                         </tr>
                       ) : (
-                        displayedOrderExpenseRows.map((item) => (
-                          <tr key={item.id} className="border-b border-slate-100 text-slate-700">
-                            <td className="py-3 font-bold text-slate-900">
-                              {editingCashId === item.id ? (
-                                <input
-                                  className="h-9 w-full rounded border border-slate-200 px-2 text-sm font-normal"
-                                  value={editingCashNote}
-                                  onChange={(event) => setEditingCashNote(event.target.value)}
-                                />
-                              ) : (
-                                item.note || "Chưa có ghi chú"
-                              )}
-                            </td>
-                            <td>{item.createdAt.slice(0, 10)}</td>
-                            <td className="font-black text-red-600">
-                              {editingCashId === item.id ? (
-                                <input
-                                  className="h-9 w-28 rounded border border-slate-200 px-2 text-sm font-normal"
-                                  type="number"
-                                  value={editingCashAmount || ""}
-                                  onChange={(event) => setEditingCashAmount(Number(event.target.value))}
-                                />
-                              ) : (
-                                formatCurrency(item.amount)
-                              )}
-                            </td>
-                            <td>{item.createdBy}</td>
-                            <td className="text-right py-2">
-                              {item.isAuto ? null : editingCashId === item.id ? (
-                                <div className="flex justify-end gap-1.5">
-                                  <button
-                                    type="button"
-                                    className="border border-emerald-600 rounded px-2 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm"
-                                    onClick={saveCashEdit}
-                                  >
-                                    Lưu
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="border border-slate-300 rounded px-2 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm"
-                                    onClick={cancelCashEdit}
-                                  >
-                                    Hủy
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="border border-slate-300 rounded px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm"
-                                  onClick={() => beginCashEdit(item)}
+                        displayedOrderExpenseRows.map((item) => {
+                          const isTotalLaborRow = selectedOrder && item.id === `auto-labor-total-${selectedOrder.id}`;
+                          
+                          if (isTotalLaborRow) {
+                            return (
+                              <Fragment key={item.id}>
+                                <tr 
+                                  className="border-b border-slate-100 text-slate-700 bg-slate-50/50 hover:bg-slate-50 transition cursor-pointer"
+                                  onClick={() => setShowLaborBreakdown(!showLaborBreakdown)}
                                 >
-                                  Sửa
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        ))
+                                  <td className="py-3 font-bold text-slate-900 flex items-center gap-1.5">
+                                    <span className="text-xs text-slate-400 select-none">{showLaborBreakdown ? "▼" : "▶"}</span>
+                                    <span>{item.note} <span className="text-xs font-normal text-slate-400 italic">(Nhấp để {showLaborBreakdown ? "ẩn" : "xem"} chi tiết)</span></span>
+                                  </td>
+                                  <td>{item.createdAt.slice(0, 10)}</td>
+                                  <td className="font-black text-red-600">
+                                    {editingCashId === item.id ? (
+                                      <input
+                                        className="h-9 w-28 rounded border border-slate-200 px-2 text-sm font-normal"
+                                        type="number"
+                                        value={editingCashAmount || ""}
+                                        onChange={(event) => setEditingCashAmount(Number(event.target.value))}
+                                        onClick={(e) => e.stopPropagation()}
+                                      />
+                                    ) : (
+                                      formatCurrency(item.amount)
+                                    )}
+                                  </td>
+                                  <td>{item.createdBy}</td>
+                                  <td className="text-right py-2" onClick={(e) => e.stopPropagation()}>
+                                    {editingCashId === item.id ? (
+                                      <div className="flex justify-end gap-1.5">
+                                        <button
+                                          type="button"
+                                          className="border border-emerald-600 rounded px-2 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm"
+                                          onClick={saveCashEdit}
+                                        >
+                                          Lưu
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="border border-slate-300 rounded px-2 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm"
+                                          onClick={cancelCashEdit}
+                                        >
+                                          Hủy
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="border border-slate-300 rounded px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm"
+                                        onClick={() => beginCashEdit(item)}
+                                      >
+                                        Sửa
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                                {showLaborBreakdown && autoLaborRows.map((subItem) => (
+                                  <tr key={subItem.id} className="border-b border-slate-100/50 bg-slate-50/20 text-xs italic text-slate-600">
+                                    <td className="py-2.5 pl-8 font-bold text-slate-700">— {subItem.note}</td>
+                                    <td>{subItem.createdAt.slice(0, 10)}</td>
+                                    <td className="font-black text-red-500/80">{formatCurrency(subItem.amount)}</td>
+                                    <td>{subItem.createdBy}</td>
+                                    <td></td>
+                                  </tr>
+                                ))}
+                              </Fragment>
+                            );
+                          }
+
+                          return (
+                            <tr key={item.id} className="border-b border-slate-100 text-slate-700">
+                              <td className="py-3 font-bold text-slate-900">
+                                {editingCashId === item.id ? (
+                                  <input
+                                    className="h-9 w-full rounded border border-slate-200 px-2 text-sm font-normal"
+                                    value={editingCashNote}
+                                    onChange={(event) => setEditingCashNote(event.target.value)}
+                                  />
+                                ) : (
+                                  item.note || "Chưa có ghi chú"
+                                )}
+                              </td>
+                              <td>{item.createdAt.slice(0, 10)}</td>
+                              <td className="font-black text-red-600">
+                                {editingCashId === item.id ? (
+                                  <input
+                                    className="h-9 w-28 rounded border border-slate-200 px-2 text-sm font-normal"
+                                    type="number"
+                                    value={editingCashAmount || ""}
+                                    onChange={(event) => setEditingCashAmount(Number(event.target.value))}
+                                  />
+                                ) : (
+                                  formatCurrency(item.amount)
+                                )}
+                              </td>
+                              <td>{item.createdBy}</td>
+                              <td className="text-right py-2">
+                                {item.isAuto ? null : editingCashId === item.id ? (
+                                  <div className="flex justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      className="border border-emerald-600 rounded px-2 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm"
+                                      onClick={saveCashEdit}
+                                    >
+                                      Lưu
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="border border-slate-300 rounded px-2 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm"
+                                      onClick={cancelCashEdit}
+                                    >
+                                      Hủy
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="border border-slate-300 rounded px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm"
+                                    onClick={() => beginCashEdit(item)}
+                                  >
+                                    Sửa
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
