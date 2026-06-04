@@ -791,8 +791,10 @@ function OrderSidePanel({
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
   const isSale = position.id === "sale";
-  const isEstimateDisabled = isSale && (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1);
-  const isQuoteDisabled = isSale && (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
+  const isPricingLocked = (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1) || (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
+  const isEstimateDisabled = isSale && isPricingLocked;
+  const isQuoteDisabled = isSale && isPricingLocked;
+  const canLockPricing = !isPricingLocked && (isSale || ["admin", "director", "sale_manager"].includes(position.id));
 
   function lockPricing() {
     const confirmLock = globalThis.confirm("Bạn có chắc chắn muốn KHÓA Dự toán và Báo giá của đơn hàng này? Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.");
@@ -889,7 +891,7 @@ function OrderSidePanel({
                   onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
                   disabled={isQuoteDisabled}
                 />
-                {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+                {canLockPricing && (
                   <button
                     type="button"
                     onClick={lockPricing}
@@ -898,12 +900,12 @@ function OrderSidePanel({
                     Xác nhận & Khóa Dự toán/Báo giá
                   </button>
                 )}
-                {(isEstimateDisabled || isQuoteDisabled) && (
+                {isPricingLocked && (
                   <div className="text-[11px] text-red-600 font-bold bg-red-50 p-1.5 rounded border border-red-100">
                     ⚠ Báo giá/Dự toán đã được khóa. Quyền Sale không thể chỉnh sửa tiếp.
                   </div>
                 )}
-                {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+                {!isPricingLocked && (isSale || ["admin", "director", "sale_manager"].includes(position.id)) && (
                   <div className="text-[10px] text-slate-500 italic">
                     * Lưu ý: Hãy click nút xác nhận bên trên sau khi hoàn thành. Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.
                   </div>
@@ -1060,8 +1062,10 @@ function WorkflowChecks({
   positionId?: string; 
 }) {
   const isSale = positionId === "sale";
-  const isEstimateDisabled = isSale && (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1);
-  const isQuoteDisabled = isSale && (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
+  const isPricingLocked = (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1) || (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
+  const isEstimateDisabled = isSale && isPricingLocked;
+  const isQuoteDisabled = isSale && isPricingLocked;
+  const canLockPricing = !isPricingLocked && (isSale || ["admin", "director", "sale_manager"].includes(positionId || ""));
 
   function lockPricing() {
     const confirmLock = globalThis.confirm("Bạn có chắc chắn muốn KHÓA Dự toán và Báo giá của đơn hàng này? Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.");
@@ -1127,7 +1131,7 @@ function WorkflowChecks({
           onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
           disabled={isQuoteDisabled}
         />
-        {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+        {canLockPricing && (
           <button
             type="button"
             onClick={lockPricing}
@@ -1136,12 +1140,12 @@ function WorkflowChecks({
             Xác nhận & Khóa Dự toán/Báo giá
           </button>
         )}
-        {(isEstimateDisabled || isQuoteDisabled) && (
+        {isPricingLocked && (
           <div className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded border border-red-200">
             ⚠ Báo giá/Dự toán đã được khóa. Quyền Sale không thể chỉnh sửa tiếp.
           </div>
         )}
-        {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+        {!isPricingLocked && (isSale || ["admin", "director", "sale_manager"].includes(positionId || "")) && (
           <div className="text-[11px] text-slate-500 italic">
             * Lưu ý: Hãy click nút xác nhận bên trên sau khi hoàn thành. Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.
           </div>
