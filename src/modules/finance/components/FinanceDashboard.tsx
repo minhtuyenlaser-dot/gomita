@@ -6,7 +6,7 @@ import { positions, type Position } from "@/modules/hr/roles";
 import type { CashTransaction, CashTransactionType, CustomerDebt, CustomerDebtStage, CustomerDebtStatus } from "@/modules/finance/types";
 import { customerDebtStageLabels, customerDebtStatusLabels } from "@/modules/finance/types";
 import { useState, useMemo } from "react";
-import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck, Download } from "lucide-react";
+import { Plus, Trash2, CalendarCheck, BriefcaseBusiness, ReceiptText, ShieldCheck, Download, Pencil, Save, X } from "lucide-react";
 
 export function FinanceDashboard({ 
   orders, 
@@ -40,6 +40,14 @@ export function FinanceDashboard({
   const [cashType, setCashType] = useState<CashTransactionType>("cash_in");
   const [cashAmount, setCashAmount] = useState(0);
   const [cashNote, setCashNote] = useState("");
+  const [incomeAmount, setIncomeAmount] = useState(0);
+  const [incomeNote, setIncomeNote] = useState("");
+  const [incomeCategory, setIncomeCategory] = useState("Cọc lần 1");
+  const [incomePaymentMethod, setIncomePaymentMethod] = useState("Tiền mặt");
+  const [expenseAmount, setExpenseAmount] = useState(0);
+  const [expenseNote, setExpenseNote] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("Vật tư");
+  const [expensePaymentMethod, setExpensePaymentMethod] = useState("Tiền mặt");
   const [reportMonth, setReportMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [debtStage, setDebtStage] = useState<CustomerDebtStage>("deposit");
   const [debtPlannedAmount, setDebtPlannedAmount] = useState(0);
@@ -51,6 +59,17 @@ export function FinanceDashboard({
   const [efficiencyEmployeeFilter, setEfficiencyEmployeeFilter] = useState("all");
   const [efficiencyDepartmentFilter, setEfficiencyDepartmentFilter] = useState("all");
   const [efficiencyOrderFilter, setEfficiencyOrderFilter] = useState("all");
+  const [editingCashId, setEditingCashId] = useState<string | null>(null);
+  const [editingCashAmount, setEditingCashAmount] = useState(0);
+  const [editingCashNote, setEditingCashNote] = useState("");
+  const [editingCashCategory, setEditingCashCategory] = useState("");
+  const [editingCashPaymentMethod, setEditingCashPaymentMethod] = useState("");
+  const [editingDebtId, setEditingDebtId] = useState<string | null>(null);
+  const [editingDebtPlannedAmount, setEditingDebtPlannedAmount] = useState(0);
+  const [editingDebtCollectedAmount, setEditingDebtCollectedAmount] = useState(0);
+  const [editingDebtDueDate, setEditingDebtDueDate] = useState("");
+  const [editingDebtStatus, setEditingDebtStatus] = useState<CustomerDebtStatus>("pending");
+  const [editingDebtNote, setEditingDebtNote] = useState("");
 
   // Form thêm vật tư mới
   const [newMatName, setNewMatName] = useState("");
@@ -120,6 +139,12 @@ export function FinanceDashboard({
 
   function getDepartmentLabel(account?: UserAccount) {
     return getPrimaryPosition(account)?.department || "Chưa phân bộ phận";
+  }
+
+  function getDebtStageLabel(stage: CustomerDebtStage) {
+    if (stage === "deposit") return "Cọc lần 1";
+    if (stage === "stage2") return "Cọc lần 2";
+    return customerDebtStageLabels[stage];
   }
 
   // Tính giờ làm việc hành chính (bỏ qua nghỉ trưa 11h30-13h30, tối/đêm, Chủ Nhật)
@@ -231,6 +256,117 @@ export function FinanceDashboard({
     setDebtCollectedAmount(0);
     setDebtDueDate("");
     setDebtNote("");
+  }
+
+  function addOrderIncome() {
+    if (!onCashTransactionsChange || !selectedOrder || incomeAmount <= 0) return;
+    const paymentMethod = incomePaymentMethod;
+    const newTransaction: CashTransaction = {
+      id: `cash-${Date.now()}`,
+      type: paymentMethod === "Chuyển khoản" ? "bank_in" : "cash_in",
+      amount: incomeAmount,
+      note: incomeNote.trim() || "Không ghi chú",
+      createdAt: new Date().toISOString(),
+      createdBy: currentPosition?.name || "Kế toán",
+      accountName: paymentMethod === "Chuyển khoản" ? "Tài khoản ngân hàng" : "Quỹ tiền mặt",
+      orderId: selectedOrder.id,
+      orderCode: selectedOrder.code,
+      customerName: selectedOrder.customerName,
+      category: incomeCategory,
+      paymentMethod
+    };
+    onCashTransactionsChange((current) => [newTransaction, ...current]);
+    setIncomeAmount(0);
+    setIncomeNote("");
+  }
+
+  function addOrderExpense() {
+    if (!onCashTransactionsChange || !selectedOrder || expenseAmount <= 0) return;
+    const paymentMethod = expensePaymentMethod;
+    const newTransaction: CashTransaction = {
+      id: `cash-${Date.now()}`,
+      type: paymentMethod === "Chuyển khoản" ? "bank_out" : "cash_out",
+      amount: expenseAmount,
+      note: expenseNote.trim() || "Không ghi chú",
+      createdAt: new Date().toISOString(),
+      createdBy: currentPosition?.name || "Kế toán",
+      accountName: paymentMethod === "Chuyển khoản" ? "Tài khoản ngân hàng" : "Quỹ tiền mặt",
+      orderId: selectedOrder.id,
+      orderCode: selectedOrder.code,
+      customerName: selectedOrder.customerName,
+      category: expenseCategory,
+      paymentMethod
+    };
+    onCashTransactionsChange((current) => [newTransaction, ...current]);
+    setExpenseAmount(0);
+    setExpenseNote("");
+  }
+
+  function beginCashEdit(item: CashTransaction) {
+    setEditingCashId(item.id);
+    setEditingCashAmount(item.amount);
+    setEditingCashNote(item.note);
+    setEditingCashCategory(item.category || "");
+    setEditingCashPaymentMethod(item.paymentMethod || item.accountName || "Tiền mặt");
+  }
+
+  function saveCashEdit() {
+    if (!onCashTransactionsChange || !editingCashId || editingCashAmount <= 0) return;
+    onCashTransactionsChange((current) =>
+      current.map((item) =>
+        item.id === editingCashId
+          ? {
+              ...item,
+              amount: editingCashAmount,
+              note: editingCashNote.trim() || item.note,
+              category: editingCashCategory.trim() || item.category,
+              paymentMethod: editingCashPaymentMethod.trim() || item.paymentMethod,
+              accountName: editingCashPaymentMethod === "Chuyển khoản" ? "Tài khoản ngân hàng" : "Quỹ tiền mặt",
+              type:
+                item.type === "cash_in" || item.type === "bank_in"
+                  ? (editingCashPaymentMethod === "Chuyển khoản" ? "bank_in" : "cash_in")
+                  : (editingCashPaymentMethod === "Chuyển khoản" ? "bank_out" : "cash_out")
+            }
+          : item
+      )
+    );
+    setEditingCashId(null);
+  }
+
+  function cancelCashEdit() {
+    setEditingCashId(null);
+  }
+
+  function beginDebtEdit(item: CustomerDebt) {
+    setEditingDebtId(item.id);
+    setEditingDebtPlannedAmount(item.plannedAmount);
+    setEditingDebtCollectedAmount(item.collectedAmount);
+    setEditingDebtDueDate(item.dueDate || "");
+    setEditingDebtStatus(item.status);
+    setEditingDebtNote(item.note || "");
+  }
+
+  function saveDebtEdit() {
+    if (!onCustomerDebtsChange || !editingDebtId || editingDebtPlannedAmount <= 0) return;
+    onCustomerDebtsChange((current) =>
+      current.map((item) =>
+        item.id === editingDebtId
+          ? {
+              ...item,
+              plannedAmount: editingDebtPlannedAmount,
+              collectedAmount: editingDebtCollectedAmount,
+              dueDate: editingDebtDueDate || undefined,
+              status: editingDebtStatus,
+              note: editingDebtNote.trim() || undefined
+            }
+          : item
+      )
+    );
+    setEditingDebtId(null);
+  }
+
+  function cancelDebtEdit() {
+    setEditingDebtId(null);
   }
 
   function getMaxWorkDaysForDate(dateLike?: string) {
@@ -839,7 +975,7 @@ export function FinanceDashboard({
 
       {mainTab === "overview" && (
       <>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="hidden grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -896,7 +1032,7 @@ export function FinanceDashboard({
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStage} onChange={(event) => setDebtStage(event.target.value as CustomerDebtStage)}>
-              {Object.entries(customerDebtStageLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              {(["deposit", "stage2", "before_production", "before_installation", "handover", "completed"] as CustomerDebtStage[]).map((value) => <option key={value} value={value}>{getDebtStageLabel(value)}</option>)}
             </select>
             <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Phải thu" value={debtPlannedAmount || ""} onChange={(event) => setDebtPlannedAmount(Number(event.target.value))} />
             <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Đã thu" value={debtCollectedAmount || ""} onChange={(event) => setDebtCollectedAmount(Number(event.target.value))} />
@@ -911,7 +1047,7 @@ export function FinanceDashboard({
             {customerDebts.slice(0, 8).map((item) => (
               <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
                 <div>
-                  <div className="font-black">{item.orderCode} • {customerDebtStageLabels[item.stage]}</div>
+                  <div className="font-black">{item.orderCode} • {getDebtStageLabel(item.stage)}</div>
                   <div className="text-xs text-slate-500">{item.customerName}{item.dueDate ? ` • Hạn ${item.dueDate}` : ""}</div>
                 </div>
                 <div className="text-right">
@@ -1020,8 +1156,6 @@ export function FinanceDashboard({
               <div className="mt-4 flex flex-wrap gap-2">
                 {[
                   { id: "overview", label: "Tổng quan" },
-                  { id: "income", label: "Thu" },
-                  { id: "expense", label: "Chi" },
                   { id: "debt", label: "Công nợ" },
                   { id: "profit", label: "Lãi lỗ" }
                 ].map((item) => (
@@ -1151,7 +1285,25 @@ export function FinanceDashboard({
             )}
             {detailTab === "debt" && (
               <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-lg font-black text-slate-800">Công nợ theo đơn hàng</h3>
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-800">Công nợ theo đơn hàng</h3>
+                    <p className="text-sm text-slate-500">Quản lý theo từng mốc thu của đúng đơn đang chọn, ví dụ cọc lần 1 và cọc lần 2.</p>
+                  </div>
+                </div>
+                <div className="mb-4 grid gap-3 md:grid-cols-3">
+                  <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStage} onChange={(event) => setDebtStage(event.target.value as CustomerDebtStage)}>
+                    {(["deposit", "stage2", "before_production", "before_installation", "handover", "completed"] as CustomerDebtStage[]).map((value) => <option key={value} value={value}>{getDebtStageLabel(value)}</option>)}
+                  </select>
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Phải thu" value={debtPlannedAmount || ""} onChange={(event) => setDebtPlannedAmount(Number(event.target.value))} />
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Đã thu" value={debtCollectedAmount || ""} onChange={(event) => setDebtCollectedAmount(Number(event.target.value))} />
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" type="date" value={debtDueDate} onChange={(event) => setDebtDueDate(event.target.value)} />
+                  <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStatus} onChange={(event) => setDebtStatus(event.target.value as CustomerDebtStatus)}>
+                    {Object.entries(customerDebtStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" placeholder="Ghi chú công nợ" value={debtNote} onChange={(event) => setDebtNote(event.target.value)} />
+                </div>
+                <button className="mb-4 min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white" onClick={addCustomerDebt} type="button">Ghi nhận công nợ cho đơn này</button>
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse text-sm">
                     <thead>
@@ -1162,19 +1314,32 @@ export function FinanceDashboard({
                         <th>Còn lại</th>
                         <th>Hạn thu</th>
                         <th>Trạng thái</th>
+                        <th>Ghi chú</th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedOrderDebtRows.length === 0 ? (
-                        <tr><td className="py-4 text-slate-400 italic" colSpan={6}>Chưa có dữ liệu công nợ cho đơn này.</td></tr>
+                        <tr><td className="py-4 text-slate-400 italic" colSpan={8}>Chưa có dữ liệu công nợ cho đơn này.</td></tr>
                       ) : selectedOrderDebtRows.map((item) => (
                         <tr key={item.id} className="border-b border-slate-100 text-slate-700">
-                          <td className="py-3 font-bold text-slate-900">{customerDebtStageLabels[item.stage]}</td>
-                          <td>{formatCurrency(item.plannedAmount)}</td>
-                          <td>{formatCurrency(item.collectedAmount)}</td>
+                          <td className="py-3 font-bold text-slate-900">{getDebtStageLabel(item.stage)}</td>
+                          <td>{editingDebtId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingDebtPlannedAmount || ""} onChange={(event) => setEditingDebtPlannedAmount(Number(event.target.value))} /> : formatCurrency(item.plannedAmount)}</td>
+                          <td>{editingDebtId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingDebtCollectedAmount || ""} onChange={(event) => setEditingDebtCollectedAmount(Number(event.target.value))} /> : formatCurrency(item.collectedAmount)}</td>
                           <td>{formatCurrency(Math.max(0, item.plannedAmount - item.collectedAmount))}</td>
-                          <td>{item.dueDate || "-"}</td>
-                          <td>{customerDebtStatusLabels[item.status]}</td>
+                          <td>{editingDebtId === item.id ? <input className="h-9 rounded border border-slate-200 px-2" type="date" value={editingDebtDueDate} onChange={(event) => setEditingDebtDueDate(event.target.value)} /> : (item.dueDate || "-")}</td>
+                          <td>{editingDebtId === item.id ? <select className="h-9 rounded border border-slate-200 px-2" value={editingDebtStatus} onChange={(event) => setEditingDebtStatus(event.target.value as CustomerDebtStatus)}>{Object.entries(customerDebtStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : customerDebtStatusLabels[item.status]}</td>
+                          <td>{editingDebtId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingDebtNote} onChange={(event) => setEditingDebtNote(event.target.value)} /> : (item.note || "-")}</td>
+                          <td className="text-right">
+                            {editingDebtId === item.id ? (
+                              <div className="flex justify-end gap-2">
+                                <button type="button" className="rounded p-1 text-emerald-600" onClick={saveDebtEdit}><Save className="h-4 w-4" /></button>
+                                <button type="button" className="rounded p-1 text-slate-500" onClick={cancelDebtEdit}><X className="h-4 w-4" /></button>
+                              </div>
+                            ) : (
+                              <button type="button" className="rounded p-1 text-slate-500" onClick={() => beginDebtEdit(item)}><Pencil className="h-4 w-4" /></button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1201,6 +1366,139 @@ export function FinanceDashboard({
             {/* Lịch sử công đoạn & tính giờ làm việc */}
             {detailTab === "overview" && (
             <>
+            <div className="grid gap-6 xl:grid-cols-2">
+              <section className="rounded-xl border border-emerald-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-800">Bảng thu theo đơn hàng</h3>
+                    <p className="text-sm text-slate-500">Các khoản thu tự gắn vào đơn đang chọn.</p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-bold text-slate-500">Tổng đã thu</div>
+                    <div className="text-lg font-black text-emerald-600">{formatCurrency(selectedOrderIncomeRows.reduce((sum, item) => sum + item.amount, 0))}</div>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" value={incomeCategory} onChange={(event) => setIncomeCategory(event.target.value)} placeholder="Khoản thu (Cọc lần 1, Cọc lần 2...)" />
+                  <select className="h-11 rounded-lg border border-slate-200 bg-white px-3 font-bold outline-none focus:border-orange-400" value={incomePaymentMethod} onChange={(event) => setIncomePaymentMethod(event.target.value)}>
+                    <option value="Tiền mặt">Tiền mặt</option>
+                    <option value="Chuyển khoản">Chuyển khoản</option>
+                  </select>
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" value={incomeAmount || ""} onChange={(event) => setIncomeAmount(Number(event.target.value))} placeholder="Số tiền thu" />
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" value={incomeNote} onChange={(event) => setIncomeNote(event.target.value)} placeholder="Ghi chú khoản thu" />
+                </div>
+                <button className="mt-3 min-h-11 rounded-lg bg-emerald-600 px-4 font-black text-white" onClick={addOrderIncome} type="button">Ghi nhận thu</button>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="py-3">Khoản thu</th>
+                        <th>Ngày thu</th>
+                        <th>Số tiền</th>
+                        <th>Hình thức</th>
+                        <th>Ghi chú</th>
+                        <th>Người ghi</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedOrderIncomeRows.length === 0 ? (
+                        <tr><td className="py-4 text-slate-400 italic" colSpan={7}>Chưa có khoản thu nào cho đơn này.</td></tr>
+                      ) : selectedOrderIncomeRows.map((item) => (
+                        <tr key={item.id} className="border-b border-slate-100 text-slate-700">
+                          <td className="py-3 font-bold text-slate-900">{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashCategory} onChange={(event) => setEditingCashCategory(event.target.value)} /> : (item.category || "Khoản thu")}</td>
+                          <td>{item.createdAt.slice(0, 10)}</td>
+                          <td className="font-black text-emerald-600">{editingCashId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingCashAmount || ""} onChange={(event) => setEditingCashAmount(Number(event.target.value))} /> : formatCurrency(item.amount)}</td>
+                          <td>{editingCashId === item.id ? <select className="h-9 rounded border border-slate-200 px-2" value={editingCashPaymentMethod} onChange={(event) => setEditingCashPaymentMethod(event.target.value)}><option value="Tiền mặt">Tiền mặt</option><option value="Chuyển khoản">Chuyển khoản</option></select> : (item.paymentMethod || item.accountName)}</td>
+                          <td>{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashNote} onChange={(event) => setEditingCashNote(event.target.value)} /> : item.note}</td>
+                          <td>{item.createdBy}</td>
+                          <td className="text-right">
+                            {editingCashId === item.id ? (
+                              <div className="flex justify-end gap-2">
+                                <button type="button" className="rounded p-1 text-emerald-600" onClick={saveCashEdit}><Save className="h-4 w-4" /></button>
+                                <button type="button" className="rounded p-1 text-slate-500" onClick={cancelCashEdit}><X className="h-4 w-4" /></button>
+                              </div>
+                            ) : (
+                              <button type="button" className="rounded p-1 text-slate-500" onClick={() => beginCashEdit(item)}><Pencil className="h-4 w-4" /></button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-red-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-black text-slate-800">Bảng chi theo đơn hàng</h3>
+                    <p className="text-sm text-slate-500">Kế toán nhập chi phí trực tiếp cho đúng đơn đang chọn.</p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-bold text-slate-500">Tổng đã chi</div>
+                    <div className="text-lg font-black text-red-600">{formatCurrency(selectedOrderExpenseRows.reduce((sum, item) => sum + item.amount, 0))}</div>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <select className="h-11 rounded-lg border border-slate-200 bg-white px-3 font-bold outline-none focus:border-orange-400" value={expenseCategory} onChange={(event) => setExpenseCategory(event.target.value)}>
+                    <option value="Vật tư">Vật tư</option>
+                    <option value="Nhân công trực tiếp">Nhân công trực tiếp</option>
+                    <option value="Vận chuyển">Vận chuyển</option>
+                    <option value="Bốc vác">Bốc vác</option>
+                    <option value="Phụ kiện">Phụ kiện</option>
+                    <option value="Chi phí khác">Chi phí khác</option>
+                  </select>
+                  <select className="h-11 rounded-lg border border-slate-200 bg-white px-3 font-bold outline-none focus:border-orange-400" value={expensePaymentMethod} onChange={(event) => setExpensePaymentMethod(event.target.value)}>
+                    <option value="Tiền mặt">Tiền mặt</option>
+                    <option value="Chuyển khoản">Chuyển khoản</option>
+                  </select>
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" value={expenseAmount || ""} onChange={(event) => setExpenseAmount(Number(event.target.value))} placeholder="Số tiền chi" />
+                  <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" value={expenseNote} onChange={(event) => setExpenseNote(event.target.value)} placeholder="Ghi chú khoản chi" />
+                </div>
+                <button className="mt-3 min-h-11 rounded-lg bg-red-600 px-4 font-black text-white" onClick={addOrderExpense} type="button">Ghi nhận chi</button>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="py-3">Khoản chi</th>
+                        <th>Ngày chi</th>
+                        <th>Số tiền</th>
+                        <th>Loại chi</th>
+                        <th>Ghi chú</th>
+                        <th>Người ghi</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedOrderExpenseRows.length === 0 ? (
+                        <tr><td className="py-4 text-slate-400 italic" colSpan={7}>Chưa có khoản chi nào cho đơn này.</td></tr>
+                      ) : selectedOrderExpenseRows.map((item) => (
+                        <tr key={item.id} className="border-b border-slate-100 text-slate-700">
+                          <td className="py-3 font-bold text-slate-900">{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashCategory} onChange={(event) => setEditingCashCategory(event.target.value)} /> : (item.category || "Chi phí khác")}</td>
+                          <td>{item.createdAt.slice(0, 10)}</td>
+                          <td className="font-black text-red-600">{editingCashId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingCashAmount || ""} onChange={(event) => setEditingCashAmount(Number(event.target.value))} /> : formatCurrency(item.amount)}</td>
+                          <td>{editingCashId === item.id ? <select className="h-9 rounded border border-slate-200 px-2" value={editingCashCategory} onChange={(event) => setEditingCashCategory(event.target.value)}><option value="Vật tư">Vật tư</option><option value="Nhân công trực tiếp">Nhân công trực tiếp</option><option value="Vận chuyển">Vận chuyển</option><option value="Bốc vác">Bốc vác</option><option value="Phụ kiện">Phụ kiện</option><option value="Chi phí khác">Chi phí khác</option></select> : (item.category || "Chi phí khác")}</td>
+                          <td>{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashNote} onChange={(event) => setEditingCashNote(event.target.value)} /> : item.note}</td>
+                          <td>{item.createdBy}</td>
+                          <td className="text-right">
+                            {editingCashId === item.id ? (
+                              <div className="flex justify-end gap-2">
+                                <button type="button" className="rounded p-1 text-emerald-600" onClick={saveCashEdit}><Save className="h-4 w-4" /></button>
+                                <button type="button" className="rounded p-1 text-slate-500" onClick={cancelCashEdit}><X className="h-4 w-4" /></button>
+                              </div>
+                            ) : (
+                              <button type="button" className="rounded p-1 text-slate-500" onClick={() => beginCashEdit(item)}><Pencil className="h-4 w-4" /></button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="mb-4 text-lg font-black text-slate-800 flex items-center gap-2">
                 <CalendarCheck className="h-5 w-5 text-green-500" />
