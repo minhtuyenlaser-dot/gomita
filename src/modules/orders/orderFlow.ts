@@ -202,7 +202,7 @@ function makeDemoOrder(input: {
     quotation: { estimateValue: 350000000, quoteValue: 385000000, estimatePhotoUploaded: true, quotePhotoUploaded: true },
     checklist: { ...completeChecklist, paymentCollected: input.paymentCollected ?? input.step === "Hoàn công" },
     externalAccessories: accessories,
-    installationCosts: { transport: 1200000, loader: 800000 },
+    installationCosts: { transport: 0, loader: 0 },
     materialsList: [
       { name: "Gỗ MDF chống ẩm An Cường", price: 15000000 },
       { name: "Bản lề hơi giảm chấn", price: 2400000 }

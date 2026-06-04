@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   BriefcaseBusiness,
@@ -132,6 +132,45 @@ export default function HomePage() {
   const remoteSnapshotsRef = useRef<Record<string, string>>({});
   const accountsRef = useRef(accounts);
   const ordersRef = useRef(orders);
+  const [pendingSyncs, setPendingSyncs] = useState(0);
+  const [syncError, setSyncError] = useState("");
+  const syncTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
+
+  function performSync(key: string, data: any) {
+    setPendingSyncs(prev => prev + 1);
+    setSyncError("");
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: data })
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Sync failed");
+        markRemoteSnapshot(key, data);
+      })
+      .catch((err) => {
+        console.error("Sync error for " + key + ":", err);
+        setSyncError("ChÆ°a lÆ°u Ä‘Æ°á»£c (Lá»—i káº¿t ná»‘i)");
+      })
+      .finally(() => {
+        setPendingSyncs(prev => Math.max(0, prev - 1));
+      });
+  }
+
+  function scheduleSync(key: string, data: any) {
+    if (syncTimeoutsRef.current[key]) {
+      clearTimeout(syncTimeoutsRef.current[key]);
+    }
+    syncTimeoutsRef.current[key] = setTimeout(() => {
+      performSync(key, data);
+    }, 1000);
+  }
+
+  useEffect(() => {
+    return () => {
+      Object.values(syncTimeoutsRef.current).forEach(clearTimeout);
+    };
+  }, []);
 
   const serializeSyncValue = (value: unknown) => JSON.stringify(value ?? null);
   const markRemoteSnapshot = (key: string, value: unknown) => {
@@ -271,123 +310,57 @@ export default function HomePage() {
   // Tự động đồng bộ ngược lại backend trung tâm
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts) || shouldSkipDangerousEmptySync("accounts", accounts) || shouldSkipSuspiciousShrinkSync("accounts", accounts)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accounts })
-    })
-      .then(() => markRemoteSnapshot("accounts", accounts))
-      .catch(() => {});
+    scheduleSync("accounts", accounts);
   }, [accounts]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders) || shouldSkipDangerousEmptySync("orders", orders) || shouldSkipSuspiciousShrinkSync("orders", orders)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orders })
-    })
-      .then(() => markRemoteSnapshot("orders", orders))
-      .catch(() => {});
+    scheduleSync("orders", orders);
   }, [orders]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("overtimeRequests", overtimeRequests)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overtimeRequests })
-    })
-      .then(() => markRemoteSnapshot("overtimeRequests", overtimeRequests))
-      .catch(() => {});
+    scheduleSync("overtimeRequests", overtimeRequests);
   }, [overtimeRequests]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("compensationRequests", compensationRequests)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ compensationRequests })
-    })
-      .then(() => markRemoteSnapshot("compensationRequests", compensationRequests))
-      .catch(() => {});
+    scheduleSync("compensationRequests", compensationRequests);
   }, [compensationRequests]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("leaveRequests", leaveRequests)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leaveRequests })
-    })
-      .then(() => markRemoteSnapshot("leaveRequests", leaveRequests))
-      .catch(() => {});
+    scheduleSync("leaveRequests", leaveRequests);
   }, [leaveRequests]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("cashTransactions", cashTransactions)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cashTransactions })
-    })
-      .then(() => markRemoteSnapshot("cashTransactions", cashTransactions))
-      .catch(() => {});
+    scheduleSync("cashTransactions", cashTransactions);
   }, [cashTransactions]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("customerDebts", customerDebts)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ customerDebts })
-    })
-      .then(() => markRemoteSnapshot("customerDebts", customerDebts))
-      .catch(() => {});
+    scheduleSync("customerDebts", customerDebts);
   }, [customerDebts]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("feedbackEntries", feedbackEntries)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ feedbackEntries })
-    })
-      .then(() => markRemoteSnapshot("feedbackEntries", feedbackEntries))
-      .catch(() => {});
+    scheduleSync("feedbackEntries", feedbackEntries);
   }, [feedbackEntries]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("holidayDates", holidayDates)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ holidayDates })
-    })
-      .then(() => markRemoteSnapshot("holidayDates", holidayDates))
-      .catch(() => {});
+    scheduleSync("holidayDates", holidayDates);
   }, [holidayDates]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("attendance", attendance)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attendance })
-    })
-      .then(() => markRemoteSnapshot("attendance", attendance))
-      .catch(() => {});
+    scheduleSync("attendance", attendance);
   }, [attendance]);
 
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || isRemoteSnapshot("attendanceDetails", attendanceDetails)) return;
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attendanceDetails })
-    })
-      .then(() => markRemoteSnapshot("attendanceDetails", attendanceDetails))
-      .catch(() => {});
+    scheduleSync("attendanceDetails", attendanceDetails);
   }, [attendanceDetails]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds?.includes(position.id)) : [], [currentAccount]);
@@ -458,6 +431,7 @@ export default function HomePage() {
           onCompensationRequestsChange={setCompensationRequests}
           attendance={attendance}
           onAttendanceChange={setAttendance}
+          isSyncing={pendingSyncs > 0 || !!syncError}
         />
       )}
       {activeModule === "profile" && (
@@ -533,6 +507,9 @@ export default function HomePage() {
           positionName={currentPosition.name} 
           onLogout={() => setCurrentAccount(null)} 
           onPositionChange={changePosition} 
+          pendingSyncs={pendingSyncs}
+          syncError={syncError}
+          hasLoaded={hasLoadedRemoteRef.current}
         />
         <div className="p-4 pb-24 md:p-6">{content}</div>
         <FeedbackLauncher onOpen={() => setFeedbackOpen(true)} />
@@ -589,6 +566,8 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-4">
+
+            <SyncStatusIndicator pendingSyncs={pendingSyncs} syncError={syncError} hasLoaded={hasLoadedRemoteRef.current} />
             <button className="hidden min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black text-slate-700 hover:bg-slate-50 md:flex" onClick={() => setFeedbackOpen(true)} type="button">
               <MessageSquareMore className="h-4 w-4 text-orange-500" />
               Góp ý PM
@@ -715,13 +694,46 @@ function SidebarClock({ onOvertime, canUseOvertime }: { onOvertime: () => void; 
   );
 }
 
+
+function SyncStatusIndicator({ pendingSyncs, syncError, hasLoaded }: { pendingSyncs: number; syncError: string; hasLoaded: boolean }) {
+  if (!hasLoaded) return null;
+  
+  if (syncError) {
+    return (
+      <div className="flex items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 border border-red-200 shadow-sm animate-pulse">
+        <span className="h-2 w-2 rounded-full bg-red-500" />
+        <span className="hidden sm:inline">ChÆ°a lÆ°u Ä‘Æ°á»£c (Lá»—i káº¿t ná»‘i)</span>
+      </div>
+    );
+  }
+  
+  if (pendingSyncs > 0) {
+    return (
+      <div className="flex items-center gap-2 rounded-full bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600 border border-orange-200 shadow-sm">
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
+        <span className="hidden sm:inline">Äang Ä‘á»“ng bá»™ dá»¯ liá»‡u...</span>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600 border border-emerald-200 shadow-sm">
+      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+      <span className="hidden sm:inline">ÄÃ£ lÆ°u lÃªn há»‡ thá»‘ng</span>
+    </div>
+  );
+}
+
 function WorkerTopBar({
   account,
   allowedPositions,
   positionName,
   positionId,
   onPositionChange,
-  onLogout
+  onLogout,
+  pendingSyncs,
+  syncError,
+  hasLoaded
 }: {
   account: UserAccount;
   allowedPositions: typeof positions;
@@ -729,6 +741,9 @@ function WorkerTopBar({
   positionId: string;
   onPositionChange: (value: string) => void;
   onLogout: () => void;
+  pendingSyncs: number;
+  syncError: string;
+  hasLoaded: boolean;
 }) {
   return (
     <header className="flex min-h-20 items-center justify-between bg-slate-950 px-4 text-white md:px-7">
@@ -743,6 +758,7 @@ function WorkerTopBar({
         </div>
       </div>
       <div className="flex items-center gap-2 md:gap-8">
+        <SyncStatusIndicator pendingSyncs={pendingSyncs} syncError={syncError} hasLoaded={hasLoaded} />
         <div className="hidden text-xs font-bold text-blue-100 md:block">Chấm công trên điện thoại</div>
         <RoleSelect dark allowedPositions={allowedPositions} value={positionId} onChange={onPositionChange} />
         <div className="hidden items-center gap-3 md:flex">

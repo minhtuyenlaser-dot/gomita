@@ -121,7 +121,8 @@ export function OrderDashboard({
   compensationRequests = [],
   onCompensationRequestsChange,
   attendance = {},
-  onAttendanceChange
+  onAttendanceChange,
+  isSyncing = false
 }: { 
   accounts: UserAccount[]; 
   position: Position; 
@@ -135,6 +136,7 @@ export function OrderDashboard({
   onCompensationRequestsChange: (reqs: any[]) => void;
   attendance: Record<string, string>;
   onAttendanceChange: (att: Record<string, string>) => void;
+  isSyncing?: boolean;
 }) {
   const [showArchived, setShowArchived] = useState(false);
   const validAccountNames = useMemo(
@@ -319,6 +321,7 @@ export function OrderDashboard({
             onAssign={setAssignOrder}
             onCancel={setCancelOrder}
             overtimeRequests={overtimeRequests}
+            isSyncing={isSyncing}
           />
         ) : (
           <aside className="border-t border-slate-200 bg-white p-4 text-slate-500 xl:border-l xl:border-t-0">Chưa có đơn phù hợp với quyền.</aside>
@@ -338,6 +341,7 @@ export function OrderDashboard({
             showNotice("success", `Đã tạo đơn ${order.code}. Đơn đang ở Tiếp nhận.`);
           }}
           existingCodes={orders.map((order) => order.code)}
+          isSyncing={isSyncing}
         />
       ) : null}
 
@@ -411,6 +415,7 @@ export function OrderDashboard({
             setAssignOrder(null);
             showNotice("success", `Đã giao việc cho đơn ${assignOrder.code}.`);
           }}
+          isSyncing={isSyncing}
         />
       ) : null}
 
@@ -425,6 +430,7 @@ export function OrderDashboard({
             setMoveOrder(null);
             moveSelected(patchedOrder);
           }}
+          isSyncing={isSyncing}
         />
       ) : null}
     </section>
@@ -541,7 +547,10 @@ function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overti
   // 2. Tính toán tiền công thợ và ngày công
   let totalLaborCost = 0;
   let totalWorkdays = 0;
-  const logsSummary = (order.historyLogs || []).map((log) => {
+  const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
+  const logsSummary = (order.historyLogs || [])
+    .filter((log) => allowedSteps.includes(log.step))
+    .map((log) => {
     const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
     const assigneeList = getAssigneeListForStep(log.step);
     // Nếu không tìm được ai từ order fields, dùng log.assignee làm fallback
@@ -763,7 +772,8 @@ function OrderSidePanel({
   onPatch,
   onAssign,
   onCancel,
-  overtimeRequests = []
+  overtimeRequests = [],
+  isSyncing = false
 }: {
   accounts: UserAccount[];
   order: Order;
@@ -775,6 +785,7 @@ function OrderSidePanel({
   onAssign: (order: Order) => void;
   onCancel: (order: Order) => void;
   overtimeRequests?: any[];
+  isSyncing?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
   const canPrice = canViewOrderPricing(position.id, currentUserName, order);
@@ -854,55 +865,96 @@ function OrderSidePanel({
           <div className="grid gap-3">
             {!canHandle ? <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-600">Vị trí này chỉ được xem, không được xử lý công đoạn hiện tại.</div> : null}
             {canAcceptAssignedWork ? (
-              <button className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700" onClick={() => onPatch({ workStatus: "working" })} type="button">
+              <button 
+                className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
+                onClick={() => onPatch({ workStatus: "working" })} 
+                type="button"
+                disabled={isSyncing}
+              >
                 Tiếp nhận công việc
               </button>
             ) : null}
             {canApprove ? (
-              <button className="min-h-11 rounded-lg bg-green-600 font-black text-white" onClick={() => onApprove(order)} type="button">
+              <button 
+                className="min-h-11 rounded-lg bg-green-600 font-black text-white disabled:bg-slate-300" 
+                onClick={() => onApprove(order)} 
+                type="button"
+                disabled={isSyncing}
+              >
                 Quản lý xác nhận chuyển bước
               </button>
             ) : null}
             {order.step === "Nghiệm thu" ? (
               canHandle ? (
                 <button 
-                  className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition animate-pulse" 
+                  className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition animate-pulse disabled:bg-slate-300 disabled:animate-none" 
                   onClick={() => {
                     const confirmed = globalThis.confirm(`Xác nhận nghiệm thu xong cho đơn hàng ${order.code} và chuyển sang Hoàn công?`);
                     if (confirmed) onApprove(order);
                   }} 
                   type="button"
+                  disabled={isSyncing}
                 >
                   Đã nghiệm thu xong (Chuyển sang Hoàn công)
                 </button>
               ) : null
             ) : (
-              <button className="min-h-11 rounded-lg bg-orange-500 font-black text-white disabled:bg-slate-300" disabled={!canHandle || order.workStatus === "pending_confirmation" || orderSteps.indexOf(order.step) === orderSteps.length - 1} onClick={() => onMove(order)} type="button">
+              <button 
+                className="min-h-11 rounded-lg bg-orange-500 font-black text-white disabled:bg-slate-300" 
+                disabled={!canHandle || order.workStatus === "pending_confirmation" || orderSteps.indexOf(order.step) === orderSteps.length - 1 || isSyncing} 
+                onClick={() => onMove(order)} 
+                type="button"
+              >
                 {requiresManagerConfirmation(position.id, order) ? "Gửi quản lý xác nhận" : "Chuyển bước"}
               </button>
             )}
             {canAssign ? (
-              <button className="min-h-11 rounded-lg border border-blue-200 bg-blue-50 font-black text-blue-700" onClick={() => onAssign(order)} type="button">
+              <button 
+                className="min-h-11 rounded-lg border border-blue-200 bg-blue-50 font-black text-blue-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
+                onClick={() => onAssign(order)} 
+                type="button"
+                disabled={isSyncing}
+              >
                 Giao việc
               </button>
             ) : null}
-            <button className="min-h-11 rounded-lg border border-slate-200 font-bold" onClick={() => onPatch({ finalNote: `${order.finalNote} (Đã tạo yêu cầu trả đơn/tách đơn)` })} type="button">
+            <button 
+              className="min-h-11 rounded-lg border border-slate-200 font-bold disabled:bg-slate-100 disabled:text-slate-400" 
+              onClick={() => onPatch({ finalNote: `${order.finalNote} (Đã tạo yêu cầu trả đơn/tách đơn)` })} 
+              type="button"
+              disabled={isSyncing}
+            >
               Trả đơn / tách đơn con
             </button>
             {canCancel ? (
-              <button className="min-h-11 rounded-lg border border-red-300 bg-red-50 font-black text-red-600" onClick={() => onCancel(order)} type="button">
+              <button 
+                className="min-h-11 rounded-lg border border-red-300 bg-red-50 font-black text-red-600 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
+                onClick={() => onCancel(order)} 
+                type="button"
+                disabled={isSyncing}
+              >
                 Hủy đơn
               </button>
             ) : null}
             {["accountant", "director", "admin"].includes(position.id) && order.step === "Hoàn công" && order.checklist.paymentCollected ? (
               <div className="grid gap-3">
-                <button className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700" onClick={() => downloadOrderArchive(order, accounts, overtimeRequests)} type="button">
+                <button 
+                  className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
+                  onClick={() => downloadOrderArchive(order, accounts, overtimeRequests)} 
+                  type="button"
+                  disabled={isSyncing}
+                >
                   Tải hồ sơ quyết toán (.txt)
                 </button>
-                <button className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition" onClick={() => {
-                  onPatch({ status: "archived" });
-                  alert(`Đơn hàng ${order.code} đã hoàn thành xuất sắc và được lưu trữ thành công!`);
-                }} type="button">
+                <button 
+                  className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition disabled:bg-slate-300" 
+                  onClick={() => {
+                    onPatch({ status: "archived" });
+                    alert(`Đơn hàng ${order.code} đã hoàn thành xuất sắc và được lưu trữ thành công!`);
+                  }} 
+                  type="button"
+                  disabled={isSyncing}
+                >
                   Hoàn thành & Lưu trữ đơn hàng
                 </button>
               </div>
@@ -1855,7 +1907,7 @@ function ConfirmCard({ index, orderCode, finalQuestion, onAnswer }: { index: str
   );
 }
 
-function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes, onCreate, onClose }: { accounts: UserAccount[]; currentUserName: string; positionId: string; existingCodes: string[]; onCreate: (order: Order) => void; onClose: () => void }) {
+function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes, onCreate, onClose, isSyncing = false }: { accounts: UserAccount[]; currentUserName: string; positionId: string; existingCodes: string[]; onCreate: (order: Order) => void; onClose: () => void; isSyncing?: boolean }) {
   const sales = useMemo(() => {
     return accounts.filter(
       (acc) => acc.status === "active" && acc.positionIds.includes("sale")
@@ -1921,7 +1973,21 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
         </div>
 
         {issues.length ? <div className="rounded-lg bg-red-50 p-3 text-sm font-bold text-red-600">{issues.join(" ")}</div> : null}
-        <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white hover:bg-orange-600 transition" onClick={submit} type="button">Tạo đơn</button>
+        <button 
+          className="min-h-12 rounded-lg bg-orange-500 font-black text-white hover:bg-orange-600 transition disabled:bg-slate-300 flex items-center justify-center gap-2" 
+          onClick={submit} 
+          type="button"
+          disabled={isSyncing}
+        >
+          {isSyncing ? (
+            <>
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              Đang đồng bộ...
+            </>
+          ) : (
+            "Tạo đơn"
+          )}
+        </button>
       </div>
     </Modal>
   );
@@ -1929,7 +1995,7 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
 
 // SkipModal removed since Chờ tiếp nhận step is removed.
 
-function MoveChecklistModal({ order, position, onClose, onSubmit }: { order: Order; position: Position; onClose: () => void; onSubmit: (patch: Partial<Order>) => void }) {
+function MoveChecklistModal({ order, position, onClose, onSubmit, isSyncing = false }: { order: Order; position: Position; onClose: () => void; onSubmit: (patch: Partial<Order>) => void; isSyncing?: boolean }) {
   const [draft, setDraft] = useState<Order>(order);
   const [showErrors, setShowErrors] = useState(false);
   const nextStep = orderSteps[orderSteps.indexOf(draft.step) + 1];
@@ -1960,15 +2026,27 @@ function MoveChecklistModal({ order, position, onClose, onSubmit }: { order: Ord
             {issues.map((issue) => <div key={issue}>Cần bổ sung: {issue}</div>)}
           </div>
         ) : null}
-        <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white" onClick={submit} type="button">
-          {requiresManagerConfirmation(position.id, draft) ? "Gửi quản lý xác nhận" : "Chuyển bước"}
+        <button 
+          className="min-h-12 rounded-lg bg-orange-500 font-black text-white hover:bg-orange-600 transition disabled:bg-slate-300 flex items-center justify-center gap-2" 
+          onClick={submit} 
+          type="button"
+          disabled={isSyncing}
+        >
+          {isSyncing ? (
+            <>
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              Đang đồng bộ...
+            </>
+          ) : (
+            requiresManagerConfirmation(position.id, draft) ? "Gửi quản lý xác nhận" : "Chuyển bước"
+          )}
         </button>
       </div>
     </Modal>
   );
 }
 
-function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit }: { order: Order; accounts: UserAccount[]; currentPosition: Position; onClose: () => void; onSubmit: (patch: Partial<Order>) => void }) {
+function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, isSyncing = false }: { order: Order; accounts: UserAccount[]; currentPosition: Position; onClose: () => void; onSubmit: (patch: Partial<Order>) => void; isSyncing?: boolean }) {
   const assignConfig = getAssignConfig(currentPosition.id, order);
   const eligibleAccounts = accounts.filter((account) => account.status === "active" && account.positionIds.some((positionId) => assignConfig.assignablePositionIds.includes(positionId)));
   const initialSelected = getInitialAssignedNames(order, assignConfig.targetPositionId);
@@ -2014,7 +2092,21 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit }
           Nội dung giao việc
           <textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-orange-400" value={draft.assignedTaskNote} onChange={(event) => setDraft({ ...draft, assignedTaskNote: event.target.value })} />
         </label>
-        <button className="min-h-12 rounded-lg bg-blue-600 font-black text-white disabled:bg-slate-300" disabled={draft.selectedNames.length === 0} onClick={submit} type="button">Lưu giao việc</button>
+        <button 
+          className="min-h-12 rounded-lg bg-blue-600 font-black text-white disabled:bg-slate-300 flex items-center justify-center gap-2" 
+          disabled={draft.selectedNames.length === 0 || isSyncing} 
+          onClick={submit} 
+          type="button"
+        >
+          {isSyncing ? (
+            <>
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              Đang đồng bộ...
+            </>
+          ) : (
+            "Lưu giao việc"
+          )}
+        </button>
       </div>
     </Modal>
   );

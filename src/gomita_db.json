@@ -75,5 +75,16 @@
       "createdAt": "2026-05-29T15:01:27.388Z"
     }
   ],
-  "attendance": {}
+  "attendance": {
+    "u-director-undefined-07:30": "normal"
+  },
+  "attendanceDetails": {
+    "u-director-undefined-07:30": {
+      "photo": "test",
+      "gps": "20.0,106.0",
+      "gpsAddress": "",
+      "gpsMeta": null,
+      "time": "2026-06-01T07:30:00.000Z"
+    }
+  }
 }

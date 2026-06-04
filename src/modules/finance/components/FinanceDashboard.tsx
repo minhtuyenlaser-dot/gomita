@@ -70,6 +70,7 @@ export function FinanceDashboard({
   const [editingDebtDueDate, setEditingDebtDueDate] = useState("");
   const [editingDebtStatus, setEditingDebtStatus] = useState<CustomerDebtStatus>("pending");
   const [editingDebtNote, setEditingDebtNote] = useState("");
+  const [showLaborDetails, setShowLaborDetails] = useState(false);
 
   // Form thêm vật tư mới
   const [newMatName, setNewMatName] = useState("");
@@ -418,6 +419,27 @@ export function FinanceDashboard({
     return account.salaryValue / 8;
   }
 
+  function getAssigneeListForStep(order: Order, step: string): string[] {
+    switch (step) {
+      case "Tiếp nhận":
+      case "Báo giá":
+        return order.saleName ? order.saleName.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      case "Thiết kế":
+        return ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
+      case "Ra file":
+        return ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
+      case "Sản xuất":
+        return ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
+      case "Lắp đặt":
+        return ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
+      case "Nghiệm thu":
+      case "Hoàn công":
+        return ((order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName]) as string[]).filter(Boolean);
+      default:
+        return [];
+    }
+  }
+
   function buildOrderCostSnapshot(order?: Order) {
     if (!order) {
       return {
@@ -434,16 +456,25 @@ export function FinanceDashboard({
       };
     }
 
-    const logsWithTime = (order.historyLogs || []).map((log) => {
-      const regularHours = calculateWorkingHours(log.startedAt, log.completedAt);
-      const overtimeHours = overtimeRequests
-        .filter((req) => req.orderCode === order.code && req.userDisplayName === log.assignee && req.status === "approved")
-        .reduce((sum, req) => sum + (req.hours || 0), 0);
-      const hourlyRate = getHourlyRateForAssignee(log.assignee, log.completedAt || log.startedAt);
-      return regularHours * hourlyRate + overtimeHours * hourlyRate * 1.5;
+    const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
+    const filteredLogs = (order.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
+    
+    let laborCost = 0;
+    filteredLogs.forEach((log) => {
+      const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
+      const assignees = getAssigneeListForStep(order, log.step);
+      const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
+      
+      finalAssignees.forEach((name) => {
+        const personOT = overtimeRequests
+          .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
+          .reduce((sum, req) => sum + (req.hours || 0), 0);
+        const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
+        const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+        laborCost += cost;
+      });
     });
 
-    const laborCost = logsWithTime.reduce((sum, cost) => sum + cost, 0);
     const materialCost = (order.materialsList || []).reduce((sum, mat) => sum + mat.price, 0);
     let accessorySales = 0;
     let accessoryCost = 0;
@@ -452,8 +483,15 @@ export function FinanceDashboard({
       accessorySales += acc.sellPrice || 0;
       accessoryCost += acc.actualCost || acc.costPrice || 0;
     });
-    const transportCost = order.installationCosts?.transport || 0;
-    const loaderCost = order.installationCosts?.loader || 0;
+
+    const transportCost = cashTransactions
+      .filter((item) => item.orderId === order.id && item.category === "Vận chuyển" && (item.type === "cash_out" || item.type === "bank_out"))
+      .reduce((sum, item) => sum + item.amount, 0);
+
+    const loaderCost = cashTransactions
+      .filter((item) => item.orderId === order.id && item.category === "Bốc vác" && (item.type === "cash_out" || item.type === "bank_out"))
+      .reduce((sum, item) => sum + item.amount, 0);
+
     const quoteValue = order.quotation?.quoteValue || 0;
     const estimateValue = order.quotation?.estimateValue || 0;
     const directSpent = materialCost + accessoryCost + laborCost + transportCost + loaderCost;
@@ -473,14 +511,14 @@ export function FinanceDashboard({
     };
   }
 
-  function getBudgetAlertTone(order?: Order) {
+  const getBudgetAlertTone = (order?: Order) => {
     const snapshot = buildOrderCostSnapshot(order);
     if (!snapshot.estimateValue) return "normal" as const;
     const ratio = snapshot.directSpent / snapshot.estimateValue;
     if (ratio > 0.95) return "purple" as const;
     if (ratio > 0.75) return "red" as const;
     return "normal" as const;
-  }
+  };
 
   // Tính toán số liệu tài chính cho đơn hàng được chọn
   const financeStats = useMemo(() => {
@@ -489,30 +527,49 @@ export function FinanceDashboard({
     // 1. Tính công thợ & tiền công thợ dựa trên log lịch sử các công đoạn và tăng ca
     let totalWorkdays = 0;
     let laborCost = 0;
-    const logsWithTime = (selectedOrder.historyLogs || []).map(log => {
+    
+    const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
+    const filteredLogs = (selectedOrder.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
+    
+    const logsWithTime = filteredLogs.map((log) => {
       const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
+      const assignees = getAssigneeListForStep(selectedOrder, log.step);
+      const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
+
+      const assigneeDetails = finalAssignees.map((name) => {
+        const personOT = overtimeRequests
+          .filter((req) => req.orderCode === selectedOrder.code && req.userDisplayName === name && req.status === "approved")
+          .reduce((sum, req) => sum + (req.hours || 0), 0);
+        const totalHours = workingHours + personOT;
+        const workdays = parseFloat((totalHours / 8).toFixed(2));
+        const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
+        const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+        
+        return {
+          name,
+          workingHours,
+          overtimeHours: personOT,
+          workdays,
+          cost,
+          hourlyRate
+        };
+      });
+
+      const stepCost = assigneeDetails.reduce((sum, item) => sum + item.cost, 0);
+      const stepWorkdays = assigneeDetails.reduce((sum, item) => sum + item.workdays, 0);
       
-      // Lấy giờ tăng ca được phê duyệt
-      const overtimeHours = overtimeRequests
-        .filter(req => req.orderCode === selectedOrder.code && req.userDisplayName === log.assignee && req.status === "approved")
-        .reduce((sum, req) => sum + (req.hours || 0), 0);
-
-      const totalHours = workingHours + overtimeHours;
-      const workdays = totalHours / 8;
-      totalWorkdays += workdays;
-
-      const hourlyRate = getHourlyRateForAssignee(log.assignee, log.completedAt || log.startedAt);
-      const stepCost = (workingHours * hourlyRate) + (overtimeHours * hourlyRate * 1.5);
       laborCost += stepCost;
+      totalWorkdays += stepWorkdays;
 
       return {
-        ...log,
+        step: log.step,
+        startedAt: log.startedAt,
+        completedAt: log.completedAt,
         workingHours,
-        overtimeHours,
-        totalHours,
-        hourlyRate,
-        workdays: parseFloat(workdays.toFixed(2)),
-        cost: stepCost
+        workerCount: finalAssignees.length,
+        assigneeDetails,
+        cost: stepCost,
+        workdays: parseFloat(stepWorkdays.toFixed(2))
       };
     });
 
@@ -522,16 +579,21 @@ export function FinanceDashboard({
     // 3. Phụ kiện ngoài
     let accessorySales = 0;
     let accessoryCost = 0;
-    (selectedOrder.externalAccessories || []).forEach(acc => {
+    (selectedOrder.externalAccessories || []).forEach((acc) => {
       if (acc.name.trim()) {
         accessorySales += acc.sellPrice || 0;
         accessoryCost += acc.actualCost || acc.costPrice || 0;
       }
     });
 
-    // 4. Chi phí lắp đặt khác (vận chuyển, bốc vác)
-    const transport = selectedOrder.installationCosts?.transport || 0;
-    const loader = selectedOrder.installationCosts?.loader || 0;
+    // 4. Chi phí lắp đặt khác (vận chuyển, bốc vác) từ cashTransactions thực tế
+    const transport = cashTransactions
+      .filter((item) => item.orderId === selectedOrder.id && item.category === "Vận chuyển" && (item.type === "cash_out" || item.type === "bank_out"))
+      .reduce((sum, item) => sum + item.amount, 0);
+
+    const loader = cashTransactions
+      .filter((item) => item.orderId === selectedOrder.id && item.category === "Bốc vác" && (item.type === "cash_out" || item.type === "bank_out"))
+      .reduce((sum, item) => sum + item.amount, 0);
 
     // 5. Lợi nhuận
     const revenue = (selectedOrder.quotation?.quoteValue || 0) + accessorySales;
@@ -547,11 +609,11 @@ export function FinanceDashboard({
       totalWorkdays: parseFloat(totalWorkdays.toFixed(2)),
       logsWithTime
     };
-  }, [selectedOrder, overtimeRequests, accounts]);
+  }, [selectedOrder, overtimeRequests, accounts, cashTransactions]);
 
   const selectedOrderSnapshot = useMemo(
     () => buildOrderCostSnapshot(selectedOrder),
-    [selectedOrder, overtimeRequests, accounts]
+    [selectedOrder, overtimeRequests, accounts, cashTransactions]
   );
 
   function exportOrdersData() {
@@ -1355,12 +1417,73 @@ export function FinanceDashboard({
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Tổng đã thu</div><div className="mt-1 text-xl font-black text-green-600">{formatCurrency(selectedOrderIncomeRows.reduce((sum, item) => sum + item.amount, 0))}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Còn phải thu</div><div className="mt-1 text-xl font-black text-orange-600">{formatCurrency(selectedOrderDebtRows.reduce((sum, item) => sum + Math.max(0, item.plannedAmount - item.collectedAmount), 0))}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Chi phí vật tư</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.materialCost + selectedOrderSnapshot.accessoryCost)}</div></div>
-                  <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Nhân công trực tiếp</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.laborCost)}</div></div>
+                  <div 
+                    className="rounded-lg bg-slate-50 p-4 cursor-pointer hover:bg-slate-100 transition border border-slate-200"
+                    onClick={() => setShowLaborDetails(!showLaborDetails)}
+                  >
+                    <div className="text-xs font-bold text-slate-500 flex justify-between items-center">
+                      <span>Nhân công trực tiếp</span>
+                      <span className="text-[10px] text-indigo-600 font-bold underline">
+                        {showLaborDetails ? "Ẩn chi tiết" : "Xem chi tiết"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.laborCost)}</div>
+                  </div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Vận chuyển / bốc vác</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.transportCost + selectedOrderSnapshot.loaderCost)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Chi phí khác</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderExpenseRows.reduce((sum, item) => sum + item.amount, 0))}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Lãi gộp</div><div className={`mt-1 text-xl font-black ${selectedOrderSnapshot.profit >= 0 ? "text-green-600" : "text-red-600"}`}>{formatCurrency(selectedOrderSnapshot.profit)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Tỷ suất lợi nhuận</div><div className="mt-1 text-xl font-black text-slate-900">{selectedOrderSnapshot.quoteValue > 0 ? `${((selectedOrderSnapshot.profit / selectedOrderSnapshot.quoteValue) * 100).toFixed(1)}%` : "0%"}</div></div>
                 </div>
+
+                {showLaborDetails && (
+                  <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/50 p-5">
+                    <h4 className="mb-4 text-md font-black text-slate-800 flex items-center gap-2">
+                      <CalendarCheck className="h-5 w-5 text-indigo-500" />
+                      Chi tiết công thợ trực tiếp
+                    </h4>
+                    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                      <table className="w-full text-left border-collapse text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                            <th className="py-2.5 px-4">Công đoạn</th>
+                            <th>Người đảm nhận</th>
+                            <th>Giờ hành chính</th>
+                            <th>Giờ tăng ca</th>
+                            <th>Tổng công</th>
+                            <th className="text-right pr-4">Tiền công dự tính</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {financeStats.logsWithTime.map((log) => {
+                            if (log.assigneeDetails.length === 0) {
+                              return (
+                                <tr key={log.step} className="border-b border-slate-100 text-slate-700">
+                                  <td className="py-3 px-4 font-bold">{log.step}</td>
+                                  <td className="italic text-slate-400 py-3" colSpan={5}>Chưa có nhân sự đảm nhận</td>
+                                </tr>
+                              );
+                            }
+                            return log.assigneeDetails.map((detail, idx) => (
+                              <tr key={`${log.step}-${detail.name}-${idx}`} className="border-b border-slate-100 text-slate-700">
+                                {idx === 0 ? (
+                                  <td className="py-3 px-4 font-bold" rowSpan={log.assigneeDetails.length}>
+                                    {log.step}
+                                    <div className="text-xs font-normal text-slate-400">({log.workerCount} nhân sự)</div>
+                                  </td>
+                                ) : null}
+                                <td className="font-semibold text-slate-900 py-3">{detail.name}</td>
+                                <td>{detail.workingHours} giờ</td>
+                                <td className={detail.overtimeHours > 0 ? "font-bold text-orange-600" : ""}>{detail.overtimeHours} giờ</td>
+                                <td className="font-bold">{detail.workdays} công</td>
+                                <td className="text-right pr-4 font-black text-slate-900">{(detail.cost || 0).toLocaleString("vi-VN")} đ</td>
+                              </tr>
+                            ));
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
             {/* Lịch sử công đoạn & tính giờ làm việc */}
@@ -1412,14 +1535,32 @@ export function FinanceDashboard({
                           <td>{editingCashId === item.id ? <select className="h-9 rounded border border-slate-200 px-2" value={editingCashPaymentMethod} onChange={(event) => setEditingCashPaymentMethod(event.target.value)}><option value="Tiền mặt">Tiền mặt</option><option value="Chuyển khoản">Chuyển khoản</option></select> : (item.paymentMethod || item.accountName)}</td>
                           <td>{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashNote} onChange={(event) => setEditingCashNote(event.target.value)} /> : item.note}</td>
                           <td>{item.createdBy}</td>
-                          <td className="text-right">
+                          <td className="text-right py-2">
                             {editingCashId === item.id ? (
-                              <div className="flex justify-end gap-2">
-                                <button type="button" className="rounded p-1 text-emerald-600" onClick={saveCashEdit}><Save className="h-4 w-4" /></button>
-                                <button type="button" className="rounded p-1 text-slate-500" onClick={cancelCashEdit}><X className="h-4 w-4" /></button>
+                              <div className="flex justify-end gap-1.5">
+                                <button 
+                                  type="button" 
+                                  className="border border-emerald-600 rounded px-2 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm" 
+                                  onClick={saveCashEdit}
+                                >
+                                  Lưu
+                                </button>
+                                <button 
+                                  type="button" 
+                                  className="border border-slate-300 rounded px-2 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm" 
+                                  onClick={cancelCashEdit}
+                                >
+                                  Hủy
+                                </button>
                               </div>
                             ) : (
-                              <button type="button" className="rounded p-1 text-slate-500" onClick={() => beginCashEdit(item)}><Pencil className="h-4 w-4" /></button>
+                              <button 
+                                type="button" 
+                                className="border border-slate-300 rounded px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm" 
+                                onClick={() => beginCashEdit(item)}
+                              >
+                                Sửa
+                              </button>
                             )}
                           </td>
                         </tr>
@@ -1464,31 +1605,85 @@ export function FinanceDashboard({
                         <th className="py-3">Khoản chi</th>
                         <th>Ngày chi</th>
                         <th>Số tiền</th>
-                        <th>Loại chi</th>
-                        <th>Ghi chú</th>
+                        <th>Phân loại</th>
                         <th>Người ghi</th>
                         <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedOrderExpenseRows.length === 0 ? (
-                        <tr><td className="py-4 text-slate-400 italic" colSpan={7}>Chưa có khoản chi nào cho đơn này.</td></tr>
+                        <tr><td className="py-4 text-slate-400 italic" colSpan={6}>Chưa có khoản chi nào cho đơn này.</td></tr>
                       ) : selectedOrderExpenseRows.map((item) => (
                         <tr key={item.id} className="border-b border-slate-100 text-slate-700">
-                          <td className="py-3 font-bold text-slate-900">{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashCategory} onChange={(event) => setEditingCashCategory(event.target.value)} /> : (item.category || "Chi phí khác")}</td>
-                          <td>{item.createdAt.slice(0, 10)}</td>
-                          <td className="font-black text-red-600">{editingCashId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingCashAmount || ""} onChange={(event) => setEditingCashAmount(Number(event.target.value))} /> : formatCurrency(item.amount)}</td>
-                          <td>{editingCashId === item.id ? <select className="h-9 rounded border border-slate-200 px-2" value={editingCashCategory} onChange={(event) => setEditingCashCategory(event.target.value)}><option value="Vật tư">Vật tư</option><option value="Nhân công trực tiếp">Nhân công trực tiếp</option><option value="Vận chuyển">Vận chuyển</option><option value="Bốc vác">Bốc vác</option><option value="Phụ kiện">Phụ kiện</option><option value="Chi phí khác">Chi phí khác</option></select> : (item.category || "Chi phí khác")}</td>
-                          <td>{editingCashId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingCashNote} onChange={(event) => setEditingCashNote(event.target.value)} /> : item.note}</td>
-                          <td>{item.createdBy}</td>
-                          <td className="text-right">
+                          <td className="py-3 font-bold text-slate-900">
                             {editingCashId === item.id ? (
-                              <div className="flex justify-end gap-2">
-                                <button type="button" className="rounded p-1 text-emerald-600" onClick={saveCashEdit}><Save className="h-4 w-4" /></button>
-                                <button type="button" className="rounded p-1 text-slate-500" onClick={cancelCashEdit}><X className="h-4 w-4" /></button>
+                              <input 
+                                className="h-9 w-full rounded border border-slate-200 px-2 text-sm font-normal" 
+                                value={editingCashNote} 
+                                onChange={(event) => setEditingCashNote(event.target.value)} 
+                              />
+                            ) : (
+                              item.note || "Chưa có ghi chú"
+                            )}
+                          </td>
+                          <td>{item.createdAt.slice(0, 10)}</td>
+                          <td className="font-black text-red-600">
+                            {editingCashId === item.id ? (
+                              <input 
+                                className="h-9 w-28 rounded border border-slate-200 px-2 text-sm font-normal" 
+                                type="number" 
+                                value={editingCashAmount || ""} 
+                                onChange={(event) => setEditingCashAmount(Number(event.target.value))} 
+                              />
+                            ) : (
+                              formatCurrency(item.amount)
+                            )}
+                          </td>
+                          <td>
+                            {editingCashId === item.id ? (
+                              <select 
+                                className="h-9 rounded border border-slate-200 px-2 text-sm" 
+                                value={editingCashCategory} 
+                                onChange={(event) => setEditingCashCategory(event.target.value)}
+                              >
+                                <option value="Vật tư">Vật tư</option>
+                                <option value="Nhân công trực tiếp">Nhân công trực tiếp</option>
+                                <option value="Vận chuyển">Vận chuyển</option>
+                                <option value="Bốc vác">Bốc vác</option>
+                                <option value="Phụ kiện">Phụ kiện</option>
+                                <option value="Chi phí khác">Chi phí khác</option>
+                              </select>
+                            ) : (
+                              item.category || "Chi phí khác"
+                            )}
+                          </td>
+                          <td>{item.createdBy}</td>
+                          <td className="text-right py-2">
+                            {editingCashId === item.id ? (
+                              <div className="flex justify-end gap-1.5">
+                                <button 
+                                  type="button" 
+                                  className="border border-emerald-600 rounded px-2 py-1 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm" 
+                                  onClick={saveCashEdit}
+                                >
+                                  Lưu
+                                </button>
+                                <button 
+                                  type="button" 
+                                  className="border border-slate-300 rounded px-2 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm" 
+                                  onClick={cancelCashEdit}
+                                >
+                                  Hủy
+                                </button>
                               </div>
                             ) : (
-                              <button type="button" className="rounded p-1 text-slate-500" onClick={() => beginCashEdit(item)}><Pencil className="h-4 w-4" /></button>
+                              <button 
+                                type="button" 
+                                className="border border-slate-300 rounded px-2.5 py-1 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm" 
+                                onClick={() => beginCashEdit(item)}
+                              >
+                                Sửa
+                              </button>
                             )}
                           </td>
                         </tr>
@@ -1499,38 +1694,55 @@ export function FinanceDashboard({
               </section>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="mb-4 text-lg font-black text-slate-800 flex items-center gap-2">
-                <CalendarCheck className="h-5 w-5 text-green-500" />
-                Thời gian thực hiện & Công thợ từng công đoạn
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-500 font-bold">
-                      <th className="py-2.5">Công đoạn</th>
-                      <th>Người đảm nhận</th>
-                      <th>Giờ hành chính</th>
-                      <th>Giờ tăng ca</th>
-                      <th>Tổng công</th>
-                      <th className="text-right">Tiền công dự tính</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {financeStats.logsWithTime.map((log, index) => (
-                      <tr key={index} className="border-b border-slate-100 text-slate-700">
-                        <td className="py-3 font-bold">{log.step}</td>
-                        <td className="font-semibold text-slate-900">{log.assignee}</td>
-                        <td>{log.workingHours} giờ</td>
-                        <td className={log.overtimeHours > 0 ? "font-bold text-orange-600" : ""}>{log.overtimeHours} giờ</td>
-                        <td className="font-bold">{log.workdays} công</td>
-                        <td className="text-right font-black text-slate-900">{(log.cost || 0).toLocaleString("vi-VN")} đ</td>
+            {showLaborDetails && (
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="mb-4 text-lg font-black text-slate-800 flex items-center gap-2">
+                  <CalendarCheck className="h-5 w-5 text-green-500" />
+                  Thời gian thực hiện & Công thợ từng công đoạn
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 font-bold">
+                        <th className="py-2.5">Công đoạn</th>
+                        <th>Người đảm nhận</th>
+                        <th>Giờ hành chính</th>
+                        <th>Giờ tăng ca</th>
+                        <th>Tổng công</th>
+                        <th className="text-right">Tiền công dự tính</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {financeStats.logsWithTime.map((log) => {
+                        if (log.assigneeDetails.length === 0) {
+                          return (
+                            <tr key={log.step} className="border-b border-slate-100 text-slate-700">
+                              <td className="py-3 font-bold">{log.step}</td>
+                              <td className="italic text-slate-400 py-3" colSpan={5}>Chưa có nhân sự đảm nhận</td>
+                            </tr>
+                          );
+                        }
+                        return log.assigneeDetails.map((detail, idx) => (
+                          <tr key={`${log.step}-${detail.name}-${idx}`} className="border-b border-slate-100 text-slate-700">
+                            {idx === 0 ? (
+                              <td className="py-3 font-bold" rowSpan={log.assigneeDetails.length}>
+                                {log.step}
+                                <div className="text-xs font-normal text-slate-400">({log.workerCount} nhân sự)</div>
+                              </td>
+                            ) : null}
+                            <td className="font-semibold text-slate-900 py-3">{detail.name}</td>
+                            <td>{detail.workingHours} giờ</td>
+                            <td className={detail.overtimeHours > 0 ? "font-bold text-orange-600" : ""}>{detail.overtimeHours} giờ</td>
+                            <td className="font-bold">{detail.workdays} công</td>
+                            <td className="text-right font-black text-slate-900">{(detail.cost || 0).toLocaleString("vi-VN")} đ</td>
+                          </tr>
+                        ));
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Quản lý vật tư thực tế */}
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1582,76 +1794,19 @@ export function FinanceDashboard({
                 </div>
 
                 <div className="border-l border-slate-100 pl-6">
-                  <h4 className="font-bold text-sm text-slate-600 mb-3">Chi phí Lắp đặt bổ sung (Giám sát nhập)</h4>
+                  <h4 className="font-bold text-sm text-slate-600 mb-3">Chi phí Vận chuyển & Bốc vác thực tế (Kế toán chi)</h4>
                   <div className="grid gap-4">
                     <div className="flex justify-between items-center rounded-lg border border-slate-200 p-3 bg-slate-50/50">
                       <span className="font-bold text-sm text-slate-700">Tiền vận chuyển</span>
-                      <span className="font-black text-slate-900">{(selectedOrder.installationCosts?.transport || 0).toLocaleString("vi-VN")} đ</span>
+                      <span className="font-black text-slate-900">{selectedOrderSnapshot.transportCost.toLocaleString("vi-VN")} đ</span>
                     </div>
                     <div className="flex justify-between items-center rounded-lg border border-slate-200 p-3 bg-slate-50/50">
                       <span className="font-bold text-sm text-slate-700">Tiền bốc vác</span>
-                      <span className="font-black text-slate-900">{(selectedOrder.installationCosts?.loader || 0).toLocaleString("vi-VN")} đ</span>
+                      <span className="font-black text-slate-900">{selectedOrderSnapshot.loaderCost.toLocaleString("vi-VN")} đ</span>
                     </div>
-                    <p className="text-xs text-slate-400 mt-2">● Các chi phí lắp đặt phụ này do Giám sát nhập khi lập checklist nghiệm thu.</p>
+                    <p className="text-xs text-slate-400 mt-2">● Các chi phí này được tự động tính gộp từ các khoản chi có phân loại "Vận chuyển" và "Bốc vác" của đơn hàng.</p>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Phụ kiện ngoài & Hạch toán giá vốn */}
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="mb-2 text-lg font-black text-slate-800 flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-indigo-500" />
-                Hạch toán Phụ kiện ngoài (Kế toán nhập giá vốn)
-              </h3>
-              <p className="text-xs text-slate-500 mb-4">Các phụ kiện do phòng Sale khai báo tại bước Báo giá. Kế toán nhập Giá vốn và Chi phí thực tế để hạch toán lãi lỗ chính xác.</p>
-              
-              <div className="overflow-x-auto rounded-lg border border-slate-100">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <th className="py-2.5 px-3">Tên phụ kiện</th>
-                      <th>Giá bán (khách)</th>
-                      <th>Giá vốn (Kế toán nhập)</th>
-                      <th className="pr-3">Chi phí thực tế (Kế toán nhập)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(!selectedOrder.externalAccessories || selectedOrder.externalAccessories.filter(a => a.name.trim()).length === 0) ? (
-                      <tr>
-                        <td colSpan={4} className="py-4 text-center text-slate-400 italic">Không có phụ kiện ngoài nào được khai báo trong đơn hàng này.</td>
-                      </tr>
-                    ) : (
-                      selectedOrder.externalAccessories.map((acc, idx) => {
-                        if (!acc.name.trim()) return null;
-                        return (
-                          <tr key={idx} className="border-b border-slate-100 text-slate-700">
-                            <td className="py-2.5 px-3 font-bold">{acc.name}</td>
-                            <td className="font-black text-blue-600">{acc.sellPrice.toLocaleString("vi-VN")} đ</td>
-                            <td>
-                              <input 
-                                className="h-9 w-32 rounded-lg border border-slate-200 px-2 font-black outline-none focus:border-indigo-500" 
-                                type="number" 
-                                value={acc.costPrice || ""} 
-                                onChange={e => updateAccessory(idx, "costPrice", Number(e.target.value))}
-                                placeholder="Giá vốn"
-                              />
-                            </td>
-                            <td className="pr-3">
-                              <input 
-                                className="h-9 w-32 rounded-lg border border-slate-200 px-2 font-black outline-none focus:border-indigo-500" 
-                                type="number" 
-                                value={acc.actualCost || ""} 
-                                onChange={e => updateAccessory(idx, "actualCost", Number(e.target.value))}
-                                placeholder="CP thực tế"
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
               </div>
             </div>
             </>
