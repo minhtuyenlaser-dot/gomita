@@ -8,6 +8,11 @@ export type CashTransaction = {
   createdAt: string;
   createdBy: string;
   accountName: string;
+  orderId?: string;
+  orderCode?: string;
+  customerName?: string;
+  category?: string;
+  paymentMethod?: string;
 };
 
 export type CustomerDebtStage = "deposit" | "stage2" | "before_production" | "before_installation" | "handover" | "completed";
