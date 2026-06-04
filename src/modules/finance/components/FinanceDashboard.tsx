@@ -196,33 +196,6 @@ export function FinanceDashboard({
     return parseFloat(totalHours.toFixed(1));
   }
 
-  // Thêm vật tư mới vào đơn hàng
-  function addMaterial() {
-    if (!selectedOrder || !newMatName.trim() || newMatPrice <= 0) return;
-    const updatedMats = [...(selectedOrder.materialsList || []), { name: newMatName.trim(), price: newMatPrice }];
-    setOrders(current => current.map(o => o.id === selectedOrder.id ? { ...o, materialsList: updatedMats } : o));
-    setNewMatName("");
-    setNewMatPrice(0);
-  }
-
-  // Xóa vật tư
-  function deleteMaterial(index: number) {
-    if (!selectedOrder || !selectedOrder.materialsList) return;
-    const updatedMats = selectedOrder.materialsList.filter((_, idx) => idx !== index);
-    setOrders(current => current.map(o => o.id === selectedOrder.id ? { ...o, materialsList: updatedMats } : o));
-  }
-
-  // Cập nhật phụ kiện ngoài (giá vốn, chi phí thực tế)
-  function updateAccessory(index: number, field: "costPrice" | "actualCost", value: number) {
-    if (!selectedOrder || !selectedOrder.externalAccessories) return;
-    const updatedAccs = selectedOrder.externalAccessories.map((acc, idx) => {
-      if (idx === index) {
-        return { ...acc, [field]: value };
-      }
-      return acc;
-    });
-    setOrders(current => current.map(o => o.id === selectedOrder.id ? { ...o, externalAccessories: updatedAccs } : o));
-  }
 
   function addCashTransaction() {
     if (!onCashTransactionsChange || cashAmount <= 0) return;
