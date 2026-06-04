@@ -1351,7 +1351,26 @@ export function FinanceDashboard({
             <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h3 className="text-xl font-black text-slate-900">{selectedOrder.code}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-black text-slate-900">{selectedOrder.code}</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(selectedOrder, null, 2));
+                        const downloadAnchor = document.createElement('a');
+                        downloadAnchor.setAttribute("href", dataStr);
+                        downloadAnchor.setAttribute("download", `GOMITA-Order-${selectedOrder.code}.json`);
+                        document.body.appendChild(downloadAnchor);
+                        downloadAnchor.click();
+                        downloadAnchor.remove();
+                      }}
+                      title="Tải toàn bộ dữ liệu đơn hàng (JSON)"
+                      className="flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
+                    >
+                      <Download className="h-3 w-3" />
+                      Tải đơn
+                    </button>
+                  </div>
                   <p className="mt-1 text-sm text-slate-500">{selectedOrder.customerName} - {selectedOrder.area}</p>
                 </div>
                 <div className={`rounded-full px-3 py-1 text-xs font-black ${

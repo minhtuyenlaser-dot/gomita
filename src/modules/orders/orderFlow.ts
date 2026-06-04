@@ -70,6 +70,8 @@ export type Order = {
     quoteValue: number;
     estimatePhotoUploaded: boolean;
     quotePhotoUploaded: boolean;
+    estimateEditCount?: number;
+    quoteEditCount?: number;
   };
   checklist: {
     designFileSent: boolean;

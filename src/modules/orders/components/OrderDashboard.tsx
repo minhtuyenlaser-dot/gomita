@@ -7,6 +7,7 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Download,
   Eye,
   FileImage,
   MessageSquare,
@@ -806,7 +807,26 @@ function OrderSidePanel({
   return (
     <aside className="border-t border-slate-200 bg-white xl:border-l xl:border-t-0 text-slate-900">
       <div className="flex h-14 items-center justify-between border-b border-slate-200 px-4">
-        <h2 className="font-black">Chi tiết đơn hàng</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="font-black">Chi tiết đơn hàng</h2>
+          <button
+            type="button"
+            onClick={() => {
+              const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(order, null, 2));
+              const downloadAnchor = document.createElement('a');
+              downloadAnchor.setAttribute("href", dataStr);
+              downloadAnchor.setAttribute("download", `GOMITA-Order-${order.code}.json`);
+              document.body.appendChild(downloadAnchor);
+              downloadAnchor.click();
+              downloadAnchor.remove();
+            }}
+            title="Tải toàn bộ dữ liệu đơn hàng (JSON)"
+            className="flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
+          >
+            <Download className="h-3 w-3" />
+            Tải đơn
+          </button>
+        </div>
         <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" type="button" aria-label="Đóng">
           <X className="h-5 w-5" />
         </button>
@@ -843,7 +863,7 @@ function OrderSidePanel({
             {canHandle && (
               <div className="mt-4 border-t border-slate-200 pt-4">
                 <div className="mb-2 font-black text-slate-800 text-sm">Nhập liệu & Checklist công việc</div>
-                <WorkflowChecks order={order} onPatch={onPatch} />
+                <WorkflowChecks order={order} onPatch={onPatch} positionId={position.id} />
               </div>
             )}
           </div>
@@ -980,7 +1000,53 @@ function OrderInfo({ order, positionId }: { order: Order; positionId: string }) 
   );
 }
 
-function WorkflowChecks({ order, onPatch }: { order: Order; onPatch: (patch: Partial<Order>) => void }) {
+function WorkflowChecks({ 
+  order, 
+  onPatch, 
+  positionId 
+}: { 
+  order: Order; 
+  onPatch: (patch: Partial<Order>) => void; 
+  positionId?: string; 
+}) {
+  const [initialEstimateValue, setInitialEstimateValue] = useState<number | null>(null);
+  const [initialQuoteValue, setInitialQuoteValue] = useState<number | null>(null);
+
+  const isSale = positionId === "sale";
+  const isEstimateDisabled = isSale && (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1);
+  const isQuoteDisabled = isSale && (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
+
+  const handleEstimateBlur = () => {
+    if (initialEstimateValue !== null) {
+      const currentValue = order.quotation.estimateValue;
+      if (currentValue !== initialEstimateValue && initialEstimateValue > 0) {
+        const nextEditCount = (order.quotation.estimateEditCount || 0) + 1;
+        onPatch({
+          quotation: {
+            ...order.quotation,
+            estimateEditCount: nextEditCount
+          }
+        });
+      }
+      setInitialEstimateValue(null);
+    }
+  };
+
+  const handleQuoteBlur = () => {
+    if (initialQuoteValue !== null) {
+      const currentValue = order.quotation.quoteValue;
+      if (currentValue !== initialQuoteValue && initialQuoteValue > 0) {
+        const nextEditCount = (order.quotation.quoteEditCount || 0) + 1;
+        onPatch({
+          quotation: {
+            ...order.quotation,
+            quoteEditCount: nextEditCount
+          }
+        });
+      }
+      setInitialQuoteValue(null);
+    }
+  };
   if (order.step === "Tiếp nhận") {
     return (
       <div className="grid gap-3 text-slate-950">
@@ -1022,8 +1088,32 @@ function WorkflowChecks({ order, onPatch }: { order: Order; onPatch: (patch: Par
     const accs = order.externalAccessories || Array.from({ length: 10 }, () => ({ name: "", sellPrice: 0, costPrice: 0, actualCost: 0 }));
     return (
       <div className="grid gap-3 text-slate-950">
-        <NumberInput label="Dự toán *" value={order.quotation.estimateValue} onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} />
-        <NumberInput label="Báo giá *" value={order.quotation.quoteValue} onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} />
+        <NumberInput 
+          label="Dự toán *" 
+          value={order.quotation.estimateValue} 
+          onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} 
+          disabled={isEstimateDisabled}
+          onFocus={() => setInitialEstimateValue(order.quotation.estimateValue)}
+          onBlur={handleEstimateBlur}
+        />
+        <NumberInput 
+          label="Báo giá *" 
+          value={order.quotation.quoteValue} 
+          onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
+          disabled={isQuoteDisabled}
+          onFocus={() => setInitialQuoteValue(order.quotation.quoteValue)}
+          onBlur={handleQuoteBlur}
+        />
+        {(isEstimateDisabled || isQuoteDisabled) && (
+          <div className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded border border-red-200">
+            ⚠ Bạn đã thực hiện chỉnh sửa Dự toán/Báo giá tối đa 1 lần. Chức năng sửa đã bị khóa đối với quyền Sale.
+          </div>
+        )}
+        {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+          <div className="text-[11px] text-slate-500 italic">
+            * Lưu ý: Quyền Sale chỉ được chỉnh sửa Dự toán/Báo giá tối đa 1 lần sau khi đã lưu giá trị ban đầu.
+          </div>
+        )}
         <CheckItem label="Đã upload ảnh dự toán *" checked={order.quotation.estimatePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, estimatePhotoUploaded: checked } })} />
         <CheckItem label="Đã upload ảnh báo giá *" checked={order.quotation.quotePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, quotePhotoUploaded: checked } })} />
         
@@ -2019,7 +2109,7 @@ function MoveChecklistModal({ order, position, onClose, onSubmit, isSyncing = fa
         <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-700">
           Điền đủ thông tin và tích đủ checklist trước khi chuyển sang {nextStep ?? "bước tiếp theo"}.
         </div>
-        <WorkflowChecks order={draft} onPatch={patchDraft} />
+        <WorkflowChecks order={draft} onPatch={patchDraft} positionId={position.id} />
         <TransitionSummary order={draft} />
         {showErrors && issues.length ? (
           <div className="rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-700">
@@ -2198,8 +2288,35 @@ function TextInput({ label, value, onChange }: { label: string; value: string; o
   return <label className="grid gap-1 text-sm font-bold text-slate-700">{label}<input className="h-10 rounded-lg border border-slate-200 px-3 font-normal outline-none focus:border-orange-400" value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
-function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return <label className="grid gap-1 text-sm font-bold text-slate-700">{label}<input className="h-10 rounded-lg border border-slate-200 px-3 font-normal outline-none focus:border-orange-400" type="number" value={value || ""} onChange={(event) => onChange(Number(event.target.value))} /></label>;
+function NumberInput({ 
+  label, 
+  value, 
+  onChange, 
+  disabled = false, 
+  onFocus, 
+  onBlur 
+}: { 
+  label: string; 
+  value: number; 
+  onChange: (value: number) => void; 
+  disabled?: boolean;
+  onFocus?: () => void;
+  onBlur?: () => void;
+}) {
+  return (
+    <label className="grid gap-1 text-sm font-bold text-slate-700">
+      {label}
+      <input 
+        className="h-10 rounded-lg border border-slate-200 px-3 font-normal outline-none focus:border-orange-400 disabled:bg-slate-100 disabled:text-slate-400" 
+        type="number" 
+        value={value || ""} 
+        onChange={(event) => onChange(Number(event.target.value))} 
+        disabled={disabled}
+        onFocus={onFocus}
+        onBlur={onBlur}
+      />
+    </label>
+  );
 }
 
 function CheckItem({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
