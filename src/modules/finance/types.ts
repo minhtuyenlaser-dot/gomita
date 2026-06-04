@@ -13,6 +13,7 @@ export type CashTransaction = {
   customerName?: string;
   category?: string;
   paymentMethod?: string;
+  isAuto?: boolean;
 };
 
 export type CustomerDebtStage = "deposit" | "stage2" | "before_production" | "before_installation" | "handover" | "completed";

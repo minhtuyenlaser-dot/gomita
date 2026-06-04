@@ -72,9 +72,25 @@ export function FinanceDashboard({
   const [editingDebtNote, setEditingDebtNote] = useState("");
   const [showLaborDetails, setShowLaborDetails] = useState(false);
 
-  // Form thêm vật tư mới
-  const [newMatName, setNewMatName] = useState("");
-  const [newMatPrice, setNewMatPrice] = useState(0);
+  // Form thêm phát sinh mới
+  const [incurredNote, setIncurredNote] = useState("");
+  const [incurredAmount, setIncurredAmount] = useState(0);
+
+  // Thêm phát sinh mới vào đơn hàng
+  function addIncurredCost() {
+    if (!selectedOrder || !incurredNote.trim() || incurredAmount === 0) return;
+    const updatedIncurred = [...(selectedOrder.incurredCosts || []), { note: incurredNote.trim(), amount: incurredAmount }];
+    setOrders(current => current.map(o => o.id === selectedOrder.id ? { ...o, incurredCosts: updatedIncurred } : o));
+    setIncurredNote("");
+    setIncurredAmount(0);
+  }
+
+  // Xóa phát sinh
+  function deleteIncurredCost(index: number) {
+    if (!selectedOrder || !selectedOrder.incurredCosts) return;
+    const updatedIncurred = selectedOrder.incurredCosts.filter((_, idx) => idx !== index);
+    setOrders(current => current.map(o => o.id === selectedOrder.id ? { ...o, incurredCosts: updatedIncurred } : o));
+  }
 
   const financeLedger = useMemo(() => {
     return cashTransactions.reduce((summary, item) => {
@@ -687,11 +703,31 @@ export function FinanceDashboard({
   const orderFinancialRows = useMemo(() => {
     return orders.map((order) => {
       const snapshot = buildOrderCostSnapshot(order);
-      const orderDebts = customerDebts.filter((item) => item.orderId === order.id);
-      const collected = orderDebts.reduce((sum, item) => sum + item.collectedAmount, 0);
-      const planned = orderDebts.reduce((sum, item) => sum + item.plannedAmount, 0);
-      const remaining = Math.max(0, planned - collected);
-      const debtStatus = orderDebts.some((item) => item.status === "overdue")
+      const orderIncomes = cashTransactions.filter(
+        (item) => item.orderId === order.id && (item.type === "cash_in" || item.type === "bank_in")
+      );
+      const collected = orderIncomes.reduce((sum, item) => sum + item.amount, 0);
+      const incurred = (order.incurredCosts || []).reduce((sum, item) => sum + (item.amount || 0), 0);
+      const totalValue = (order.quotation?.quoteValue || 0) + (snapshot.accessorySales || 0);
+      const remaining = Math.max(0, totalValue + incurred - collected);
+      
+      const nghiemThuLog = (order.historyLogs || []).find(
+        (log) => log.step === "Nghiệm thu" && log.completedAt
+      );
+      const isNghiemThuPassed = nghiemThuLog || order.step === "Hoàn công";
+      let isOverdue = false;
+      if (isNghiemThuPassed && remaining > 0) {
+        const completionTime = nghiemThuLog?.completedAt 
+          ? new Date(nghiemThuLog.completedAt).getTime()
+          : Date.now();
+        const diffTime = Date.now() - completionTime;
+        const diffDays = diffTime / (1000 * 60 * 60 * 24);
+        if (diffDays > 7) {
+          isOverdue = true;
+        }
+      }
+      
+      const debtStatus = isOverdue
         ? "overdue"
         : remaining > 0
           ? "pending"
@@ -706,7 +742,7 @@ export function FinanceDashboard({
         margin
       };
     });
-  }, [orders, customerDebts, overtimeRequests, accounts]);
+  }, [orders, cashTransactions, overtimeRequests, accounts]);
 
   const monthlyOverview = useMemo(() => {
     const monthTransactions = cashTransactions.filter((item) => normalizeMonth(item.createdAt) === reportMonth);
@@ -834,9 +870,11 @@ export function FinanceDashboard({
       return (latest.completedAt || latest.startedAt || new Date().toISOString()).slice(0, 10);
     };
 
-    const autoLabor = [
+    const autoLabor: CashTransaction[] = [
       {
         id: `auto-labor-design-${selectedOrder.id}`,
+        type: "cash_out",
+        accountName: "Quỹ tiền mặt",
         note: "Nhân công Thiết kế",
         createdAt: getLatestDateForStep("Thiết kế"),
         amount: calculateLaborCostForStep(selectedOrder, "Thiết kế"),
@@ -846,6 +884,8 @@ export function FinanceDashboard({
       },
       {
         id: `auto-labor-file-${selectedOrder.id}`,
+        type: "cash_out",
+        accountName: "Quỹ tiền mặt",
         note: "Nhân công Ra file",
         createdAt: getLatestDateForStep("Ra file"),
         amount: calculateLaborCostForStep(selectedOrder, "Ra file"),
@@ -855,6 +895,8 @@ export function FinanceDashboard({
       },
       {
         id: `auto-labor-production-${selectedOrder.id}`,
+        type: "cash_out",
+        accountName: "Quỹ tiền mặt",
         note: "Nhân công Sản xuất",
         createdAt: getLatestDateForStep("Sản xuất"),
         amount: calculateLaborCostForStep(selectedOrder, "Sản xuất"),
@@ -864,6 +906,8 @@ export function FinanceDashboard({
       },
       {
         id: `auto-labor-installation-${selectedOrder.id}`,
+        type: "cash_out",
+        accountName: "Quỹ tiền mặt",
         note: "Nhân công Lắp đặt",
         createdAt: getLatestDateForStep("Lắp đặt"),
         amount: calculateLaborCostForStep(selectedOrder, "Lắp đặt"),
@@ -876,10 +920,41 @@ export function FinanceDashboard({
     return [...autoLabor, ...manualExpenses];
   }, [selectedOrder, cashTransactions, overtimeRequests, reportMonth, workedDatesByUserMonth]);
 
-  const selectedOrderDebtRows = useMemo(() => {
-    if (!selectedOrder) return [];
-    return customerDebts.filter((item) => item.orderId === selectedOrder.id);
-  }, [customerDebts, selectedOrder]);
+  const totalIncurred = useMemo(() => {
+    if (!selectedOrder || !selectedOrder.incurredCosts) return 0;
+    return selectedOrder.incurredCosts.reduce((sum, item) => sum + (item.amount || 0), 0);
+  }, [selectedOrder]);
+
+  const remainingDebt = useMemo(() => {
+    if (!selectedOrder) return 0;
+    const totalCollected = selectedOrderIncomeRows.reduce((sum, item) => sum + item.amount, 0);
+    const revenue = (selectedOrder.quotation?.quoteValue || 0) + (selectedOrderSnapshot?.accessorySales || 0);
+    return Math.max(0, revenue + totalIncurred - totalCollected);
+  }, [selectedOrder, selectedOrderIncomeRows, selectedOrderSnapshot, totalIncurred]);
+
+  const debtColorClass = useMemo(() => {
+    if (!selectedOrder) return "text-orange-600";
+    const nghiemThuLog = (selectedOrder.historyLogs || []).find(
+      (log) => log.step === "Nghiệm thu" && log.completedAt
+    );
+    const isNghiemThuPassed = nghiemThuLog || selectedOrder.step === "Hoàn công";
+    if (isNghiemThuPassed) {
+      if (remainingDebt <= 0) {
+        return "text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded";
+      }
+      const completionTime = nghiemThuLog?.completedAt 
+        ? new Date(nghiemThuLog.completedAt).getTime()
+        : Date.now();
+      const diffTime = Date.now() - completionTime;
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      if (diffDays > 7) {
+        return "text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded border border-red-200";
+      } else {
+        return "text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded";
+      }
+    }
+    return "text-orange-600";
+  }, [selectedOrder, remainingDebt]);
 
   return (
     <section className="grid gap-6 text-slate-900">
@@ -1281,7 +1356,7 @@ export function FinanceDashboard({
                     : "Chưa có dự toán"}
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <div className="mt-4 grid gap-3 md:grid-cols-5">
                 <div className="rounded-lg bg-slate-50 p-3">
                   <div className="text-xs font-bold text-slate-500">Sale quản lý</div>
                   <div className="mt-1 text-sm font-black text-slate-900">{selectedOrder.saleName || "Chưa giao"}</div>
@@ -1295,6 +1370,10 @@ export function FinanceDashboard({
                   <div className="mt-1 text-sm font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.quoteValue)}</div>
                 </div>
                 <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs font-bold text-slate-500">Phát sinh tăng/giảm</div>
+                  <div className="mt-1 text-sm font-black text-indigo-600">{formatCurrency(totalIncurred)}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
                   <div className="text-xs font-bold text-slate-500">Chi trực tiếp hiện tại</div>
                   <div className="mt-1 text-sm font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.directSpent)}</div>
                 </div>
@@ -1302,7 +1381,6 @@ export function FinanceDashboard({
               <div className="mt-4 flex flex-wrap gap-2">
                 {[
                   { id: "overview", label: "Tổng quan" },
-                  { id: "debt", label: "Công nợ" },
                   { id: "profit", label: "Lãi lỗ" }
                 ].map((item) => (
                   <button
@@ -1429,77 +1507,14 @@ export function FinanceDashboard({
                 </div>
               </section>
             )}
-            {detailTab === "debt" && (
-              <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-black text-slate-800">Công nợ theo đơn hàng</h3>
-                    <p className="text-sm text-slate-500">Quản lý theo từng mốc thu của đúng đơn đang chọn, ví dụ cọc lần 1 và cọc lần 2.</p>
-                  </div>
-                </div>
-                <div className="mb-4 grid gap-3 md:grid-cols-3">
-                  <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStage} onChange={(event) => setDebtStage(event.target.value as CustomerDebtStage)}>
-                    {(["deposit", "stage2", "before_production", "before_installation", "handover", "completed"] as CustomerDebtStage[]).map((value) => <option key={value} value={value}>{getDebtStageLabel(value)}</option>)}
-                  </select>
-                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Phải thu" value={debtPlannedAmount || ""} onChange={(event) => setDebtPlannedAmount(Number(event.target.value))} />
-                  <input className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400" type="number" placeholder="Đã thu" value={debtCollectedAmount || ""} onChange={(event) => setDebtCollectedAmount(Number(event.target.value))} />
-                  <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" type="date" value={debtDueDate} onChange={(event) => setDebtDueDate(event.target.value)} />
-                  <select className="h-11 rounded-lg border border-slate-200 px-3 bg-white font-bold" value={debtStatus} onChange={(event) => setDebtStatus(event.target.value as CustomerDebtStatus)}>
-                    {Object.entries(customerDebtStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                  </select>
-                  <input className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400" placeholder="Ghi chú công nợ" value={debtNote} onChange={(event) => setDebtNote(event.target.value)} />
-                </div>
-                <button className="mb-4 min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white" onClick={addCustomerDebt} type="button">Ghi nhận công nợ cho đơn này</button>
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-left text-slate-500">
-                        <th className="py-3">Giai đoạn</th>
-                        <th>Phải thu</th>
-                        <th>Đã thu</th>
-                        <th>Còn lại</th>
-                        <th>Hạn thu</th>
-                        <th>Trạng thái</th>
-                        <th>Ghi chú</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedOrderDebtRows.length === 0 ? (
-                        <tr><td className="py-4 text-slate-400 italic" colSpan={8}>Chưa có dữ liệu công nợ cho đơn này.</td></tr>
-                      ) : selectedOrderDebtRows.map((item) => (
-                        <tr key={item.id} className="border-b border-slate-100 text-slate-700">
-                          <td className="py-3 font-bold text-slate-900">{getDebtStageLabel(item.stage)}</td>
-                          <td>{editingDebtId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingDebtPlannedAmount || ""} onChange={(event) => setEditingDebtPlannedAmount(Number(event.target.value))} /> : formatCurrency(item.plannedAmount)}</td>
-                          <td>{editingDebtId === item.id ? <input className="h-9 w-28 rounded border border-slate-200 px-2" type="number" value={editingDebtCollectedAmount || ""} onChange={(event) => setEditingDebtCollectedAmount(Number(event.target.value))} /> : formatCurrency(item.collectedAmount)}</td>
-                          <td>{formatCurrency(Math.max(0, item.plannedAmount - item.collectedAmount))}</td>
-                          <td>{editingDebtId === item.id ? <input className="h-9 rounded border border-slate-200 px-2" type="date" value={editingDebtDueDate} onChange={(event) => setEditingDebtDueDate(event.target.value)} /> : (item.dueDate || "-")}</td>
-                          <td>{editingDebtId === item.id ? <select className="h-9 rounded border border-slate-200 px-2" value={editingDebtStatus} onChange={(event) => setEditingDebtStatus(event.target.value as CustomerDebtStatus)}>{Object.entries(customerDebtStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : customerDebtStatusLabels[item.status]}</td>
-                          <td>{editingDebtId === item.id ? <input className="h-9 w-full rounded border border-slate-200 px-2" value={editingDebtNote} onChange={(event) => setEditingDebtNote(event.target.value)} /> : (item.note || "-")}</td>
-                          <td className="text-right">
-                            {editingDebtId === item.id ? (
-                              <div className="flex justify-end gap-2">
-                                <button type="button" className="rounded p-1 text-emerald-600" onClick={saveDebtEdit}><Save className="h-4 w-4" /></button>
-                                <button type="button" className="rounded p-1 text-slate-500" onClick={cancelDebtEdit}><X className="h-4 w-4" /></button>
-                              </div>
-                            ) : (
-                              <button type="button" className="rounded p-1 text-slate-500" onClick={() => beginDebtEdit(item)}><Pencil className="h-4 w-4" /></button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            )}
+
             {detailTab === "profit" && (
               <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-lg font-black text-slate-800">Lãi lỗ đơn hàng</h3>
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Doanh thu đơn hàng</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.quoteValue + selectedOrderSnapshot.accessorySales)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Tổng đã thu</div><div className="mt-1 text-xl font-black text-green-600">{formatCurrency(selectedOrderIncomeRows.reduce((sum, item) => sum + item.amount, 0))}</div></div>
-                  <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Còn phải thu</div><div className="mt-1 text-xl font-black text-orange-600">{formatCurrency(selectedOrderDebtRows.reduce((sum, item) => sum + Math.max(0, item.plannedAmount - item.collectedAmount), 0))}</div></div>
+                  <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Còn phải thu</div><div className={`mt-1 text-xl font-black ${debtColorClass}`}>{formatCurrency(remainingDebt)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Chi phí vật tư</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.materialCost + selectedOrderSnapshot.accessoryCost)}</div></div>
                   <div 
                     className="rounded-lg bg-slate-50 p-4 cursor-pointer hover:bg-slate-100 transition border border-slate-200"
@@ -1832,6 +1847,77 @@ export function FinanceDashboard({
             )}
 
 
+            {/* Các khoản phát sinh do kế toán nhập */}
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm mt-6">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-black text-slate-800">Các khoản phát sinh</h3>
+                  <p className="text-sm text-slate-500">Các khoản phát sinh tăng/giảm giá trị đơn hàng được tính riêng vào công nợ còn phải thu.</p>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs font-bold text-slate-500">Tổng phát sinh</div>
+                  <div className="text-lg font-black text-indigo-600">{formatCurrency(totalIncurred)}</div>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <input
+                  className="h-11 rounded-lg border border-slate-200 px-3 outline-none focus:border-orange-400"
+                  value={incurredNote}
+                  onChange={(event) => setIncurredNote(event.target.value)}
+                  placeholder="Nội dung phát sinh (Vd: Thiết kế thêm kệ, đổi chất liệu...)"
+                />
+                <input
+                  className="h-11 rounded-lg border border-slate-200 px-3 font-bold outline-none focus:border-orange-400"
+                  type="number"
+                  value={incurredAmount || ""}
+                  onChange={(event) => setIncurredAmount(Number(event.target.value))}
+                  placeholder="Số tiền phát sinh"
+                />
+                <button
+                  className="min-h-11 rounded-lg bg-indigo-600 px-4 font-black text-white"
+                  onClick={addIncurredCost}
+                  type="button"
+                >
+                  Thêm phát sinh
+                </button>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500 font-bold">
+                      <th className="py-3">Nội dung phát sinh</th>
+                      <th>Số tiền</th>
+                      <th>Hành động</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!selectedOrder.incurredCosts || selectedOrder.incurredCosts.length === 0 ? (
+                      <tr>
+                        <td className="py-4 text-slate-400 italic" colSpan={3}>
+                          Chưa có khoản phát sinh nào cho đơn này.
+                        </td>
+                      </tr>
+                    ) : (
+                      selectedOrder.incurredCosts.map((item, idx) => (
+                        <tr key={idx} className="border-b border-slate-100 text-slate-700">
+                          <td className="py-3 font-bold text-slate-900">{item.note}</td>
+                          <td className="font-black text-indigo-600">{formatCurrency(item.amount)}</td>
+                          <td className="py-2">
+                            <button
+                              type="button"
+                              className="text-red-500 hover:text-red-700 font-bold"
+                              onClick={() => deleteIncurredCost(idx)}
+                            >
+                              Xóa
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
             </>
             )}
           </section>

@@ -83,8 +83,10 @@ export type Order = {
   externalAccessories?: Array<{ name: string; sellPrice: number; costPrice: number; actualCost: number }>;
   installationCosts?: { transport: number; loader: number };
   materialsList?: Array<{ name: string; price: number }>;
+  incurredCosts?: Array<{ note: string; amount: number }>;
   historyLogs?: Array<{ step: OrderStep; assignee: string; startedAt?: string; completedAt?: string; }>;
 };
+
 
 export type CreateOrderInput = {
   customerName: string;
