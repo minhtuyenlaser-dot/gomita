@@ -789,6 +789,45 @@ function OrderSidePanel({
   isSyncing?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
+  const [initialEstimateValue, setInitialEstimateValue] = useState<number | null>(null);
+  const [initialQuoteValue, setInitialQuoteValue] = useState<number | null>(null);
+
+  const isSale = position.id === "sale";
+  const isEstimateDisabled = isSale && (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1);
+  const isQuoteDisabled = isSale && (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
+
+  const handleEstimateBlur = () => {
+    if (initialEstimateValue !== null) {
+      const currentValue = order.quotation.estimateValue;
+      if (currentValue !== initialEstimateValue && initialEstimateValue > 0) {
+        const nextEditCount = (order.quotation.estimateEditCount || 0) + 1;
+        onPatch({
+          quotation: {
+            ...order.quotation,
+            estimateEditCount: nextEditCount
+          }
+        });
+      }
+      setInitialEstimateValue(null);
+    }
+  };
+
+  const handleQuoteBlur = () => {
+    if (initialQuoteValue !== null) {
+      const currentValue = order.quotation.quoteValue;
+      if (currentValue !== initialQuoteValue && initialQuoteValue > 0) {
+        const nextEditCount = (order.quotation.quoteEditCount || 0) + 1;
+        onPatch({
+          quotation: {
+            ...order.quotation,
+            quoteEditCount: nextEditCount
+          }
+        });
+      }
+      setInitialQuoteValue(null);
+    }
+  };
+
   const canPrice = canViewOrderPricing(position.id, currentUserName, order);
   const issues = getTransitionIssues(order);
   const canSupplement = (["sale", "designer"].includes(position.id) && getAssignedNames(order, position.id).includes(currentUserName)) || ["sale_manager", "design_manager", "director", "admin"].includes(position.id);
@@ -860,6 +899,37 @@ function OrderSidePanel({
         {activeTab === "Thông tin" ? (
           <div className="grid gap-4">
             <OrderInfo order={order} positionId={position.id} />
+            {canPrice && (
+              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3 grid gap-3">
+                <div className="font-bold text-slate-800 text-xs uppercase tracking-wide">Dự toán & Báo giá khách</div>
+                <NumberInput 
+                  label="Dự toán *" 
+                  value={order.quotation.estimateValue} 
+                  onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} 
+                  disabled={isEstimateDisabled}
+                  onFocus={() => setInitialEstimateValue(order.quotation.estimateValue)}
+                  onBlur={handleEstimateBlur}
+                />
+                <NumberInput 
+                  label="Báo giá *" 
+                  value={order.quotation.quoteValue} 
+                  onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
+                  disabled={isQuoteDisabled}
+                  onFocus={() => setInitialQuoteValue(order.quotation.quoteValue)}
+                  onBlur={handleQuoteBlur}
+                />
+                {(isEstimateDisabled || isQuoteDisabled) && (
+                  <div className="text-[11px] text-red-600 font-bold bg-red-50 p-1.5 rounded border border-red-100">
+                    ⚠ Đã chỉnh sửa Dự toán/Báo giá tối đa 1 lần (Khóa quyền sửa đối với Sale).
+                  </div>
+                )}
+                {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+                  <div className="text-[10px] text-slate-500 italic">
+                    * Lưu ý: Quyền Sale chỉ được chỉnh sửa Dự toán/Báo giá tối đa 1 lần sau khi đã lưu giá trị ban đầu.
+                  </div>
+                )}
+              </div>
+            )}
             {canHandle && (
               <div className="mt-4 border-t border-slate-200 pt-4">
                 <div className="mb-2 font-black text-slate-800 text-sm">Nhập liệu & Checklist công việc</div>
