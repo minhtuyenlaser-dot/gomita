@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   BriefcaseBusiness,
@@ -432,6 +432,7 @@ export default function HomePage() {
           attendance={attendance}
           onAttendanceChange={setAttendance}
           isSyncing={pendingSyncs > 0 || !!syncError}
+          cashTransactions={cashTransactions}
         />
       )}
       {activeModule === "profile" && (

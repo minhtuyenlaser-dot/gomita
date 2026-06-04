@@ -124,7 +124,8 @@ export function OrderDashboard({
   onCompensationRequestsChange,
   attendance = {},
   onAttendanceChange,
-  isSyncing = false
+  isSyncing = false,
+  cashTransactions = []
 }: { 
   accounts: UserAccount[]; 
   position: Position; 
@@ -139,6 +140,7 @@ export function OrderDashboard({
   attendance: Record<string, string>;
   onAttendanceChange: (att: Record<string, string>) => void;
   isSyncing?: boolean;
+  cashTransactions?: any[];
 }) {
   const [showArchived, setShowArchived] = useState(false);
   const validAccountNames = useMemo(
@@ -324,6 +326,7 @@ export function OrderDashboard({
             onCancel={setCancelOrder}
             overtimeRequests={overtimeRequests}
             isSyncing={isSyncing}
+            cashTransactions={cashTransactions}
           />
         ) : (
           <aside className="border-t border-slate-200 bg-white p-4 text-slate-500 xl:border-l xl:border-t-0">Chưa có đơn phù hợp với quyền.</aside>
@@ -775,7 +778,8 @@ function OrderSidePanel({
   onAssign,
   onCancel,
   overtimeRequests = [],
-  isSyncing = false
+  isSyncing = false,
+  cashTransactions = []
 }: {
   accounts: UserAccount[];
   order: Order;
@@ -788,6 +792,7 @@ function OrderSidePanel({
   onCancel: (order: Order) => void;
   overtimeRequests?: any[];
   isSyncing?: boolean;
+  cashTransactions?: any[];
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
   const isSale = position.id === "sale";
@@ -809,7 +814,7 @@ function OrderSidePanel({
   }
 
   function exportOrderToExcel() {
-    exportOrderToExcelShared(order, accounts, overtimeRequests);
+    exportOrderToExcelShared(order, accounts, overtimeRequests, cashTransactions);
   }
 
 
@@ -1012,7 +1017,7 @@ function OrderSidePanel({
               <div className="grid gap-3">
                 <button 
                   className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
-                  onClick={() => exportOrderToExcelShared(order, accounts, overtimeRequests)} 
+                  onClick={() => exportOrderToExcelShared(order, accounts, overtimeRequests, cashTransactions)} 
                   type="button"
                   disabled={isSyncing}
                 >

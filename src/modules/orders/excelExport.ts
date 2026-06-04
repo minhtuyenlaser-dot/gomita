@@ -75,7 +75,12 @@ function getAssigneeListForStep(order: Order, step: string): string[] {
   }
 }
 
-export function exportOrderToExcel(order: Order, accounts: UserAccount[] = [], overtimeRequests: any[] = []) {
+export function exportOrderToExcel(
+  order: Order,
+  accounts: UserAccount[] = [],
+  overtimeRequests: any[] = [],
+  cashTransactions: any[] = []
+) {
   const quotation = order.quotation || { estimateValue: 0, quoteValue: 0 };
   const materials = order.materialsList || [];
   const incurred = order.incurredCosts || [];
@@ -117,26 +122,23 @@ export function exportOrderToExcel(order: Order, accounts: UserAccount[] = [], o
       };
     });
 
-  // 2. Chi phí vật tư
-  const materialCost = materials.reduce((sum, mat) => sum + mat.price, 0);
+  // 2. Chi phí chi tiết từ quỹ/ngân hàng (kế toán ghi nhận)
+  const orderExpenses = cashTransactions.filter(
+    (item) => item.orderId === order.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer")
+  );
+  const totalManualExpenses = orderExpenses.reduce((sum, item) => sum + (item.amount || 0), 0);
 
   // 3. Phụ kiện ngoài
   let accessorySales = 0;
-  let accessoryCost = 0;
   const activeAccessories = (accessories || []).filter((acc) => acc.name.trim());
   activeAccessories.forEach((acc) => {
-    const cost = acc.actualCost || acc.costPrice || 0;
     accessorySales += acc.sellPrice || 0;
-    accessoryCost += cost;
   });
 
-  // 4. Chi phí lắp đặt khác
-  const transport = order.installationCosts?.transport || 0;
-  const loader = order.installationCosts?.loader || 0;
-
-  // 5. Doanh thu & Lợi nhuận
+  // 4. Doanh thu & Lợi nhuận
   const revenue = quotation.quoteValue + accessorySales;
-  const totalExpenses = (order.customLaborCost !== undefined ? order.customLaborCost : totalLaborCost) + materialCost + accessoryCost + transport + loader;
+  const laborAmount = order.customLaborCost !== undefined ? order.customLaborCost : totalLaborCost;
+  const totalExpenses = laborAmount + totalManualExpenses;
   const profit = revenue - totalExpenses;
 
   // Xây dựng template HTML
@@ -291,84 +293,65 @@ export function exportOrderToExcel(order: Order, accounts: UserAccount[] = [], o
         </tr>
         <tr><td colspan="7" style="border:none; height:15px;"></td></tr>
 
-        <!-- SECTION III: CHI TIẾT VẬT TƯ & CHI PHÍ PHỤ -->
+        <!-- SECTION III: CHI TIẾT CHI PHÍ THỰC CHI TỪ QUỸ/NGÂN HÀNG -->
         <tr>
-          <td colspan="7" class="section-title">III. CHI TIẾT VẬT TƯ & CHI PHÍ LẮP ĐẶT PHỤ</td>
+          <td colspan="7" class="section-title">III. CHI TIẾT CHI PHÍ THỰC CHI TỪ QUỸ/NGÂN HÀNG (KẾ TOÁN NHẬP)</td>
         </tr>
         <tr class="table-header">
-          <td colspan="4">Danh mục vật tư / Chi phí phụ</td>
-          <td colspan="3" class="number">Số tiền</td>
+          <td colspan="2">Nội dung chi</td>
+          <td colspan="2">Danh mục chi</td>
+          <td>Ngày chi</td>
+          <td colspan="2" class="number">Số tiền</td>
         </tr>
   `;
 
-  if (materials.length === 0) {
-    html += `<tr><td colspan="7" style="color: #64748b; font-style: italic; text-align: center;">Không có vật tư nào ghi nhận</td></tr>`;
+  if (orderExpenses.length === 0) {
+    html += `<tr><td colspan="7" style="color: #64748b; font-style: italic; text-align: center;">Chưa ghi nhận khoản chi nào từ quỹ/ngân hàng</td></tr>`;
   } else {
-    materials.forEach((mat) => {
+    orderExpenses.forEach((exp) => {
       html += `
         <tr>
-          <td colspan="4">${mat.name}</td>
-          <td colspan="3" class="number">${formatMoney(mat.price)}</td>
+          <td colspan="2">${exp.note}</td>
+          <td colspan="2">${exp.category || "Chi phí"}</td>
+          <td>${exp.createdAt ? exp.createdAt.slice(0, 10) : "—"}</td>
+          <td colspan="2" class="number">${formatMoney(exp.amount)}</td>
         </tr>
       `;
     });
   }
 
-  // Installation Costs
   html += `
         <tr class="table-header">
-          <td colspan="4" class="bold">Tổng chi phí vật tư sản xuất</td>
-          <td colspan="3" class="number highlight-red">${formatMoney(materialCost)}</td>
-        </tr>
-        <tr>
-          <td colspan="4">Chi phí xe vận chuyển (Giám sát nhập)</td>
-          <td colspan="3" class="number">${formatMoney(transport)}</td>
-        </tr>
-        <tr>
-          <td colspan="4">Chi phí bốc xếp (Giám sát nhập)</td>
-          <td colspan="3" class="number">${formatMoney(loader)}</td>
-        </tr>
-        <tr class="table-header">
-          <td colspan="4" class="bold">Tổng chi phí vận chuyển & bốc xếp</td>
-          <td colspan="3" class="number highlight-red">${formatMoney(transport + loader)}</td>
+          <td colspan="5" class="bold">Tổng cộng các khoản chi từ quỹ/ngân hàng</td>
+          <td colspan="2" class="number highlight-red">${formatMoney(totalManualExpenses)}</td>
         </tr>
         <tr><td colspan="7" style="border:none; height:15px;"></td></tr>
 
-        <!-- SECTION IV: CHI TIẾT PHỤ KIỆN NGOÀI -->
+        <!-- SECTION IV: PHỤ KIỆN NGOÀI BÁN KÈM (DOANH THU THÊM) -->
         <tr>
-          <td colspan="7" class="section-title">IV. CHI TIẾT PHỤ KIỆN NGOÀI</td>
+          <td colspan="7" class="section-title">IV. PHỤ KIỆN NGOÀI BÁN KÈM</td>
         </tr>
         <tr class="table-header">
-          <td colspan="3">Tên phụ kiện ngoài</td>
-          <td class="number">Giá bán (Khách trả)</td>
-          <td class="number">Giá vốn (Kế toán nhập)</td>
-          <td class="number">Chi phí thực tế</td>
-          <td class="number">Chênh lệch bán - vốn</td>
+          <td colspan="4">Tên phụ kiện ngoài</td>
+          <td colspan="3" class="number">Giá bán (Khách trả)</td>
         </tr>
   `;
 
   if (activeAccessories.length === 0) {
-    html += `<tr><td colspan="7" style="color: #64748b; font-style: italic; text-align: center;">Không có phụ kiện ngoài</td></tr>`;
+    html += `<tr><td colspan="7" style="color: #64748b; font-style: italic; text-align: center;">Không có phụ kiện ngoài bán kèm</td></tr>`;
   } else {
     activeAccessories.forEach((acc) => {
-      const cost = acc.actualCost || acc.costPrice || 0;
-      const profitMargin = acc.sellPrice - cost;
       html += `
         <tr>
-          <td colspan="3">${acc.name}</td>
-          <td class="number">${formatMoney(acc.sellPrice)}</td>
-          <td class="number">${formatMoney(acc.costPrice)}</td>
-          <td class="number">${formatMoney(acc.actualCost)}</td>
-          <td class="number bold ${profitMargin >= 0 ? 'highlight-green' : 'highlight-red'}">${formatMoney(profitMargin)}</td>
+          <td colspan="4">${acc.name}</td>
+          <td colspan="3" class="number">${formatMoney(acc.sellPrice)}</td>
         </tr>
       `;
     });
     html += `
       <tr class="table-header">
-        <td colspan="3" class="bold">Tổng phụ kiện ngoài</td>
-        <td class="number">${formatMoney(accessorySales)}</td>
-        <td colspan="2" class="number highlight-red">Giá vốn: ${formatMoney(accessoryCost)}</td>
-        <td class="number highlight-green">Lợi nhuận: ${formatMoney(accessorySales - accessoryCost)}</td>
+        <td colspan="4" class="bold">Tổng doanh thu phụ kiện ngoài</td>
+        <td colspan="3" class="number highlight-green">${formatMoney(accessorySales)}</td>
       </tr>
     `;
   }
@@ -419,7 +402,7 @@ export function exportOrderToExcel(order: Order, accounts: UserAccount[] = [], o
           <td class="value number bold" colspan="4">${formatMoney(quotation.quoteValue)}</td>
         </tr>
         <tr>
-          <td class="label" colspan="3">Doanh thu phụ kiện bán thêm</td>
+          <td class="label" colspan="3">Doanh thu phụ kiện ngoài bán kèm</td>
           <td class="value number bold" colspan="4">${formatMoney(accessorySales)}</td>
         </tr>
         <tr style="background-color: #f8fafc;">
@@ -428,19 +411,11 @@ export function exportOrderToExcel(order: Order, accounts: UserAccount[] = [], o
         </tr>
         <tr>
           <td class="label" colspan="3">Chi phí tiền công thợ thực tế ${order.customLaborCost !== undefined ? '(Kế toán sửa)' : ''}</td>
-          <td class="value number highlight-red" colspan="4">${formatMoney(order.customLaborCost !== undefined ? order.customLaborCost : totalLaborCost)}</td>
+          <td class="value number highlight-red" colspan="4">${formatMoney(laborAmount)}</td>
         </tr>
         <tr>
-          <td class="label" colspan="3">Chi phí vật tư sản xuất</td>
-          <td class="value number highlight-red" colspan="4">${formatMoney(materialCost)}</td>
-        </tr>
-        <tr>
-          <td class="label" colspan="3">Chi phí nhập phụ kiện ngoài</td>
-          <td class="value number highlight-red" colspan="4">${formatMoney(accessoryCost)}</td>
-        </tr>
-        <tr>
-          <td class="label" colspan="3">Chi phí vận chuyển & bốc xếp</td>
-          <td class="value number highlight-red" colspan="4">${formatMoney(transport + loader)}</td>
+          <td class="label" colspan="3">Tổng các khoản chi thực chi từ quỹ/ngân hàng (vật tư, bốc xếp, xe cộ,...)</td>
+          <td class="value number highlight-red" colspan="4">${formatMoney(totalManualExpenses)}</td>
         </tr>
         <tr style="background-color: #fef2f2;">
           <td class="label" colspan="3" style="background-color: #f1f5f9; font-size: 11pt;">TỔNG CHI PHÍ THỰC TẾ (B)</td>

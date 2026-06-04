@@ -502,7 +502,10 @@ export function FinanceDashboard({
 
     const quoteValue = order.quotation?.quoteValue || 0;
     const estimateValue = order.quotation?.estimateValue || 0;
-    const directSpent = materialCost + accessoryCost + laborCost + transportCost + loaderCost;
+    const manualSpent = cashTransactions
+      .filter((item) => item.orderId === order.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer"))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const directSpent = laborCost + manualSpent;
     const profit = quoteValue + accessorySales - directSpent;
 
     return {
