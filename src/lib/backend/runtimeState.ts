@@ -507,6 +507,50 @@ function normalizeAttendanceTime(dayValue: string, rawTime?: string) {
   );
 }
 
+async function uploadBase64PhotoToStorage(userId: string, date: string, slot: string, base64Data: string): Promise<string> {
+  if (!base64Data) return "";
+  if (base64Data.startsWith("http")) return base64Data;
+  if (base64Data === "__deferred__") return base64Data;
+
+  try {
+    const supabase = createSupabaseAdminClient();
+    let buffer: Buffer;
+    let contentType = "image/jpeg";
+
+    if (base64Data.startsWith("data:image")) {
+      const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches && matches.length === 3) {
+        contentType = matches[1];
+        buffer = Buffer.from(matches[2], "base64");
+      } else {
+        buffer = Buffer.from(base64Data.split(",")[1] || base64Data, "base64");
+      }
+    } else {
+      buffer = Buffer.from(base64Data, "base64");
+    }
+
+    const fileName = `${userId}/${date}_${slot.replace(":", "-")}.jpg`;
+
+    const { error } = await supabase.storage
+      .from("attendance-photos")
+      .upload(fileName, buffer, {
+        contentType: contentType,
+        upsert: true
+      });
+
+    if (error) {
+      console.error("Supabase Storage upload error:", error);
+      return "";
+    }
+
+    const { data } = supabase.storage.from("attendance-photos").getPublicUrl(fileName);
+    return data?.publicUrl || "";
+  } catch (err) {
+    console.error("Exception in uploadBase64PhotoToStorage:", err);
+    return "";
+  }
+}
+
 export async function applyClockIn(payload: {
   userId: string;
   date: string;
@@ -530,8 +574,9 @@ export async function applyClockIn(payload: {
   state.attendance[key] = "normal";
 
   if (payload.photo || payload.gps) {
+    const photoUrl = payload.photo ? await uploadBase64PhotoToStorage(payload.userId, payload.date, payload.slot, payload.photo) : "";
     state.attendanceDetails[key] = {
-      photo: payload.photo || "",
+      photo: photoUrl,
       gps: payload.gps || "",
       gpsAddress: payload.gpsAddress || "",
       gpsMeta: payload.gpsMeta || null,
@@ -568,13 +613,15 @@ export async function attachAttendancePhoto(payload: {
     gpsMeta: null,
     time: normalizeAttendanceTime(String(payload.date))
   };
+  const photoUrl = payload.photo ? await uploadBase64PhotoToStorage(payload.userId, payload.date, payload.slot, payload.photo) : "";
   state.attendanceDetails[key] = {
     ...current,
-    photo: payload.photo
+    photo: photoUrl
   };
   await saveRuntimeState(state);
   return state.attendanceDetails[key];
 }
+
 
 export async function updateOwnRuntimeAccount(payload: {
   userId: string;
