@@ -1,6 +1,7 @@
 "use client";
 
 import type { Order, OrderStep } from "@/modules/orders/orderFlow";
+import { exportOrderToExcel } from "@/modules/orders/excelExport";
 import type { UserAccount } from "@/modules/hr/accounts";
 import { positions, type Position } from "@/modules/hr/roles";
 import type { CashTransaction, CashTransactionType, CustomerDebt, CustomerDebtStage, CustomerDebtStatus } from "@/modules/finance/types";
@@ -1355,20 +1356,12 @@ export function FinanceDashboard({
                     <h3 className="text-xl font-black text-slate-900">{selectedOrder.code}</h3>
                     <button
                       type="button"
-                      onClick={() => {
-                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(selectedOrder, null, 2));
-                        const downloadAnchor = document.createElement('a');
-                        downloadAnchor.setAttribute("href", dataStr);
-                        downloadAnchor.setAttribute("download", `GOMITA-Order-${selectedOrder.code}.json`);
-                        document.body.appendChild(downloadAnchor);
-                        downloadAnchor.click();
-                        downloadAnchor.remove();
-                      }}
-                      title="Tải toàn bộ dữ liệu đơn hàng (JSON)"
+                      onClick={() => exportOrderToExcel(selectedOrder, accounts, overtimeRequests)}
+                      title="Tải toàn bộ dữ liệu đơn hàng (Excel)"
                       className="flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
                     >
                       <Download className="h-3 w-3" />
-                      Tải đơn
+                      Tải Excel
                     </button>
                   </div>
                   <p className="mt-1 text-sm text-slate-500">{selectedOrder.customerName} - {selectedOrder.area}</p>

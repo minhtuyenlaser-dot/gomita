@@ -44,6 +44,7 @@ import {
   type Order,
   type OrderStep
 } from "../orderFlow";
+import { exportOrderToExcel as exportOrderToExcelShared } from "../excelExport";
 
 type Notice = { type: "success" | "warning"; text: string };
 type WorkerAttendanceKind = "normal" | "compensated";
@@ -789,44 +790,26 @@ function OrderSidePanel({
   isSyncing?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
-  const [initialEstimateValue, setInitialEstimateValue] = useState<number | null>(null);
-  const [initialQuoteValue, setInitialQuoteValue] = useState<number | null>(null);
-
   const isSale = position.id === "sale";
   const isEstimateDisabled = isSale && (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1);
   const isQuoteDisabled = isSale && (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
 
-  const handleEstimateBlur = () => {
-    if (initialEstimateValue !== null) {
-      const currentValue = order.quotation.estimateValue;
-      if (currentValue !== initialEstimateValue && initialEstimateValue > 0) {
-        const nextEditCount = (order.quotation.estimateEditCount || 0) + 1;
-        onPatch({
-          quotation: {
-            ...order.quotation,
-            estimateEditCount: nextEditCount
-          }
-        });
+  function lockPricing() {
+    const confirmLock = globalThis.confirm("Bạn có chắc chắn muốn KHÓA Dự toán và Báo giá của đơn hàng này? Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.");
+    if (!confirmLock) return;
+    onPatch({
+      quotation: {
+        ...order.quotation,
+        estimateEditCount: 1,
+        quoteEditCount: 1
       }
-      setInitialEstimateValue(null);
-    }
-  };
+    });
+  }
 
-  const handleQuoteBlur = () => {
-    if (initialQuoteValue !== null) {
-      const currentValue = order.quotation.quoteValue;
-      if (currentValue !== initialQuoteValue && initialQuoteValue > 0) {
-        const nextEditCount = (order.quotation.quoteEditCount || 0) + 1;
-        onPatch({
-          quotation: {
-            ...order.quotation,
-            quoteEditCount: nextEditCount
-          }
-        });
-      }
-      setInitialQuoteValue(null);
-    }
-  };
+  function exportOrderToExcel() {
+    exportOrderToExcelShared(order, accounts, overtimeRequests);
+  }
+
 
   const canPrice = canViewOrderPricing(position.id, currentUserName, order);
   const issues = getTransitionIssues(order);
@@ -850,20 +833,12 @@ function OrderSidePanel({
           <h2 className="font-black">Chi tiết đơn hàng</h2>
           <button
             type="button"
-            onClick={() => {
-              const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(order, null, 2));
-              const downloadAnchor = document.createElement('a');
-              downloadAnchor.setAttribute("href", dataStr);
-              downloadAnchor.setAttribute("download", `GOMITA-Order-${order.code}.json`);
-              document.body.appendChild(downloadAnchor);
-              downloadAnchor.click();
-              downloadAnchor.remove();
-            }}
-            title="Tải toàn bộ dữ liệu đơn hàng (JSON)"
+            onClick={exportOrderToExcel}
+            title="Tải toàn bộ dữ liệu đơn hàng (Excel)"
             className="flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
           >
             <Download className="h-3 w-3" />
-            Tải đơn
+            Tải Excel
           </button>
         </div>
         <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" type="button" aria-label="Đóng">
@@ -907,25 +882,30 @@ function OrderSidePanel({
                   value={order.quotation.estimateValue} 
                   onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} 
                   disabled={isEstimateDisabled}
-                  onFocus={() => setInitialEstimateValue(order.quotation.estimateValue)}
-                  onBlur={handleEstimateBlur}
                 />
                 <NumberInput 
                   label="Báo giá *" 
                   value={order.quotation.quoteValue} 
                   onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
                   disabled={isQuoteDisabled}
-                  onFocus={() => setInitialQuoteValue(order.quotation.quoteValue)}
-                  onBlur={handleQuoteBlur}
                 />
+                {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+                  <button
+                    type="button"
+                    onClick={lockPricing}
+                    className="min-h-9 w-full rounded bg-orange-600 font-bold text-white text-xs hover:bg-orange-700 transition shadow-sm"
+                  >
+                    Xác nhận & Khóa Dự toán/Báo giá
+                  </button>
+                )}
                 {(isEstimateDisabled || isQuoteDisabled) && (
                   <div className="text-[11px] text-red-600 font-bold bg-red-50 p-1.5 rounded border border-red-100">
-                    ⚠ Đã chỉnh sửa Dự toán/Báo giá tối đa 1 lần (Khóa quyền sửa đối với Sale).
+                    ⚠ Báo giá/Dự toán đã được khóa. Quyền Sale không thể chỉnh sửa tiếp.
                   </div>
                 )}
                 {!isEstimateDisabled && !isQuoteDisabled && isSale && (
                   <div className="text-[10px] text-slate-500 italic">
-                    * Lưu ý: Quyền Sale chỉ được chỉnh sửa Dự toán/Báo giá tối đa 1 lần sau khi đã lưu giá trị ban đầu.
+                    * Lưu ý: Hãy click nút xác nhận bên trên sau khi hoàn thành. Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.
                   </div>
                 )}
               </div>
@@ -1030,11 +1010,11 @@ function OrderSidePanel({
               <div className="grid gap-3">
                 <button 
                   className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
-                  onClick={() => downloadOrderArchive(order, accounts, overtimeRequests)} 
+                  onClick={() => exportOrderToExcelShared(order, accounts, overtimeRequests)} 
                   type="button"
                   disabled={isSyncing}
                 >
-                  Tải hồ sơ quyết toán (.txt)
+                  Tải hồ sơ quyết toán (Excel)
                 </button>
                 <button 
                   className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition disabled:bg-slate-300" 
@@ -1079,44 +1059,21 @@ function WorkflowChecks({
   onPatch: (patch: Partial<Order>) => void; 
   positionId?: string; 
 }) {
-  const [initialEstimateValue, setInitialEstimateValue] = useState<number | null>(null);
-  const [initialQuoteValue, setInitialQuoteValue] = useState<number | null>(null);
-
   const isSale = positionId === "sale";
   const isEstimateDisabled = isSale && (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1);
   const isQuoteDisabled = isSale && (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
 
-  const handleEstimateBlur = () => {
-    if (initialEstimateValue !== null) {
-      const currentValue = order.quotation.estimateValue;
-      if (currentValue !== initialEstimateValue && initialEstimateValue > 0) {
-        const nextEditCount = (order.quotation.estimateEditCount || 0) + 1;
-        onPatch({
-          quotation: {
-            ...order.quotation,
-            estimateEditCount: nextEditCount
-          }
-        });
+  function lockPricing() {
+    const confirmLock = globalThis.confirm("Bạn có chắc chắn muốn KHÓA Dự toán và Báo giá của đơn hàng này? Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.");
+    if (!confirmLock) return;
+    onPatch({
+      quotation: {
+        ...order.quotation,
+        estimateEditCount: 1,
+        quoteEditCount: 1
       }
-      setInitialEstimateValue(null);
-    }
-  };
-
-  const handleQuoteBlur = () => {
-    if (initialQuoteValue !== null) {
-      const currentValue = order.quotation.quoteValue;
-      if (currentValue !== initialQuoteValue && initialQuoteValue > 0) {
-        const nextEditCount = (order.quotation.quoteEditCount || 0) + 1;
-        onPatch({
-          quotation: {
-            ...order.quotation,
-            quoteEditCount: nextEditCount
-          }
-        });
-      }
-      setInitialQuoteValue(null);
-    }
-  };
+    });
+  }
   if (order.step === "Tiếp nhận") {
     return (
       <div className="grid gap-3 text-slate-950">
@@ -1163,25 +1120,30 @@ function WorkflowChecks({
           value={order.quotation.estimateValue} 
           onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} 
           disabled={isEstimateDisabled}
-          onFocus={() => setInitialEstimateValue(order.quotation.estimateValue)}
-          onBlur={handleEstimateBlur}
         />
         <NumberInput 
           label="Báo giá *" 
           value={order.quotation.quoteValue} 
           onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
           disabled={isQuoteDisabled}
-          onFocus={() => setInitialQuoteValue(order.quotation.quoteValue)}
-          onBlur={handleQuoteBlur}
         />
+        {!isEstimateDisabled && !isQuoteDisabled && isSale && (
+          <button
+            type="button"
+            onClick={lockPricing}
+            className="min-h-9 w-full rounded bg-orange-600 font-bold text-white text-xs hover:bg-orange-700 transition shadow-sm"
+          >
+            Xác nhận & Khóa Dự toán/Báo giá
+          </button>
+        )}
         {(isEstimateDisabled || isQuoteDisabled) && (
           <div className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded border border-red-200">
-            ⚠ Bạn đã thực hiện chỉnh sửa Dự toán/Báo giá tối đa 1 lần. Chức năng sửa đã bị khóa đối với quyền Sale.
+            ⚠ Báo giá/Dự toán đã được khóa. Quyền Sale không thể chỉnh sửa tiếp.
           </div>
         )}
         {!isEstimateDisabled && !isQuoteDisabled && isSale && (
           <div className="text-[11px] text-slate-500 italic">
-            * Lưu ý: Quyền Sale chỉ được chỉnh sửa Dự toán/Báo giá tối đa 1 lần sau khi đã lưu giá trị ban đầu.
+            * Lưu ý: Hãy click nút xác nhận bên trên sau khi hoàn thành. Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.
           </div>
         )}
         <CheckItem label="Đã upload ảnh dự toán *" checked={order.quotation.estimatePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, estimatePhotoUploaded: checked } })} />
