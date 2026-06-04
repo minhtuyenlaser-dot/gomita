@@ -309,6 +309,7 @@ export function OrderDashboard({
 
         {selectedOrder ? (
           <OrderSidePanel
+            accounts={accounts}
             currentUserName={currentUserName}
             order={selectedOrder}
             position={position}
@@ -461,7 +462,7 @@ function CanceledOrdersModal({ orders, onClose }: { orders: Order[]; onClose: ()
   );
 }
 
-function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
+function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overtimeRequests: any[] = []) {
   function calculateWorkingHours(startStr?: string, endStr?: string): number {
     if (!startStr) return 0;
     const start = new Date(startStr);
@@ -489,6 +490,30 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
       d.setMinutes(d.getMinutes() + stepMinutes);
     }
     return parseFloat(totalHours.toFixed(1));
+  }
+
+  function getMaxWorkDaysForDate(dateLike?: string) {
+    const baseDate = dateLike ? new Date(dateLike) : new Date();
+    if (Number.isNaN(baseDate.getTime())) return 26;
+    const year = baseDate.getFullYear();
+    const month = baseDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    let total = 0;
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      if (new Date(year, month, day).getDay() !== 0) total += 1;
+    }
+    return total;
+  }
+
+  function getHourlyRateForAssignee(displayName?: string, dateLike?: string) {
+    if (!displayName) return 0;
+    const account = accounts.find((item) => item.status === "active" && item.displayName === displayName);
+    if (!account || !account.salaryValue) return 0;
+    if ((account.salaryType ?? "daily") === "monthly") {
+      const maxWorkDays = getMaxWorkDaysForDate(dateLike);
+      return maxWorkDays > 0 ? account.salaryValue / maxWorkDays / 8 : 0;
+    }
+    return account.salaryValue / 8;
   }
 
   // 1. Lấy TOÀN BỘ người thực hiện mỗi công đoạn từ order.*Names (chính xác hơn historyLogs.assignee)
@@ -529,10 +554,11 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
         .reduce((sum, req) => sum + (req.hours || 0), 0);
       const totalHours = workingHours + personOT;
       const workdays = parseFloat((totalHours / 8).toFixed(2));
-      const cost = workdays * 350000;
+      const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
+      const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
       totalWorkdays += workdays;
       totalLaborCost += cost;
-      return { name, overtimeHours: personOT, workdays, cost };
+      return { name, overtimeHours: personOT, workdays, cost, hourlyRate };
     });
 
     return {
@@ -598,8 +624,9 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
       log.assignees.forEach((person, pIdx) => {
         reportText += `         + Nguoi ${pIdx + 1}: ${person.name}
              - Gio tang ca (OT) duoc duyet: ${person.overtimeHours} gio
+             - Gia gio thuc te: ${Math.round(person.hourlyRate || 0).toLocaleString("vi-VN")} d/gio
              - Ngay cong quy doi: ${person.workdays} cong
-             - Tien cong uoc tinh (350.000 d/ngay): ${person.cost.toLocaleString("vi-VN")} d
+             - Tien cong uoc tinh: ${Math.round(person.cost || 0).toLocaleString("vi-VN")} d
 `;
       });
       const totalStepCost = log.assignees.reduce((s, p) => s + p.cost, 0);
@@ -608,8 +635,9 @@ function downloadOrderArchive(order: Order, overtimeRequests: any[] = []) {
       const person = log.assignees[0];
       reportText += `         + Nguoi dam nhan: ${person.name}
          + Gio tang ca (OT) duoc duyet: ${person.overtimeHours} gio
+         + Gia gio thuc te: ${Math.round(person.hourlyRate || 0).toLocaleString("vi-VN")} d/gio
          + Ngay cong quy doi: ${person.workdays} cong (Tong gio / 8)
-         + Tien cong uoc tinh (350.000 d/ngay): ${person.cost.toLocaleString("vi-VN")} d
+         + Tien cong uoc tinh: ${Math.round(person.cost || 0).toLocaleString("vi-VN")} d
 `;
     } else {
       reportText += `         + Nguoi dam nhan: Chua ghi nhan\n`;
@@ -726,6 +754,7 @@ function KanbanCard({
 }
 
 function OrderSidePanel({
+  accounts,
   order,
   position,
   currentUserName,
@@ -736,6 +765,7 @@ function OrderSidePanel({
   onCancel,
   overtimeRequests = []
 }: {
+  accounts: UserAccount[];
   order: Order;
   position: Position;
   currentUserName: string;
@@ -866,7 +896,7 @@ function OrderSidePanel({
             ) : null}
             {["accountant", "director", "admin"].includes(position.id) && order.step === "Hoàn công" && order.checklist.paymentCollected ? (
               <div className="grid gap-3">
-                <button className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700" onClick={() => downloadOrderArchive(order, overtimeRequests)} type="button">
+                <button className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700" onClick={() => downloadOrderArchive(order, accounts, overtimeRequests)} type="button">
                   Tải hồ sơ quyết toán (.txt)
                 </button>
                 <button className="min-h-11 rounded-lg bg-green-600 font-black text-white hover:bg-green-700 transition" onClick={() => {

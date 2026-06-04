@@ -584,6 +584,10 @@ export function WorkerDashboard({
       Alert.alert("Thiếu thông tin", "Bạn cần nhập lý do tăng ca.");
       return;
     }
+    if (!selectedOrderCode) {
+      Alert.alert("Thiếu đơn hàng", "Bạn cần chọn đơn hàng tăng ca.");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -916,6 +920,10 @@ export function WorkerDashboard({
     }
     if (!otReason.trim()) {
       Alert.alert("Thiếu thông tin", "Bạn cần nhập lý do tăng ca.");
+      return;
+    }
+    if (!selectedOrderCode) {
+      Alert.alert("Thiếu đơn hàng", "Bạn cần chọn đơn hàng tăng ca.");
       return;
     }
 
@@ -1518,12 +1526,6 @@ export function WorkerDashboard({
 
             <Text style={styles.whiteFieldLabel}>Đơn hàng tăng ca</Text>
             <View style={styles.orderList}>
-              <TouchableOpacity
-                style={[styles.orderChip, selectedOrderCode === "" ? styles.orderChipActive : null]}
-                onPress={() => setSelectedOrderCode("")}
-              >
-                <Text style={[styles.orderChipText, selectedOrderCode === "" ? styles.orderChipTextActive : null]}>Tăng ca chung</Text>
-              </TouchableOpacity>
               {assignedOrders.map((order: any) => (
                 <TouchableOpacity
                   key={order.id}
@@ -1532,8 +1534,11 @@ export function WorkerDashboard({
                 >
                   <Text style={[styles.orderChipText, selectedOrderCode === order.code ? styles.orderChipTextActive : null]}>{order.code}</Text>
                 </TouchableOpacity>
-              ))}
+                ))}
             </View>
+            {assignedOrders.length === 0 ? (
+              <Text style={styles.helperText}>Bạn cần được giao đơn hàng trước khi đăng ký tăng ca.</Text>
+            ) : null}
 
             <View style={styles.timeRow}>
               <View style={styles.timeField}>
@@ -1560,7 +1565,7 @@ export function WorkerDashboard({
               <TouchableOpacity style={[styles.modalBtn, styles.modalBtnOrange]} onPress={() => setOtOpen(false)}>
                 <Text style={styles.modalBtnText}>Đóng</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalBtn, styles.modalBtnGreen]} onPress={submitOvertimeRequestLean} disabled={loading}>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalBtnGreen, (!selectedOrderCode || assignedOrders.length === 0) ? styles.modalBtnDisabled : null]} onPress={submitOvertimeRequestLean} disabled={loading || !selectedOrderCode || assignedOrders.length === 0}>
                 {loading ? <ActivityIndicator size="small" color="#ffffff" /> : <Text style={styles.modalBtnText}>Gửi đăng ký</Text>}
               </TouchableOpacity>
             </View>
@@ -2101,6 +2106,12 @@ const styles = StyleSheet.create({
   orderChipTextActive: {
     color: "#ffffff",
   },
+  helperText: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#b45309",
+  },
   timeRow: {
     flexDirection: "row",
     gap: 10,
@@ -2164,6 +2175,9 @@ const styles = StyleSheet.create({
   },
   modalBtnGreen: {
     backgroundColor: "#16a34a",
+  },
+  modalBtnDisabled: {
+    backgroundColor: "#94a3b8",
   },
   modalBtnOrange: {
     backgroundColor: "#f97316",

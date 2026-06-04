@@ -610,6 +610,14 @@ export async function createOvertimeRequest(payload: {
     throw new Error("Vị trí hiện tại không được đăng ký tăng ca.");
   }
   if (!payload.reason.trim()) throw new Error("Bạn cần nhập lý do tăng ca.");
+  if (!payload.orderCode?.trim()) {
+    throw new Error("Bạn cần chọn đơn hàng tăng ca.");
+  }
+
+  const matchedOrder = (state.orders || []).find((order: any) => order.code === payload.orderCode?.trim());
+  if (!matchedOrder) {
+    throw new Error("Không tìm thấy đơn hàng tăng ca.");
+  }
 
   const hours = roundOvertimeHours(payload.from, payload.to);
   if (hours <= 0) {
@@ -623,7 +631,7 @@ export async function createOvertimeRequest(payload: {
     from: payload.from,
     to: payload.to,
     hours,
-    orderCode: payload.orderCode || "",
+    orderCode: matchedOrder.code,
     reason: payload.reason.trim(),
     status: "approved",
     createdAt: new Date().toISOString()

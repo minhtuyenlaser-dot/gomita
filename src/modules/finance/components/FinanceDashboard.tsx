@@ -166,6 +166,30 @@ export function FinanceDashboard({
     setDebtNote("");
   }
 
+  function getMaxWorkDaysForDate(dateLike?: string) {
+    const baseDate = dateLike ? new Date(dateLike) : new Date();
+    if (Number.isNaN(baseDate.getTime())) return 26;
+    const year = baseDate.getFullYear();
+    const month = baseDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    let total = 0;
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      if (new Date(year, month, day).getDay() !== 0) total += 1;
+    }
+    return total;
+  }
+
+  function getHourlyRateForAssignee(displayName?: string, dateLike?: string) {
+    if (!displayName) return 0;
+    const account = accounts.find((item) => item.status === "active" && item.displayName === displayName);
+    if (!account || !account.salaryValue) return 0;
+    if ((account.salaryType ?? "daily") === "monthly") {
+      const maxWorkDays = getMaxWorkDaysForDate(dateLike);
+      return maxWorkDays > 0 ? account.salaryValue / maxWorkDays / 8 : 0;
+    }
+    return account.salaryValue / 8;
+  }
+
   // Tính toán số liệu tài chính cho đơn hàng được chọn
   const financeStats = useMemo(() => {
     if (!selectedOrder) return { laborCost: 0, materialCost: 0, accessorySales: 0, accessoryCost: 0, profit: 0, totalWorkdays: 0, logsWithTime: [] };
@@ -185,9 +209,8 @@ export function FinanceDashboard({
       const workdays = totalHours / 8;
       totalWorkdays += workdays;
 
-      // Đơn giá công thợ theo ngày (mặc định 350.000 đ)
-      const dayRate = 350000;
-      const stepCost = workdays * dayRate;
+      const hourlyRate = getHourlyRateForAssignee(log.assignee, log.completedAt || log.startedAt);
+      const stepCost = (workingHours * hourlyRate) + (overtimeHours * hourlyRate * 1.5);
       laborCost += stepCost;
 
       return {
@@ -195,6 +218,7 @@ export function FinanceDashboard({
         workingHours,
         overtimeHours,
         totalHours,
+        hourlyRate,
         workdays: parseFloat(workdays.toFixed(2)),
         cost: stepCost
       };
@@ -231,7 +255,7 @@ export function FinanceDashboard({
       totalWorkdays: parseFloat(totalWorkdays.toFixed(2)),
       logsWithTime
     };
-  }, [selectedOrder, overtimeRequests]);
+  }, [selectedOrder, overtimeRequests, accounts]);
 
   return (
     <section className="grid gap-6 text-slate-900">

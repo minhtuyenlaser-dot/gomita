@@ -610,18 +610,29 @@ export default function HomePage() {
         <OvertimeModal 
           assignedOrders={assignedOrders} 
           onClose={() => setOvertimeOpen(false)} 
-          onSubmit={(req) => {
-            setOvertimeOpen(false);
-            const newRequest = {
-              id: `ot-${Date.now()}`,
-              userId: currentAccount.id,
-              userDisplayName: currentAccount.displayName,
-              ...req,
-              status: "approved",
-              createdAt: new Date().toISOString()
-            };
-            setOvertimeRequests(current => [newRequest, ...current]);
-            setToast(`Đã đăng ký tăng ca thành công ${req.hours} giờ cho đơn ${req.orderCode || "chung"}.`);
+          onSubmit={async (req) => {
+            try {
+              const response = await fetch("/api/overtime/request", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  userId: currentAccount.id,
+                  from: req.from,
+                  to: req.to,
+                  reason: req.reason,
+                  orderCode: req.orderCode
+                })
+              });
+              const result = await response.json();
+              if (!response.ok || !result?.request) {
+                throw new Error(result?.error || "Không gửi được đăng ký tăng ca.");
+              }
+              setOvertimeRequests((current) => [result.request, ...current]);
+              setOvertimeOpen(false);
+              setToast(`Đã đăng ký tăng ca thành công ${result.request.hours} giờ cho đơn ${result.request.orderCode}.`);
+            } catch (error) {
+              setToast(error instanceof Error ? error.message : "Không gửi được đăng ký tăng ca.");
+            }
           }} 
         />
       ) : null}
@@ -842,7 +853,7 @@ function OvertimeModal({
 }: { 
   assignedOrders: Order[]; 
   onClose: () => void; 
-  onSubmit: (request: { from: string; to: string; reason: string; orderCode: string; hours: number }) => void 
+  onSubmit: (request: { from: string; to: string; reason: string; orderCode: string; hours: number }) => Promise<void> | void 
 }) {
   const [from, setFrom] = useState("18:00");
   const [to, setTo] = useState("20:00");
@@ -858,6 +869,7 @@ function OvertimeModal({
   }
 
   function submit() {
+    if (!selectedOrderCode) return;
     onSubmit({
       from,
       to,
@@ -883,7 +895,7 @@ function OvertimeModal({
               onChange={(e) => setSelectedOrderCode(e.target.value)}
             >
               {assignedOrders.length === 0 ? (
-                <option value="">Tăng ca chung (Không chọn đơn)</option>
+                <option value="">Chưa có đơn hàng được giao</option>
               ) : (
                 assignedOrders.map(order => (
                   <option key={order.id} value={order.code}>{order.code} - {order.customerName}</option>
@@ -891,10 +903,15 @@ function OvertimeModal({
               )}
             </select>
           </label>
+          {assignedOrders.length === 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+              Bạn cần được giao đơn hàng trước khi đăng ký tăng ca.
+            </div>
+          ) : null}
           <label className="grid gap-1 text-sm font-bold">Từ giờ<input className="h-11 rounded-lg border border-slate-200 px-3 font-normal" type="time" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
           <label className="grid gap-1 text-sm font-bold">Đến giờ<input className="h-11 rounded-lg border border-slate-200 px-3 font-normal" type="time" value={to} onChange={(event) => setTo(event.target.value)} /></label>
           <label className="grid gap-1 text-sm font-bold">Lý do<textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Nhập lý do nếu cần" /></label>
-          <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white" onClick={submit} type="button">Gửi đăng ký tăng ca</button>
+          <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!selectedOrderCode || assignedOrders.length === 0} onClick={submit} type="button">Gửi đăng ký tăng ca</button>
         </div>
       </section>
     </div>
