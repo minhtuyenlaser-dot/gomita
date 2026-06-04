@@ -1511,7 +1511,7 @@ export function FinanceDashboard({
             {detailTab === "profit" && (
               <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-lg font-black text-slate-800">Lãi lỗ đơn hàng</h3>
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-4">
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Doanh thu đơn hàng</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.quoteValue + selectedOrderSnapshot.accessorySales)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Tổng đã thu</div><div className="mt-1 text-xl font-black text-green-600">{formatCurrency(selectedOrderIncomeRows.reduce((sum, item) => sum + item.amount, 0))}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Còn phải thu</div><div className={`mt-1 text-xl font-black ${debtColorClass}`}>{formatCurrency(remainingDebt)}</div></div>
@@ -1528,7 +1528,6 @@ export function FinanceDashboard({
                     </div>
                     <div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.laborCost)}</div>
                   </div>
-                  <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Vận chuyển / bốc vác</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.transportCost + selectedOrderSnapshot.loaderCost)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Chi phí khác</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderExpenseRows.reduce((sum, item) => sum + item.amount, 0))}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Lãi gộp</div><div className={`mt-1 text-xl font-black ${selectedOrderSnapshot.profit >= 0 ? "text-green-600" : "text-red-600"}`}>{formatCurrency(selectedOrderSnapshot.profit)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Tỷ suất lợi nhuận</div><div className="mt-1 text-xl font-black text-slate-900">{selectedOrderSnapshot.quoteValue > 0 ? `${((selectedOrderSnapshot.profit / selectedOrderSnapshot.quoteValue) * 100).toFixed(1)}%` : "0%"}</div></div>
