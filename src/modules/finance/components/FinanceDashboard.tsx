@@ -142,6 +142,10 @@ export function FinanceDashboard({
     return (value || "").slice(0, 7);
   }
 
+  function isWarrantyOrder(order?: Order) {
+    return !!order?.isWarranty;
+  }
+
   function extractLocalDateText(value?: string) {
     const match = (value || "").match(/^(\d{4}-\d{2}-\d{2})/);
     return match ? match[1] : "";
@@ -528,6 +532,7 @@ export function FinanceDashboard({
     const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
     const filteredLogs = (order.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
     
+    const warrantyOrder = isWarrantyOrder(order);
     let laborCost = 0;
     if (order.customLaborCost !== undefined) {
       laborCost = order.customLaborCost;
@@ -557,24 +562,25 @@ export function FinanceDashboard({
       accessoryCost += acc.actualCost || acc.costPrice || 0;
     });
 
-    const transportCost = cashTransactions
+    const transportCost = warrantyOrder ? 0 : cashTransactions
       .filter((item) => item.orderId === order.id && item.category === "Vận chuyển" && (item.type === "cash_out" || item.type === "bank_out"))
       .reduce((sum, item) => sum + item.amount, 0);
 
-    const loaderCost = cashTransactions
+    const loaderCost = warrantyOrder ? 0 : cashTransactions
       .filter((item) => item.orderId === order.id && item.category === "Bốc vác" && (item.type === "cash_out" || item.type === "bank_out"))
       .reduce((sum, item) => sum + item.amount, 0);
 
     const quoteValue = order.quotation?.quoteValue || 0;
     const estimateValue = order.quotation?.estimateValue || 0;
-    const manualSpent = cashTransactions
+    const manualSpent = warrantyOrder ? 0 : cashTransactions
       .filter((item) => item.orderId === order.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer"))
       .reduce((sum, item) => sum + item.amount, 0);
-    const directSpent = laborCost + manualSpent;
+    const directLaborCost = warrantyOrder ? 0 : laborCost;
+    const directSpent = directLaborCost + manualSpent;
     const profit = quoteValue + accessorySales - directSpent;
 
     return {
-      laborCost,
+      laborCost: directLaborCost,
       materialCost,
       accessorySales,
       accessoryCost,
@@ -625,6 +631,7 @@ export function FinanceDashboard({
     if (!selectedOrder) return { laborCost: 0, materialCost: 0, accessorySales: 0, accessoryCost: 0, profit: 0, totalWorkdays: 0, logsWithTime: [] };
 
     // 1. Tính công thợ & tiền công thợ dựa trên log lịch sử các công đoạn và tăng ca
+    const warrantyOrder = isWarrantyOrder(selectedOrder);
     let totalWorkdays = 0;
     let laborCost = 0;
     
@@ -659,7 +666,7 @@ export function FinanceDashboard({
       const stepWorkdays = assigneeDetails.reduce((sum, item) => sum + item.workdays, 0);
       const totalAdjustedStepHours = assigneeDetails.reduce((sum, item) => sum + item.workingHours, 0);
       
-      laborCost += stepCost;
+      laborCost += warrantyOrder ? 0 : stepCost;
       totalWorkdays += stepWorkdays;
 
       return {
@@ -669,8 +676,8 @@ export function FinanceDashboard({
         workingHours: parseFloat((totalAdjustedStepHours / (assigneeDetails.length || 1)).toFixed(2)),
         workerCount: finalAssignees.length,
         assigneeDetails,
-        cost: stepCost,
-        workdays: parseFloat(stepWorkdays.toFixed(2))
+          cost: warrantyOrder ? 0 : stepCost,
+          workdays: parseFloat(stepWorkdays.toFixed(2))
       };
     });
 
@@ -688,11 +695,11 @@ export function FinanceDashboard({
     });
 
     // 4. Chi phí lắp đặt khác (vận chuyển, bốc vác) từ cashTransactions thực tế
-    const transport = cashTransactions
+    const transport = warrantyOrder ? 0 : cashTransactions
       .filter((item) => item.orderId === selectedOrder.id && item.category === "Vận chuyển" && (item.type === "cash_out" || item.type === "bank_out"))
       .reduce((sum, item) => sum + item.amount, 0);
 
-    const loader = cashTransactions
+    const loader = warrantyOrder ? 0 : cashTransactions
       .filter((item) => item.orderId === selectedOrder.id && item.category === "Bốc vác" && (item.type === "cash_out" || item.type === "bank_out"))
       .reduce((sum, item) => sum + item.amount, 0);
 
@@ -1603,6 +1610,11 @@ export function FinanceDashboard({
             {detailTab === "profit" && (
               <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-lg font-black text-slate-800">Lãi lỗ đơn hàng</h3>
+                {selectedOrder?.isWarranty ? (
+                  <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Đơn bảo hành: chi phí thực hiện vẫn được theo dõi, nhưng không tính vào lãi lỗ của đơn hàng. Phần này được xem là chi phí hoạt động tháng của xưởng.
+                  </div>
+                ) : null}
                 <div className="grid gap-4 md:grid-cols-4">
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Doanh thu đơn hàng</div><div className="mt-1 text-xl font-black text-slate-900">{formatCurrency(selectedOrderSnapshot.quoteValue + selectedOrderSnapshot.accessorySales)}</div></div>
                   <div className="rounded-lg bg-slate-50 p-4"><div className="text-xs font-bold text-slate-500">Tổng đã thu</div><div className="mt-1 text-xl font-black text-green-600">{formatCurrency(selectedOrderIncomeRows.reduce((sum, item) => sum + item.amount, 0))}</div></div>

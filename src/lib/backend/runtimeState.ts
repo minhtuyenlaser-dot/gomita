@@ -501,6 +501,7 @@ export async function buildMobileBootstrap(userId: string) {
     attendanceCompensationState: state.attendanceCompensationState ? { [userId]: state.attendanceCompensationState[userId] } : {},
     compensationRequests: (state.compensationRequests || []).filter((request: any) => request.employeeId === userId),
     overtimeRequests: (state.overtimeRequests || []).filter((request: any) => request.userId === userId),
+    workerAllowances: state.workerAllowances || {},
     orders: getAssignedOrdersForUser(state, userId)
   };
 }

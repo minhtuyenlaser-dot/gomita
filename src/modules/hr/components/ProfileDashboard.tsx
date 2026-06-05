@@ -13,6 +13,71 @@ import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
 const slots: Slot[] = ["07:30", "11:30", "13:30", "17:30"];
 
+const defaultAllowanceRates = {
+  lunchDailyRate: 30000,
+  siteFuelDailyRate: 40000,
+  siteWaterDailyRate: 10000,
+  siteLunchDailyRate: 40000,
+  otherAllowance: 0
+};
+
+const siteWorkSteps = ["Lắp đặt", "Nghiệm thu", "Bảo hành"] as const;
+
+function toMonthKey(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function toPreviousMonthKey(monthKey: string) {
+  const [yearText, monthText] = monthKey.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey;
+  return toMonthKey(new Date(year, month - 2, 1));
+}
+
+function toNumericOrUndefined(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function resolveAllowanceConfig(userId: string, monthKey: string, workerAllowances: Record<string, any>) {
+  let cursor = monthKey;
+  for (let index = 0; index < 24; index += 1) {
+    const entry = workerAllowances[`${userId}-${cursor}`];
+    if (entry) {
+      return {
+        sourceMonth: cursor,
+        lunchDailyRate: toNumericOrUndefined(entry.lunchDailyRate) ?? defaultAllowanceRates.lunchDailyRate,
+        siteFuelDailyRate: toNumericOrUndefined(entry.siteFuelDailyRate) ?? defaultAllowanceRates.siteFuelDailyRate,
+        siteWaterDailyRate: toNumericOrUndefined(entry.siteWaterDailyRate) ?? defaultAllowanceRates.siteWaterDailyRate,
+        siteLunchDailyRate: toNumericOrUndefined(entry.siteLunchDailyRate) ?? defaultAllowanceRates.siteLunchDailyRate,
+        otherAllowance: toNumericOrUndefined(entry.otherAllowance) ?? toNumericOrUndefined(entry.responsibilityAllowanceOverride) ?? defaultAllowanceRates.otherAllowance
+      };
+    }
+    cursor = toPreviousMonthKey(cursor);
+  }
+
+  return {
+    sourceMonth: null as string | null,
+    ...defaultAllowanceRates
+  };
+}
+
+function getOrderAssigneesForStep(order: Order, step: string) {
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) {
+    return ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
+  }
+  if (step === "Sản xuất") {
+    return ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
+  }
+  if (step === "Ra file") {
+    return ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
+  }
+  if (step === "Thiết kế") {
+    return ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
+  }
+  return (order.saleName || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 export function calculateUserAllowances(
   userId: string,
   displayName: string,
@@ -22,123 +87,148 @@ export function calculateUserAllowances(
   workerAllowances: Record<string, any>,
   isWorker: boolean
 ) {
-  const now = new Date();
-  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-
-  // 1. Calculate calcFullDays
+  const currentMonthStr = toMonthKey(monthDays[0] ?? new Date());
   let calcFullDays = 0;
+
   if (isWorker) {
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       let morningChecked = false;
       let afternoonChecked = false;
-      
-      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-      slotsForDay.forEach((slot) => {
+      slots.forEach((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
         }
       });
-
       if (morningChecked && afternoonChecked) {
         calcFullDays += 1;
       }
     });
   }
 
-  // 2. Calculate calcSiteDays and calcSiteFullDays
   let calcSiteDays = 0;
   let calcSiteFullDays = 0;
+  const siteDayDetails: Array<{
+    date: string;
+    label: string;
+    workedSlots: number;
+    isFullDay: boolean;
+    isSiteFullDay: boolean;
+    orders: string[];
+    steps: string[];
+  }> = [];
 
   if (isWorker) {
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-
-      // Has user clocked in at all on this day?
       let checkedCount = 0;
       let morningChecked = false;
       let afternoonChecked = false;
-      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-      slotsForDay.forEach((slot) => {
+
+      slots.forEach((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
-          checkedCount++;
+          checkedCount += 1;
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
         }
       });
 
-      if (checkedCount === 0) return; // Didn't work today
+      if (checkedCount === 0) return;
 
-      // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
-      const hasSiteJob = orders.some((order) => {
-        if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
-          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-          const isAssigned = assignees.includes(displayName);
-          if (isAssigned && order.assignedInstallerDate === dateStr) {
-            return true;
+      const matchedAssignments = orders.reduce<Array<{ code: string; step: string }>>((list, order) => {
+        const currentStepIsSiteWork = siteWorkSteps.includes(order.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
+        if (currentStepIsSiteWork) {
+          const currentAssignees = getOrderAssigneesForStep(order, order.step);
+          const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
+          if (currentAssignees.includes(displayName) && assignedDate === dateStr) {
+            list.push({ code: order.code, step: order.step });
           }
         }
 
-        return (order.historyLogs || []).some((log: any) => {
-          const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
-          if (!isLắpĐặt) return false;
-
-          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-          const logAssignees = log.assignee ? [log.assignee] : [];
-          const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
-          if (!finalAssignees.includes(displayName)) return false;
-
+        (order.historyLogs || []).forEach((log: any) => {
+          const logIsSiteWork = siteWorkSteps.includes(log.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
+          if (!logIsSiteWork) return;
+          const assignees = getOrderAssigneesForStep(order, log.step);
+          const finalAssignees = assignees.length ? assignees : [log.assignee].filter(Boolean);
+          if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
-          if (!start) return false;
+          if (!start) return;
           const startDateText = start.substring(0, 10);
-          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
-
-          return dateStr >= startDateText && dateStr <= endDateText;
+          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
+          if (dateStr >= startDateText && dateStr <= endDateText) {
+            list.push({ code: order.code, step: log.step });
+          }
         });
-      });
 
-      if (hasSiteJob) {
-        calcSiteDays += 1;
-        if (morningChecked && afternoonChecked) {
-          calcSiteFullDays += 1;
-        }
+        return list;
+      }, []);
+
+      if (matchedAssignments.length === 0) return;
+
+      const isSiteFullDay = morningChecked && afternoonChecked;
+      calcSiteDays += 1;
+      if (isSiteFullDay) {
+        calcSiteFullDays += 1;
       }
+      siteDayDetails.push({
+        date: dateStr,
+        label: `Ngày ${dayNum}/${day.getMonth() + 1}`,
+        workedSlots: checkedCount,
+        isFullDay: morningChecked && afternoonChecked,
+        isSiteFullDay,
+        orders: Array.from(new Set(matchedAssignments.map((item) => item.code))),
+        steps: Array.from(new Set(matchedAssignments.map((item) => item.step)))
+      });
     });
   }
 
-  // 3. Read overrides from workerAllowances
   const key = `${userId}-${currentMonthStr}`;
   const overrides = workerAllowances[key] || {};
+  const resolvedConfig = resolveAllowanceConfig(userId, currentMonthStr, workerAllowances);
+  const lunchDailyRate = toNumericOrUndefined(overrides.lunchDailyRate) ?? resolvedConfig.lunchDailyRate;
+  const siteFuelDailyRate = toNumericOrUndefined(overrides.siteFuelDailyRate) ?? resolvedConfig.siteFuelDailyRate;
+  const siteWaterDailyRate = toNumericOrUndefined(overrides.siteWaterDailyRate) ?? resolvedConfig.siteWaterDailyRate;
+  const siteLunchDailyRate = toNumericOrUndefined(overrides.siteLunchDailyRate) ?? resolvedConfig.siteLunchDailyRate;
+  const otherAllowance = toNumericOrUndefined(overrides.otherAllowance)
+    ?? toNumericOrUndefined(overrides.responsibilityAllowanceOverride)
+    ?? resolvedConfig.otherAllowance;
 
-  const mealAllowance = overrides.mealAllowanceOverride !== undefined 
-    ? overrides.mealAllowanceOverride 
-    : (calcFullDays * 30000);
-
-  const siteAllowance = overrides.siteAllowanceOverride !== undefined 
-    ? overrides.siteAllowanceOverride 
-    : (calcSiteDays * 50000 + calcSiteFullDays * 10000);
-
-  const responsibilityAllowance = overrides.responsibilityAllowanceOverride !== undefined
-    ? overrides.responsibilityAllowanceOverride
-    : 0;
+  const calcMealAllowance = ((calcFullDays - calcSiteFullDays) * lunchDailyRate) + (calcSiteFullDays * siteLunchDailyRate);
+  const siteFuelAllowance = calcSiteDays * siteFuelDailyRate;
+  const siteWaterAllowance = calcSiteDays * siteWaterDailyRate;
+  const mealAllowance = overrides.mealAllowanceOverride !== undefined ? Number(overrides.mealAllowanceOverride) : calcMealAllowance;
+  const siteAllowance = overrides.siteAllowanceOverride !== undefined ? Number(overrides.siteAllowanceOverride) : (siteFuelAllowance + siteWaterAllowance);
+  const totalAllowance = mealAllowance + siteAllowance + otherAllowance;
 
   return {
     calcFullDays,
     calcSiteDays,
     calcSiteFullDays,
+    calcSiteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
     fullDays: calcFullDays,
     siteDays: calcSiteDays,
     siteFullDays: calcSiteFullDays,
+    siteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
+    siteDayDetails,
+    lunchDailyRate,
+    siteFuelDailyRate,
+    siteWaterDailyRate,
+    siteLunchDailyRate,
     mealAllowance,
+    siteFuelAllowance,
+    siteWaterAllowance,
     siteAllowance,
-    responsibilityAllowance,
+    otherAllowance,
+    responsibilityAllowance: otherAllowance,
+    totalAllowance,
     isMealOverridden: overrides.mealAllowanceOverride !== undefined,
     isSiteOverridden: overrides.siteAllowanceOverride !== undefined,
-    isResponsibilityOverridden: overrides.responsibilityAllowanceOverride !== undefined
+    isResponsibilityOverridden: overrides.responsibilityAllowanceOverride !== undefined || overrides.otherAllowance !== undefined,
+    configSourceMonth: resolvedConfig.sourceMonth
   };
 }
 
@@ -260,12 +350,19 @@ export function ProfileDashboard({
     return workDays * salaryValue;
   }, [salaryType, salaryValue, workDays, maxWorkDays]);
 
+  const hourlySalaryRate = useMemo(() => {
+    if (salaryType === "monthly") {
+      return maxWorkDays ? salaryValue / maxWorkDays / 8 : 0;
+    }
+    return salaryValue / 8;
+  }, [maxWorkDays, salaryType, salaryValue]);
+
   const otPay = useMemo(() => {
-    return overtime * 1.5 * (salaryValue / 8);
-  }, [overtime, salaryValue]);
+    return overtime * 1.5 * hourlySalaryRate;
+  }, [hourlySalaryRate, overtime]);
 
   const estimatedIncome = useMemo(() => {
-    return basePay + otPay + allowances.mealAllowance + allowances.siteAllowance + (allowances.responsibilityAllowance || 0);
+    return basePay + otPay + allowances.totalAllowance;
   }, [basePay, otPay, allowances]);
 
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
@@ -461,11 +558,14 @@ export function ProfileDashboard({
               if (allowances.mealAllowance > 0) {
                 parts.push(`Ăn trưa (${allowances.fullDays}n): ${Math.round(allowances.mealAllowance).toLocaleString("vi-VN")}đ`);
               }
-              if (allowances.siteAllowance > 0) {
-                parts.push(`C.trình (${allowances.siteDays}n): ${Math.round(allowances.siteAllowance).toLocaleString("vi-VN")}đ`);
+              if (allowances.siteFuelAllowance > 0) {
+                parts.push(`Xăng xe (${allowances.siteDays}n): ${Math.round(allowances.siteFuelAllowance).toLocaleString("vi-VN")}đ`);
               }
-              if (allowances.responsibilityAllowance > 0) {
-                parts.push(`Trách nhiệm: ${Math.round(allowances.responsibilityAllowance).toLocaleString("vi-VN")}đ`);
+              if (allowances.siteWaterAllowance > 0) {
+                parts.push(`Nước uống (${allowances.siteDays}n): ${Math.round(allowances.siteWaterAllowance).toLocaleString("vi-VN")}đ`);
+              }
+              if (allowances.otherAllowance > 0) {
+                parts.push(`Phụ cấp khác: ${Math.round(allowances.otherAllowance).toLocaleString("vi-VN")}đ`);
               }
               return parts.join(" • ");
             })()
@@ -842,36 +942,36 @@ export function CompanyPayrollDashboard({
     calcFullDays: number;
     calcSiteDays: number;
     calcSiteFullDays: number;
+    calcSiteHalfDays: number;
     mealAllowance: number;
     siteAllowance: number;
-    responsibilityAllowance: number;
-    isMealOverridden: boolean;
-    isSiteOverridden: boolean;
-    isResponsibilityOverridden: boolean;
+    otherAllowance: number;
+    lunchDailyRate: number;
+    siteFuelDailyRate: number;
+    siteWaterDailyRate: number;
+    siteLunchDailyRate: number;
+    configSourceMonth: string | null;
   } | null>(null);
 
-  const [mealAllowanceVal, setMealAllowanceVal] = useState<number | "">("");
-  const [siteAllowanceVal, setSiteAllowanceVal] = useState<number | "">("");
-  const [responsibilityAllowanceVal, setResponsibilityAllowanceVal] = useState<number | "">("");
-  const [isMealEditable, setIsMealEditable] = useState<boolean>(false);
-  const [isSiteEditable, setIsSiteEditable] = useState<boolean>(false);
-  const [isResponsibilityEditable, setIsResponsibilityEditable] = useState<boolean>(false);
+  const [lunchDailyRateVal, setLunchDailyRateVal] = useState<number | "">("");
+  const [siteFuelDailyRateVal, setSiteFuelDailyRateVal] = useState<number | "">("");
+  const [siteWaterDailyRateVal, setSiteWaterDailyRateVal] = useState<number | "">("");
+  const [siteLunchDailyRateVal, setSiteLunchDailyRateVal] = useState<number | "">("");
+  const [otherAllowanceVal, setOtherAllowanceVal] = useState<number | "">("");
 
   useEffect(() => {
     if (editingItem) {
-      setMealAllowanceVal(editingItem.mealAllowance);
-      setSiteAllowanceVal(editingItem.siteAllowance);
-      setResponsibilityAllowanceVal(editingItem.responsibilityAllowance);
-      setIsMealEditable(editingItem.isMealOverridden);
-      setIsSiteEditable(editingItem.isSiteOverridden);
-      setIsResponsibilityEditable(editingItem.isResponsibilityOverridden);
+      setLunchDailyRateVal(editingItem.lunchDailyRate);
+      setSiteFuelDailyRateVal(editingItem.siteFuelDailyRate);
+      setSiteWaterDailyRateVal(editingItem.siteWaterDailyRate);
+      setSiteLunchDailyRateVal(editingItem.siteLunchDailyRate);
+      setOtherAllowanceVal(editingItem.otherAllowance);
     } else {
-      setMealAllowanceVal("");
-      setSiteAllowanceVal("");
-      setResponsibilityAllowanceVal("");
-      setIsMealEditable(false);
-      setIsSiteEditable(false);
-      setIsResponsibilityEditable(false);
+      setLunchDailyRateVal("");
+      setSiteFuelDailyRateVal("");
+      setSiteWaterDailyRateVal("");
+      setSiteLunchDailyRateVal("");
+      setOtherAllowanceVal("");
     }
   }, [editingItem]);
 
@@ -920,10 +1020,13 @@ export function CompanyPayrollDashboard({
     const basePay = salaryType === "monthly"
       ? (maxWorkDays ? (salaryValue / maxWorkDays) * work : 0)
       : (work * salaryValue);
-    
-    const otPay = otHours * 1.5 * (salaryValue / 8);
 
-    let totalIncome = basePay + otPay + allowances.mealAllowance + allowances.siteAllowance + (allowances.responsibilityAllowance || 0);
+    const hourlySalaryRate = salaryType === "monthly"
+      ? (maxWorkDays ? salaryValue / maxWorkDays / 8 : 0)
+      : (salaryValue / 8);
+    const otPay = otHours * 1.5 * hourlySalaryRate;
+
+    const totalIncome = basePay + otPay + allowances.totalAllowance;
 
     return { 
       account, 
@@ -981,14 +1084,19 @@ export function CompanyPayrollDashboard({
                         <br />Ăn trưa ({row.allowances.fullDays}n): {Math.round(row.allowances.mealAllowance).toLocaleString("vi-VN")} đ
                       </>
                     )}
-                    {row.allowances.siteAllowance > 0 && (
+                    {row.allowances.siteFuelAllowance > 0 && (
                       <>
-                        <br />Công trình ({row.allowances.siteDays}n): {Math.round(row.allowances.siteAllowance).toLocaleString("vi-VN")} đ
+                        <br />Xăng xe ({row.allowances.siteDays}n): {Math.round(row.allowances.siteFuelAllowance).toLocaleString("vi-VN")} đ
                       </>
                     )}
-                    {row.allowances.responsibilityAllowance > 0 && (
+                    {row.allowances.siteWaterAllowance > 0 && (
                       <>
-                        <br />Trách nhiệm: {Math.round(row.allowances.responsibilityAllowance).toLocaleString("vi-VN")} đ
+                        <br />Nước uống ({row.allowances.siteDays}n): {Math.round(row.allowances.siteWaterAllowance).toLocaleString("vi-VN")} đ
+                      </>
+                    )}
+                    {row.allowances.otherAllowance > 0 && (
+                      <>
+                        <br />Phụ cấp khác: {Math.round(row.allowances.otherAllowance).toLocaleString("vi-VN")} đ
                       </>
                     )}
                     {row.otPay > 0 && (
@@ -1006,12 +1114,15 @@ export function CompanyPayrollDashboard({
                       calcFullDays: row.allowances.calcFullDays,
                       calcSiteDays: row.allowances.calcSiteDays,
                       calcSiteFullDays: row.allowances.calcSiteFullDays,
+                      calcSiteHalfDays: row.allowances.calcSiteHalfDays,
                       mealAllowance: row.allowances.mealAllowance,
                       siteAllowance: row.allowances.siteAllowance,
-                      responsibilityAllowance: row.allowances.responsibilityAllowance,
-                      isMealOverridden: row.allowances.isMealOverridden,
-                      isSiteOverridden: row.allowances.isSiteOverridden,
-                      isResponsibilityOverridden: row.allowances.isResponsibilityOverridden,
+                      otherAllowance: row.allowances.otherAllowance,
+                      lunchDailyRate: row.allowances.lunchDailyRate,
+                      siteFuelDailyRate: row.allowances.siteFuelDailyRate,
+                      siteWaterDailyRate: row.allowances.siteWaterDailyRate,
+                      siteLunchDailyRate: row.allowances.siteLunchDailyRate,
+                      configSourceMonth: row.allowances.configSourceMonth,
                     })}
                     className="rounded border border-orange-500 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-600 hover:bg-orange-100 transition animate-pulse"
                   >
@@ -1033,122 +1144,91 @@ export function CompanyPayrollDashboard({
                 <X className="h-5 w-5" />
               </button>
             </div>
-            
+
             <div className="grid gap-4 text-sm">
               <div>
                 <span className="text-xs font-bold text-slate-500 block mb-1">MỐC TỰ ĐỘNG (DỰA TRÊN CHẤM CÔNG & LOGS)</span>
                 <div className="rounded bg-slate-50 p-2 text-xs text-slate-600 leading-relaxed">
-                  • Ngày ăn trưa cả ngày: {editingItem.calcFullDays} ngày (Tự động: {Math.round(editingItem.calcFullDays * 30000).toLocaleString("vi-VN")} đ)<br />
-                  • Ngày đi công trình: {editingItem.calcSiteDays} ngày công trình, {editingItem.calcSiteFullDays} ngày cả ngày (Tự động: {Math.round(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000).toLocaleString("vi-VN")} đ)
+                  • Ngày làm đủ công: {editingItem.calcFullDays} ngày<br />
+                  • Đi công trình cả ngày: {editingItem.calcSiteFullDays} ngày<br />
+                  • Đi công trình nửa ngày: {editingItem.calcSiteHalfDays} ngày
                 </div>
               </div>
 
               <div className="grid gap-1">
-                <span className="font-bold text-slate-700">Tiền phụ cấp ăn trưa (VNĐ)</span>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    step="1000"
-                    disabled={!isMealEditable}
-                    value={mealAllowanceVal}
-                    onChange={(e) => setMealAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
-                    className="flex-1 rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
-                    placeholder={`Mặc định: ${Math.round(editingItem.calcFullDays * 30000).toLocaleString("vi-VN")} đ`}
-                  />
-                  {!isMealEditable ? (
-                    <button
-                      type="button"
-                      onClick={() => setIsMealEditable(true)}
-                      className="rounded border border-orange-500 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-600 hover:bg-orange-100 transition whitespace-nowrap"
-                    >
-                      Sửa
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMealEditable(false);
-                        setMealAllowanceVal(editingItem.calcFullDays * 30000);
-                      }}
-                      className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
-                    >
-                      Tự động
-                    </button>
-                  )}
-                </div>
+                <span className="font-bold text-slate-700">Suất ăn trưa mặc định / ngày (VNĐ)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={lunchDailyRateVal}
+                  onChange={(e) => setLunchDailyRateVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder="30.000"
+                />
               </div>
 
               <div className="grid gap-1">
-                <span className="font-bold text-slate-700">Tiền phụ cấp công trình (VNĐ)</span>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    step="1000"
-                    disabled={!isSiteEditable}
-                    value={siteAllowanceVal}
-                    onChange={(e) => setSiteAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
-                    className="flex-1 rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
-                    placeholder={`Mặc định: ${Math.round(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000).toLocaleString("vi-VN")} đ`}
-                  />
-                  {!isSiteEditable ? (
-                    <button
-                      type="button"
-                      onClick={() => setIsSiteEditable(true)}
-                      className="rounded border border-orange-500 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-600 hover:bg-orange-100 transition whitespace-nowrap"
-                    >
-                      Sửa
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsSiteEditable(false);
-                        setSiteAllowanceVal(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000);
-                      }}
-                      className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
-                    >
-                      Tự động
-                    </button>
-                  )}
-                </div>
+                <span className="font-bold text-slate-700">Xăng xe công trình / ngày (VNĐ)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={siteFuelDailyRateVal}
+                  onChange={(e) => setSiteFuelDailyRateVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder="40.000"
+                />
               </div>
 
               <div className="grid gap-1">
-                <span className="font-bold text-slate-700">Phụ cấp trách nhiệm (VNĐ)</span>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    step="10000"
-                    disabled={!isResponsibilityEditable}
-                    value={responsibilityAllowanceVal}
-                    onChange={(e) => setResponsibilityAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
-                    className="flex-1 rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
-                    placeholder="Mặc định: 0 đ"
-                  />
-                  {!isResponsibilityEditable ? (
-                    <button
-                      type="button"
-                      onClick={() => setIsResponsibilityEditable(true)}
-                      className="rounded border border-orange-500 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-600 hover:bg-orange-100 transition whitespace-nowrap"
-                    >
-                      Sửa
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsResponsibilityEditable(false);
-                        setResponsibilityAllowanceVal(0);
-                      }}
-                      className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
-                    >
-                      Tự động
-                    </button>
-                  )}
-                </div>
+                <span className="font-bold text-slate-700">Nước uống công trình / ngày (VNĐ)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={siteWaterDailyRateVal}
+                  onChange={(e) => setSiteWaterDailyRateVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder="10.000"
+                />
+              </div>
+
+              <div className="grid gap-1">
+                <span className="font-bold text-slate-700">Suất ăn công trình cả ngày (VNĐ)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={siteLunchDailyRateVal}
+                  onChange={(e) => setSiteLunchDailyRateVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder="40.000"
+                />
+              </div>
+
+              <div className="grid gap-1">
+                <span className="font-bold text-slate-700">Phụ cấp khác (VNĐ)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={otherAllowanceVal}
+                  onChange={(e) => setOtherAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder="0"
+                />
+              </div>
+
+              <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600 leading-relaxed">
+                <div>• Suất ăn tự tính tháng này: {Math.round(editingItem.mealAllowance).toLocaleString("vi-VN")} đ</div>
+                <div>• Xăng xe công trình: {Math.round(editingItem.calcSiteDays * (typeof siteFuelDailyRateVal === "number" ? siteFuelDailyRateVal : 0)).toLocaleString("vi-VN")} đ</div>
+                <div>• Nước uống công trình: {Math.round(editingItem.calcSiteDays * (typeof siteWaterDailyRateVal === "number" ? siteWaterDailyRateVal : 0)).toLocaleString("vi-VN")} đ</div>
+                {editingItem.configSourceMonth ? (
+                  <div>• Nếu tháng này không sửa, hệ thống kế thừa mức từ tháng {editingItem.configSourceMonth}.</div>
+                ) : (
+                  <div>• Nếu chưa có tháng trước, hệ thống dùng mức mặc định.</div>
+                )}
               </div>
             </div>
 
@@ -1156,16 +1236,15 @@ export function CompanyPayrollDashboard({
               <button
                 type="button"
                 onClick={() => {
-                  setMealAllowanceVal(editingItem.calcFullDays * 30000);
-                  setSiteAllowanceVal(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000);
-                  setResponsibilityAllowanceVal(0);
-                  setIsMealEditable(false);
-                  setIsSiteEditable(false);
-                  setIsResponsibilityEditable(false);
+                  setLunchDailyRateVal(defaultAllowanceRates.lunchDailyRate);
+                  setSiteFuelDailyRateVal(defaultAllowanceRates.siteFuelDailyRate);
+                  setSiteWaterDailyRateVal(defaultAllowanceRates.siteWaterDailyRate);
+                  setSiteLunchDailyRateVal(defaultAllowanceRates.siteLunchDailyRate);
+                  setOtherAllowanceVal(defaultAllowanceRates.otherAllowance);
                 }}
                 className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
               >
-                Mặc định tự động
+                Về mức mặc định
               </button>
               
               <div className="flex gap-2">
@@ -1185,9 +1264,15 @@ export function CompanyPayrollDashboard({
                     const nextAllowances = {
                       ...workerAllowances,
                       [targetKey]: {
-                        mealAllowanceOverride: isMealEditable && mealAllowanceVal !== "" ? Number(mealAllowanceVal) : undefined,
-                        siteAllowanceOverride: isSiteEditable && siteAllowanceVal !== "" ? Number(siteAllowanceVal) : undefined,
-                        responsibilityAllowanceOverride: isResponsibilityEditable && responsibilityAllowanceVal !== "" ? Number(responsibilityAllowanceVal) : undefined,
+                        ...workerAllowances[targetKey],
+                        lunchDailyRate: lunchDailyRateVal !== "" ? Number(lunchDailyRateVal) : defaultAllowanceRates.lunchDailyRate,
+                        siteFuelDailyRate: siteFuelDailyRateVal !== "" ? Number(siteFuelDailyRateVal) : defaultAllowanceRates.siteFuelDailyRate,
+                        siteWaterDailyRate: siteWaterDailyRateVal !== "" ? Number(siteWaterDailyRateVal) : defaultAllowanceRates.siteWaterDailyRate,
+                        siteLunchDailyRate: siteLunchDailyRateVal !== "" ? Number(siteLunchDailyRateVal) : defaultAllowanceRates.siteLunchDailyRate,
+                        otherAllowance: otherAllowanceVal !== "" ? Number(otherAllowanceVal) : 0,
+                        mealAllowanceOverride: undefined,
+                        siteAllowanceOverride: undefined,
+                        responsibilityAllowanceOverride: undefined,
                       }
                     };
                     onWorkerAllowancesChange?.(nextAllowances);

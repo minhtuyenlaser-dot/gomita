@@ -2168,6 +2168,7 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
   }, [accounts]);
 
   const [input, setInput] = useState({ customerName: "", area: "", phone: "", address: "" });
+  const [isWarranty, setIsWarranty] = useState(false);
   const [selectedSales, setSelectedSales] = useState<string[]>(() => {
     if (positionId === "sale") {
       const isCurrentSaleActive = sales.some(s => s.displayName === currentUserName);
@@ -2193,7 +2194,12 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
       setIssues(nextIssues);
       return;
     }
-    onCreate(buildOrder(nextInput, existingCodes));
+    const order = buildOrder(nextInput, existingCodes);
+    if (isWarranty) {
+      order.isWarranty = true;
+      order.code = `BH-${order.code}`;
+    }
+    onCreate(order);
   }
 
   return (
@@ -2203,6 +2209,16 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
         <TextInput label="Khu vực" value={input.area} onChange={(value) => setInput({ ...input, area: value })} />
         <TextInput label="Số điện thoại *" value={input.phone} onChange={(value) => setInput({ ...input, phone: value })} />
         <TextInput label="Địa chỉ *" value={input.address} onChange={(value) => setInput({ ...input, address: value })} />
+        
+        <label className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 px-3 text-sm font-bold text-slate-700 cursor-pointer hover:bg-slate-50 transition">
+          <input
+            checked={isWarranty}
+            type="checkbox"
+            onChange={(e) => setIsWarranty(e.target.checked)}
+            className="rounded border-slate-300 text-orange-500 focus:ring-orange-500 h-4 w-4"
+          />
+          <span>Đây là đơn hàng bảo hành</span>
+        </label>
         
         <div className="grid gap-1">
           <span className="text-sm font-bold text-slate-700">Sale phụ trách *</span>
@@ -2303,9 +2319,17 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, 
   const assignConfig = getAssignConfig(currentPosition.id, order);
   const eligibleAccounts = accounts.filter((account) => account.status === "active" && account.positionIds.some((positionId) => assignConfig.assignablePositionIds.includes(positionId)));
   const initialSelected = getInitialAssignedNames(order, assignConfig.targetPositionId);
+  const autoFieldWork = ["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step);
   const [draft, setDraft] = useState({
     selectedNames: initialSelected,
-    assignedTaskNote: order.assignedTaskNote ?? ""
+    assignedTaskNote: order.assignedTaskNote ?? "",
+    isFieldWork: autoFieldWork || !!order.isFieldWork
+  });
+
+  const [deploymentStartTime, setDeploymentStartTime] = useState(() => {
+    const now = new Date();
+    const tzoffset = now.getTimezoneOffset() * 60000;
+    return new Date(now.getTime() - tzoffset).toISOString().slice(0, 16);
   });
 
   function toggleName(name: string) {
@@ -2319,7 +2343,10 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, 
 
   function submit() {
     const selectedNames = draft.selectedNames;
-    onSubmit(buildAssignmentPatch(assignConfig.targetPositionId, selectedNames, draft.assignedTaskNote));
+    onSubmit({
+      ...buildAssignmentPatch(order, assignConfig.targetPositionId, selectedNames, draft.assignedTaskNote, draft.isFieldWork),
+      deploymentStartTime
+    });
   }
 
   return (
@@ -2328,6 +2355,15 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, 
         <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-700">
           {assignConfig.description}
         </div>
+        <label className="grid gap-1 text-sm font-bold text-slate-700">
+          Thời gian bắt đầu triển khai
+          <input
+            type="datetime-local"
+            value={deploymentStartTime}
+            onChange={(event) => setDeploymentStartTime(event.target.value)}
+            className="h-10 rounded-lg border border-slate-200 px-3 font-normal outline-none focus:border-orange-400"
+          />
+        </label>
         {eligibleAccounts.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-sm text-slate-500">Chưa có nhân sự phù hợp trong phòng ban này.</div>
         ) : (
@@ -2344,6 +2380,22 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, 
         <label className="grid gap-1 text-sm font-bold">
           Nội dung giao việc
           <textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-orange-400" value={draft.assignedTaskNote} onChange={(event) => setDraft({ ...draft, assignedTaskNote: event.target.value })} />
+        </label>
+        <label className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 px-3 text-sm font-bold text-slate-700">
+          <input
+            type="checkbox"
+            checked={draft.isFieldWork}
+            disabled={autoFieldWork}
+            onChange={(event) => setDraft((current) => ({ ...current, isFieldWork: event.target.checked }))}
+          />
+          <div className="grid gap-0.5">
+            <span>Đánh dấu đi công trình</span>
+            <span className="text-xs font-normal text-slate-500">
+              {autoFieldWork
+                ? "Công việc Lắp đặt, Nghiệm thu và Bảo hành luôn được tính là đi công trình."
+                : "Bật nếu đây là công việc ngoài công trình để tính phụ cấp theo ngày."}
+            </span>
+          </div>
         </label>
         <button 
           className="min-h-12 rounded-lg bg-blue-600 font-black text-white disabled:bg-slate-300 flex items-center justify-center gap-2" 
@@ -2385,8 +2437,8 @@ function getAssignConfig(positionId: string, order: Order) {
     }
   }
   if (positionId === "supervisor_lead" || positionId === "director" || positionId === "admin") {
-    if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
-      return { targetPositionId: "installer", assignablePositionIds: ["installer"], description: "Trưởng giám sát giao việc cho nhân sự lắp đặt." };
+    if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step)) {
+      return { targetPositionId: "installer", assignablePositionIds: ["installer"], description: "Trưởng giám sát giao việc cho nhân sự lắp đặt/bảo hành." };
     }
   }
   return { targetPositionId: "sale", assignablePositionIds: ["sale"], description: "Giao việc cho đơn hàng." };
@@ -2396,15 +2448,16 @@ function getInitialAssignedNames(order: Order, positionId: string) {
   return getAssignedNames(order, positionId);
 }
 
-function buildAssignmentPatch(positionId: string, selectedNames: string[], assignedTaskNote: string): Partial<Order> {
+function buildAssignmentPatch(order: Order, positionId: string, selectedNames: string[], assignedTaskNote: string, isFieldWork: boolean): Partial<Order> {
   const firstName = selectedNames[0] ?? "";
-  if (positionId === "sale") return { saleName: firstName, assignee: firstName, assignedTaskNote };
-  if (positionId === "designer") return { designerName: firstName, designerNames: selectedNames, assignedTaskNote };
-  if (positionId === "file_operator") return { fileOperatorName: firstName, fileOperatorNames: selectedNames, assignedTaskNote };
-  if (positionId === "production_worker") return { productionWorkerName: firstName, productionWorkerNames: selectedNames, assignedTaskNote };
-  if (positionId === "installer") return { installerName: firstName, installerNames: selectedNames, assignedTaskNote };
-  if (positionId === "supervisor_lead") return { supervisorName: firstName, supervisorNames: selectedNames, assignedTaskNote };
-  return { assignedTaskNote };
+  const nextFieldWork = ["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step) ? true : isFieldWork;
+  if (positionId === "sale") return { saleName: firstName, assignee: firstName, assignedTaskNote, isFieldWork: nextFieldWork };
+  if (positionId === "designer") return { designerName: firstName, designerNames: selectedNames, assignedTaskNote, isFieldWork: nextFieldWork };
+  if (positionId === "file_operator") return { fileOperatorName: firstName, fileOperatorNames: selectedNames, assignedTaskNote, isFieldWork: nextFieldWork };
+  if (positionId === "production_worker") return { productionWorkerName: firstName, productionWorkerNames: selectedNames, assignedTaskNote, isFieldWork: nextFieldWork };
+  if (positionId === "installer") return { installerName: firstName, installerNames: selectedNames, assignedTaskNote, isFieldWork: nextFieldWork };
+  if (positionId === "supervisor_lead") return { supervisorName: firstName, supervisorNames: selectedNames, assignedTaskNote, isFieldWork: nextFieldWork };
+  return { assignedTaskNote, isFieldWork: nextFieldWork };
 }
 
 function getCurrentStepWorkers(order: Order) {
@@ -2412,7 +2465,7 @@ function getCurrentStepWorkers(order: Order) {
   if (order.step === "Thiết kế") return getAssignedNames(order, "designer").join(", ");
   if (order.step === "Ra file") return getAssignedNames(order, "file_operator").join(", ");
   if (order.step === "Sản xuất") return getAssignedNames(order, "production_worker").join(", ");
-  if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) return getAssignedNames(order, "installer").join(", ");
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step)) return getAssignedNames(order, "installer").join(", ");
   if (order.step === "Hoàn công") return getAssignedNames(order, "sale").join(", ");
   return "";
 }

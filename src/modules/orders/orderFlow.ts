@@ -8,6 +8,7 @@ export const orderSteps = [
   "Sản xuất",
   "Lắp đặt",
   "Nghiệm thu",
+  "Bảo hành",
   "Hoàn công"
 ] as const;
 
@@ -25,6 +26,8 @@ export type Order = {
   address: string;
   step: OrderStep;
   assignee: string;
+  isWarranty?: boolean;
+  isFieldWork?: boolean;
   saleName: string;
   designerName: string;
   designerNames?: string[];
@@ -38,6 +41,7 @@ export type Order = {
   installerName: string;
   installerNames?: string[];
   assignedInstallerDate?: string;
+  deploymentStartTime?: string;
   deadline: string;
   progressPercent: 0 | 10 | 35 | 60 | 90 | 100;
   priority: OrderPriority;
@@ -360,7 +364,10 @@ export function canMoveToNextStep(order: Order) {
 }
 
 export function moveToNextStep(order: Order): Order {
-  const nextStep = orderSteps[getStepIndex(order.step) + 1];
+  let nextStep = orderSteps[getStepIndex(order.step) + 1];
+  if (nextStep === "Bảo hành" && !order.isWarranty) {
+    nextStep = "Hoàn công";
+  }
   if (!nextStep) return order;
 
   const nowStr = new Date().toISOString();
@@ -374,6 +381,7 @@ export function moveToNextStep(order: Order): Order {
   else if (nextStep === "Sản xuất") nextAssignee = order.productionWorkerName;
   else if (nextStep === "Lắp đặt") nextAssignee = order.installerName;
   else if (nextStep === "Nghiệm thu") nextAssignee = order.supervisorName || order.installerName || "";
+  else if (nextStep === "Bảo hành") nextAssignee = order.installerName;
   else if (nextStep === "Hoàn công") nextAssignee = "";
   else if (nextStep === "Báo giá" || nextStep === "Tiếp nhận") nextAssignee = order.saleName;
 
@@ -398,7 +406,10 @@ export function moveToNextStep(order: Order): Order {
 }
 
 export function requestStepConfirmation(order: Order, requestedBy: string, reason = "Nhân viên báo hoàn thành") {
-  const nextStep = orderSteps[getStepIndex(order.step) + 1];
+  let nextStep = orderSteps[getStepIndex(order.step) + 1];
+  if (nextStep === "Bảo hành" && !order.isWarranty) {
+    nextStep = "Hoàn công";
+  }
   if (!nextStep) return order;
   const nowStr = new Date().toISOString();
   const updatedLogs = (order.historyLogs || []).map(log => 
@@ -420,7 +431,7 @@ export function canApproveStep(positionId: string, order: Order) {
   if (["Tiếp nhận", "Báo giá"].includes(order.step)) return positionId === "sale_manager";
   if (order.step === "Thiết kế") return positionId === "design_manager";
   if (["Ra file", "Sản xuất"].includes(order.step)) return positionId === "workshop_manager";
-  if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) return positionId === "supervisor_lead";
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step)) return positionId === "supervisor_lead";
   if (order.step === "Hoàn công") return positionId === "accountant";
   return false;
 }
@@ -445,7 +456,7 @@ export function canSeeOrder(positionId: string, currentUserName: string, order: 
   if (positionId === "file_operator") return getAssignedNames(order, "file_operator").includes(currentUserName) && ["Ra file", "Sản xuất", "Lắp đặt"].includes(order.step);
   if (positionId === "supervisor_lead") return getStepIndex(order.step) >= getStepIndex("Sản xuất");
   if (positionId === "production_worker") return getAssignedNames(order, "production_worker").includes(currentUserName) && order.step === "Sản xuất";
-  if (positionId === "installer") return getAssignedNames(order, "installer").includes(currentUserName) && order.step === "Lắp đặt";
+  if (positionId === "installer") return getAssignedNames(order, "installer").includes(currentUserName) && ["Lắp đặt", "Bảo hành"].includes(order.step);
   return false;
 }
 
@@ -459,7 +470,7 @@ export function visibleOrderStepsFor(positionId: string) {
   if (positionId === "file_operator") return orderSteps.filter((step) => ["Ra file", "Sản xuất", "Lắp đặt"].includes(step));
   if (positionId === "supervisor_lead") return orderSteps.filter((step) => getStepIndex(step) >= getStepIndex("Sản xuất"));
   if (positionId === "production_worker") return orderSteps.filter((step) => step === "Sản xuất");
-  if (positionId === "installer") return orderSteps.filter((step) => step === "Lắp đặt");
+  if (positionId === "installer") return orderSteps.filter((step) => ["Lắp đặt", "Bảo hành"].includes(step));
   return orderSteps;
 }
 
@@ -474,7 +485,7 @@ export function canHandleCurrentStep(positionId: string, order: Order) {
   if (order.step === "Thiết kế") return ["designer", "design_manager"].includes(positionId);
   if (order.step === "Ra file") return ["file_operator", "workshop_manager"].includes(positionId);
   if (order.step === "Sản xuất") return positionId === "workshop_manager";
-  if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) return positionId === "supervisor_lead";
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step)) return positionId === "supervisor_lead";
   if (order.step === "Hoàn công") return positionId === "accountant";
   return false;
 }
@@ -494,7 +505,7 @@ export function canCancelOrder(positionId: string, order: Order) {
   if (positionId === "director") return true;
   if (positionId === "sale_manager") return ["Tiếp nhận", "Báo giá"].includes(order.step);
   if (positionId === "workshop_manager") return ["Ra file", "Sản xuất"].includes(order.step);
-  if (positionId === "supervisor_lead") return ["Lắp đặt", "Nghiệm thu"].includes(order.step);
+  if (positionId === "supervisor_lead") return ["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step);
   if (positionId === "accountant") return order.step === "Hoàn công";
   return false;
 }
@@ -508,6 +519,7 @@ function progressByStep(step: OrderStep): Order["progressPercent"] {
     "Sản xuất": 60,
     "Lắp đặt": 90,
     "Nghiệm thu": 90,
+    "Bảo hành": 90,
     "Hoàn công": 100
   };
   return progress[step];

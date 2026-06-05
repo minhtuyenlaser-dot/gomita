@@ -22,6 +22,7 @@ import {
   CircleDollarSign, 
   Briefcase,
   MapPin,
+  MapPinned,
   CheckCircle
 } from "lucide-react-native";
 import { getApiUrl } from "../lib/api";
@@ -56,7 +57,7 @@ const isStepMatchingUserPosition = (step: string, positionIds: string[]) => {
   if (step === "Sản xuất") {
     return normalized.includes("production_worker") || normalized.includes("workshop_manager");
   }
-  if (["Lắp đặt", "Nghiệm thu"].includes(step)) {
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) {
     return normalized.includes("installer") || normalized.includes("supervisor_lead") || normalized.includes("site_supervisor");
   }
   return false;
@@ -71,7 +72,7 @@ const isUserAssignedToOrder = (order: any, user: any) => {
   if (order.step === "Sản xuất") {
     return (order.productionWorkerNames || []).includes(name) || order.productionWorkerName === name;
   }
-  if (order.step === "Lắp đặt") {
+  if (order.step === "Lắp đặt" || order.step === "Bảo hành" || order.step === "Nghiệm thu") {
     return (order.installerNames || []).includes(name) || order.installerName === name;
   }
   if (order.step === "Thiết kế") {
@@ -90,6 +91,67 @@ const isUserAssignedToOrder = (order: any, user: any) => {
   return false;
 };
 
+const defaultAllowanceRates = {
+  lunchDailyRate: 30000,
+  siteFuelDailyRate: 40000,
+  siteWaterDailyRate: 10000,
+  siteLunchDailyRate: 40000,
+  otherAllowance: 0
+};
+
+const siteWorkSteps = ["Lắp đặt", "Nghiệm thu", "Bảo hành"] as const;
+
+const toMonthKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+
+const toPreviousMonthKey = (monthKey: string) => {
+  const [yearText, monthText] = monthKey.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey;
+  return toMonthKey(new Date(year, month - 2, 1));
+};
+
+const toNumericOrUndefined = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const resolveAllowanceConfig = (userId: string, monthKey: string, workerAllowances: Record<string, any>) => {
+  let cursor = monthKey;
+  for (let index = 0; index < 24; index += 1) {
+    const entry = workerAllowances[`${userId}-${cursor}`];
+    if (entry) {
+      return {
+        sourceMonth: cursor,
+        lunchDailyRate: toNumericOrUndefined(entry.lunchDailyRate) ?? defaultAllowanceRates.lunchDailyRate,
+        siteFuelDailyRate: toNumericOrUndefined(entry.siteFuelDailyRate) ?? defaultAllowanceRates.siteFuelDailyRate,
+        siteWaterDailyRate: toNumericOrUndefined(entry.siteWaterDailyRate) ?? defaultAllowanceRates.siteWaterDailyRate,
+        siteLunchDailyRate: toNumericOrUndefined(entry.siteLunchDailyRate) ?? defaultAllowanceRates.siteLunchDailyRate,
+        otherAllowance: toNumericOrUndefined(entry.otherAllowance) ?? toNumericOrUndefined(entry.responsibilityAllowanceOverride) ?? defaultAllowanceRates.otherAllowance
+      };
+    }
+    cursor = toPreviousMonthKey(cursor);
+  }
+
+  return {
+    sourceMonth: null as string | null,
+    ...defaultAllowanceRates
+  };
+};
+
+const getOrderAssigneesForStep = (order: any, step: string) => {
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) {
+    return ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
+  }
+  if (step === "Sản xuất") {
+    return ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
+  }
+  if (step === "Ra file") {
+    return ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
+  }
+  if (step === "Thiết kế") {
+    return ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
+  }
+  return (order.saleName || "").split(",").map((item: string) => item.trim()).filter(Boolean);
+};
+
 const calculateUserAllowances = (
   userId: string,
   displayName: string,
@@ -99,120 +161,141 @@ const calculateUserAllowances = (
   workerAllowances: Record<string, any>,
   isWorker: boolean
 ) => {
-  const now = new Date();
-  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-
-  // 1. Calculate calcFullDays
+  const currentMonthStr = toMonthKey(monthDays[0] ?? new Date());
   let calcFullDays = 0;
   if (isWorker) {
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       let morningChecked = false;
       let afternoonChecked = false;
-      
-      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-      slotsForDay.forEach((slot) => {
+      slots.forEach((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
         }
       });
-
       if (morningChecked && afternoonChecked) {
         calcFullDays += 1;
       }
     });
   }
 
-  // 2. Calculate calcSiteDays and calcSiteFullDays
   let calcSiteDays = 0;
   let calcSiteFullDays = 0;
+  const siteDayDetails: Array<{
+    date: string;
+    label: string;
+    workedSlots: number;
+    isFullDay: boolean;
+    isSiteFullDay: boolean;
+    orders: string[];
+    steps: string[];
+  }> = [];
 
   if (isWorker) {
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-
-      // Has user clocked in at all on this day?
       let checkedCount = 0;
       let morningChecked = false;
       let afternoonChecked = false;
-      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-      slotsForDay.forEach((slot) => {
+      slots.forEach((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
-          checkedCount++;
+          checkedCount += 1;
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
         }
       });
+      if (checkedCount === 0) return;
 
-      if (checkedCount === 0) return; // Didn't work today
-
-      // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
-      const hasSiteJob = orders.some((order) => {
-        if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
-          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-          const isAssigned = assignees.includes(displayName);
-          if (isAssigned && order.assignedInstallerDate === dateStr) {
-            return true;
+      const matchedAssignments = orders.reduce<Array<{ code: string; step: string }>>((list, order) => {
+        const currentStepIsSiteWork = siteWorkSteps.includes(order.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
+        if (currentStepIsSiteWork) {
+          const currentAssignees = getOrderAssigneesForStep(order, order.step);
+          const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
+          if (currentAssignees.includes(displayName) && assignedDate === dateStr) {
+            list.push({ code: order.code, step: order.step });
           }
         }
 
-        return (order.historyLogs || []).some((log: any) => {
-          const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
-          if (!isLắpĐặt) return false;
-
-          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-          const logAssignees = log.assignee ? [log.assignee] : [];
-          const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
-          if (!finalAssignees.includes(displayName)) return false;
-
+        (order.historyLogs || []).forEach((log: any) => {
+          const logIsSiteWork = siteWorkSteps.includes(log.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
+          if (!logIsSiteWork) return;
+          const assignees = getOrderAssigneesForStep(order, log.step);
+          const finalAssignees = assignees.length ? assignees : [log.assignee].filter(Boolean);
+          if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
-          if (!start) return false;
+          if (!start) return;
           const startDateText = start.substring(0, 10);
-          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
-
-          return dateStr >= startDateText && dateStr <= endDateText;
+          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
+          if (dateStr >= startDateText && dateStr <= endDateText) {
+            list.push({ code: order.code, step: log.step });
+          }
         });
-      });
 
-      if (hasSiteJob) {
-        calcSiteDays += 1;
-        if (morningChecked && afternoonChecked) {
-          calcSiteFullDays += 1;
-        }
+        return list;
+      }, []);
+
+      if (matchedAssignments.length === 0) return;
+
+      const isSiteFullDay = morningChecked && afternoonChecked;
+      calcSiteDays += 1;
+      if (isSiteFullDay) {
+        calcSiteFullDays += 1;
       }
+      siteDayDetails.push({
+        date: dateStr,
+        label: `Ngày ${dayNum}/${day.getMonth() + 1}`,
+        workedSlots: checkedCount,
+        isFullDay: morningChecked && afternoonChecked,
+        isSiteFullDay,
+        orders: Array.from(new Set(matchedAssignments.map((item) => item.code))),
+        steps: Array.from(new Set(matchedAssignments.map((item) => item.step)))
+      });
     });
   }
 
-  // 3. Read overrides from workerAllowances
   const key = `${userId}-${currentMonthStr}`;
   const overrides = workerAllowances[key] || {};
+  const resolvedConfig = resolveAllowanceConfig(userId, currentMonthStr, workerAllowances);
+  const lunchDailyRate = toNumericOrUndefined(overrides.lunchDailyRate) ?? resolvedConfig.lunchDailyRate;
+  const siteFuelDailyRate = toNumericOrUndefined(overrides.siteFuelDailyRate) ?? resolvedConfig.siteFuelDailyRate;
+  const siteWaterDailyRate = toNumericOrUndefined(overrides.siteWaterDailyRate) ?? resolvedConfig.siteWaterDailyRate;
+  const siteLunchDailyRate = toNumericOrUndefined(overrides.siteLunchDailyRate) ?? resolvedConfig.siteLunchDailyRate;
+  const otherAllowance = toNumericOrUndefined(overrides.otherAllowance)
+    ?? toNumericOrUndefined(overrides.responsibilityAllowanceOverride)
+    ?? resolvedConfig.otherAllowance;
 
-  const mealAllowance = overrides.mealAllowanceOverride !== undefined 
-    ? overrides.mealAllowanceOverride 
-    : (calcFullDays * 30000);
-
-  const siteAllowance = overrides.siteAllowanceOverride !== undefined 
-    ? overrides.siteAllowanceOverride 
-    : (calcSiteDays * 50000 + calcSiteFullDays * 10000);
-
-  const responsibilityAllowance = overrides.responsibilityAllowanceOverride !== undefined
-    ? overrides.responsibilityAllowanceOverride
-    : 0;
+  const calcMealAllowance = ((calcFullDays - calcSiteFullDays) * lunchDailyRate) + (calcSiteFullDays * siteLunchDailyRate);
+  const siteFuelAllowance = calcSiteDays * siteFuelDailyRate;
+  const siteWaterAllowance = calcSiteDays * siteWaterDailyRate;
+  const mealAllowance = overrides.mealAllowanceOverride !== undefined ? Number(overrides.mealAllowanceOverride) : calcMealAllowance;
+  const siteAllowance = overrides.siteAllowanceOverride !== undefined ? Number(overrides.siteAllowanceOverride) : (siteFuelAllowance + siteWaterAllowance);
 
   return {
     calcFullDays,
     calcSiteDays,
     calcSiteFullDays,
+    calcSiteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
     siteDays: calcSiteDays,
     siteFullDays: calcSiteFullDays,
+    siteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
     fullDays: calcFullDays,
+    siteDayDetails,
+    lunchDailyRate,
+    siteFuelDailyRate,
+    siteWaterDailyRate,
+    siteLunchDailyRate,
     mealAllowance,
+    siteFuelAllowance,
+    siteWaterAllowance,
     siteAllowance,
-    responsibilityAllowance
+    otherAllowance,
+    responsibilityAllowance: otherAllowance,
+    totalAllowance: mealAllowance + siteAllowance + otherAllowance,
+    configSourceMonth: resolvedConfig.sourceMonth
   };
 };
 
@@ -678,12 +761,19 @@ export function WorkerDashboard({
     return workDays * salaryValue;
   }, [salaryType, salaryValue, workDays, maxWorkDays]);
 
+  const hourlySalaryRate = useMemo(() => {
+    if (salaryType === "monthly") {
+      return maxWorkDays ? salaryValue / maxWorkDays / 8 : 0;
+    }
+    return salaryValue / 8;
+  }, [maxWorkDays, salaryType, salaryValue]);
+
   const otPay = useMemo(() => {
-    return otHours * 1.5 * (salaryValue / 8);
-  }, [otHours, salaryValue]);
+    return otHours * 1.5 * hourlySalaryRate;
+  }, [hourlySalaryRate, otHours]);
 
   const estimatedIncome = useMemo(() => {
-    return basePay + otPay + allowances.mealAllowance + allowances.siteAllowance + (allowances.responsibilityAllowance || 0);
+    return basePay + otPay + allowances.totalAllowance;
   }, [basePay, otPay, allowances]);
 
   // Lọc công việc đang được giao của thợ hôm nay
@@ -1543,16 +1633,22 @@ export function WorkerDashboard({
                 <Text style={styles.breakdownValue}>{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
             )}
-            {allowances.siteAllowance > 0 && (
+            {allowances.siteFuelAllowance > 0 && (
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp công trình ({allowances.siteDays} ngày):</Text>
-                <Text style={styles.breakdownValue}>{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</Text>
+                <Text style={styles.breakdownLabel}>Xăng xe công trình ({allowances.siteDays} ngày):</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.siteFuelAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
             )}
-            {allowances.responsibilityAllowance > 0 && (
+            {allowances.siteWaterAllowance > 0 && (
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp trách nhiệm:</Text>
-                <Text style={styles.breakdownValue}>{Math.round(allowances.responsibilityAllowance).toLocaleString("vi-VN")} đ</Text>
+                <Text style={styles.breakdownLabel}>Nước uống công trình ({allowances.siteDays} ngày):</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.siteWaterAllowance).toLocaleString("vi-VN")} đ</Text>
+              </View>
+            )}
+            {allowances.otherAllowance > 0 && (
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Phụ cấp khác:</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.otherAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
             )}
             {otPay > 0 && (
@@ -1575,6 +1671,53 @@ export function WorkerDashboard({
             </View>
           </View>
         </View>
+      </View>
+
+      <View style={styles.sectionCard}>
+        <View style={styles.sectionHeader}>
+          <MapPinned size={20} color="#f97316" />
+          <Text style={styles.sectionTitle}>Ngày Đi Công Trình</Text>
+        </View>
+
+        <View style={styles.salaryMetrics}>
+          <View style={styles.metricItem}>
+            <Text style={styles.metricLabel}>Cả ngày</Text>
+            <Text style={styles.metricValue}>{allowances.siteFullDays || 0} ngày</Text>
+          </View>
+          <View style={styles.dividerLine} />
+          <View style={styles.metricItem}>
+            <Text style={styles.metricLabel}>Nửa ngày</Text>
+            <Text style={styles.metricValue}>{allowances.siteHalfDays || 0} ngày</Text>
+          </View>
+          <View style={styles.dividerLine} />
+          <View style={styles.metricItem}>
+            <Text style={styles.metricLabel}>Tổng ngày CT</Text>
+            <Text style={styles.metricValue}>{allowances.siteDays || 0} ngày</Text>
+          </View>
+        </View>
+
+        {allowances.siteDayDetails?.length ? (
+          <View style={styles.siteDayList}>
+            {allowances.siteDayDetails.map((item: any) => (
+              <View key={item.day} style={styles.siteDayRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.siteDayDate}>Ngày {item.day}</Text>
+                  <Text style={styles.siteDayMeta}>
+                    {item.isSiteFullDay ? "Đi công trình cả ngày" : "Đi công trình nửa ngày"}
+                  </Text>
+                  <Text style={styles.siteDayMeta}>
+                    {item.steps?.length ? item.steps.join(", ") : "Công trình"}
+                  </Text>
+                </View>
+                <Text style={styles.siteDayValue}>
+                  {item.isSiteFullDay ? "40.000đ suất ăn" : "30.000đ suất ăn"}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.salaryHelp}>Tháng này chưa có ngày nào được ghi nhận là đi công trình.</Text>
+        )}
       </View>
 
       {/* BẢNG LƯỚI CHẤM CÔNG THÁNG CUỘN NGANG */}
@@ -1656,7 +1799,9 @@ export function WorkerDashboard({
               </View>
               <Text style={styles.jobDetail}>Khách hàng: {job.customerName}</Text>
               <Text style={styles.jobDetail}>Địa chỉ: {job.address}</Text>
-              <Text style={styles.jobDetail}>Công việc: {job.step === "Sản xuất" ? "Sản xuất tủ" : "Lắp đặt nội thất"}</Text>
+              <Text style={styles.jobDetail}>
+                Công việc: {job.step === "Sản xuất" ? "Sản xuất tủ" : job.step === "Bảo hành" ? "Bảo hành công trình" : "Lắp đặt nội thất"}
+              </Text>
 
               {/* Nút Hoàn thành Độc lập */}
               <TouchableOpacity 
@@ -2848,5 +2993,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#f8fafc",
     fontWeight: "700",
+  },
+  siteDayList: {
+    marginTop: 12,
+    gap: 10,
+  },
+  siteDayRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "#0b2041",
+    borderWidth: 1,
+    borderColor: "#1e3a66",
+  },
+  siteDayDate: {
+    color: "#f8fafc",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  siteDayMeta: {
+    color: "#94a3b8",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  siteDayValue: {
+    color: "#f97316",
+    fontSize: 11,
+    fontWeight: "800",
   }
 });
