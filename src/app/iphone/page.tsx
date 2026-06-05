@@ -1240,58 +1240,38 @@ export default function IphoneClockinPage() {
 
                 {allowances && (
                   <>
-                    {allowances.hasMealOverride ? (
-                      <div className="flex justify-between font-semibold">
-                        <span className="text-slate-500">Phụ cấp ăn trưa (Nhân sự điều chỉnh):</span>
-                        <span className="text-slate-800">{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</span>
-                      </div>
-                    ) : (
-                      <>
+                    {/* Phụ cấp ăn trưa */}
+                    <div className="flex justify-between font-semibold">
+                      <span className="text-slate-500">Phụ cấp ăn trưa:</span>
+                      <span className="text-slate-800">{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</span>
+                    </div>
+                    {!allowances.hasMealOverride && (
+                      <div className="pl-3 text-xs text-slate-500 space-y-1">
                         {allowances.calcFullDays - allowances.calcSiteFullDays > 0 && (
-                          <div className="flex justify-between font-semibold">
-                            <span className="text-slate-500">Ăn trưa tại xưởng ({allowances.calcFullDays - allowances.calcSiteFullDays} ngày):</span>
-                            <span className="text-slate-800">{Math.round((allowances.calcFullDays - allowances.calcSiteFullDays) * allowances.lunchDailyRate).toLocaleString("vi-VN")} đ</span>
-                          </div>
+                          <div>• Ăn trưa xưởng: {allowances.calcFullDays - allowances.calcSiteFullDays} ngày × {allowances.lunchDailyRate.toLocaleString("vi-VN")}đ</div>
                         )}
                         {allowances.calcSiteFullDays > 0 && (
-                          <div className="flex justify-between font-semibold">
-                            <span className="text-slate-500">Ăn trưa công trình ({allowances.calcSiteFullDays} ngày):</span>
-                            <span className="text-slate-800">{Math.round(allowances.calcSiteFullDays * allowances.siteLunchDailyRate).toLocaleString("vi-VN")} đ</span>
-                          </div>
+                          <div>• Ăn trưa công trình: {allowances.calcSiteFullDays} ngày × {allowances.siteLunchDailyRate.toLocaleString("vi-VN")}đ</div>
                         )}
-                      </>
-                    )}
-
-                    {allowances.hasSiteOverride ? (
-                      <div className="flex justify-between font-semibold">
-                        <span className="text-slate-500">Phụ cấp đi công trình (Nhân sự điều chỉnh):</span>
-                        <span className="text-slate-800">{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</span>
                       </div>
-                    ) : (
-                      <>
-                        {allowances.calcSiteDays > 0 && (
-                          <div className="space-y-2 rounded-xl bg-slate-50 p-3">
-                            <div className="flex justify-between text-xs font-bold text-slate-500">
-                              <span>Chi tiết đi công trình:</span>
-                              <span>
-                                {allowances.calcSiteFullDays} ngày cả ca | {allowances.calcSiteHalfDays} ngày nửa ca
-                              </span>
-                            </div>
-                            <div className="flex justify-between font-semibold text-xs text-slate-600">
-                              <span>Xăng xe công trình ({allowances.calcSiteDays} ngày):</span>
-                              <span>{Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ</span>
-                            </div>
-                            <div className="flex justify-between font-semibold text-xs text-slate-600">
-                              <span>Nước uống công trình ({allowances.calcSiteDays} ngày):</span>
-                              <span>{Math.round(allowances.calcSiteDays * allowances.siteWaterDailyRate).toLocaleString("vi-VN")} đ</span>
-                            </div>
-                          </div>
-                        )}
-                      </>
                     )}
 
+                    {/* Phụ cấp đi công trình */}
+                    <div className="flex justify-between font-semibold mt-2">
+                      <span className="text-slate-500">Phụ cấp đi công trình:</span>
+                      <span className="text-slate-800">{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</span>
+                    </div>
+                    {!allowances.hasSiteOverride && allowances.calcSiteDays > 0 && (
+                      <div className="pl-3 text-xs text-slate-500 space-y-1">
+                        <div>• Chi tiết: {allowances.calcSiteFullDays} ngày cả ca | {allowances.calcSiteHalfDays} ngày nửa ca</div>
+                        <div>• Xăng xe: {allowances.calcSiteDays} ngày × {allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ</div>
+                        <div>• Nước uống: {allowances.calcSiteDays} ngày × {allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ</div>
+                      </div>
+                    )}
+
+                    {/* Phụ cấp trách nhiệm / Khác */}
                     {allowances.otherAllowance > 0 && (
-                      <div className="flex justify-between font-semibold">
+                      <div className="flex justify-between font-semibold mt-2">
                         <span className="text-slate-500">Phụ cấp trách nhiệm / Khác:</span>
                         <span className="text-slate-800">{Math.round(allowances.otherAllowance).toLocaleString("vi-VN")} đ</span>
                       </div>
