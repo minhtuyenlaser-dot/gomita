@@ -211,6 +211,13 @@ export function FinanceDashboard({
     return parseFloat(totalHours.toFixed(1));
   }
 
+  function isFutureFieldWorkCurrentStep(order: Order, step: string) {
+    if (order.step !== step || !order.deploymentStartTime) return false;
+    if (!["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) return false;
+    const scheduledAt = new Date(order.deploymentStartTime);
+    return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.getTime() > new Date().getTime();
+  }
+
 
   function addCashTransaction() {
     if (!onCashTransactionsChange || cashAmount <= 0) return;
@@ -470,12 +477,7 @@ export function FinanceDashboard({
       const logs = order.historyLogs || [];
       for (const log of logs) {
         if (!allowedSteps.includes(log.step)) continue;
-        if (
-          order.step === log.step &&
-          order.workStatus === "scheduled" &&
-          order.deploymentStartTime &&
-          new Date(order.deploymentStartTime) > new Date()
-        ) {
+        if (isFutureFieldWorkCurrentStep(order, log.step)) {
           continue;
         }
         
@@ -549,12 +551,7 @@ export function FinanceDashboard({
     const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
     const filteredLogs = (order.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
     const effectiveLogs = filteredLogs.filter((log) => {
-      if (
-        order.step === log.step &&
-        order.workStatus === "scheduled" &&
-        order.deploymentStartTime &&
-        new Date(order.deploymentStartTime) > new Date()
-      ) {
+      if (isFutureFieldWorkCurrentStep(order, log.step)) {
         return false;
       }
       return true;
@@ -626,12 +623,7 @@ export function FinanceDashboard({
     if (!allowedSteps.includes(step)) return 0;
     const logs = (order.historyLogs || []).filter((log) => {
       if (log.step !== step) return false;
-      if (
-        order.step === log.step &&
-        order.workStatus === "scheduled" &&
-        order.deploymentStartTime &&
-        new Date(order.deploymentStartTime) > new Date()
-      ) {
+      if (isFutureFieldWorkCurrentStep(order, log.step)) {
         return false;
       }
       return true;
@@ -676,12 +668,7 @@ export function FinanceDashboard({
     const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
     const filteredLogs = (selectedOrder.historyLogs || []).filter((log) => {
       if (!allowedSteps.includes(log.step)) return false;
-      if (
-        selectedOrder.step === log.step &&
-        selectedOrder.workStatus === "scheduled" &&
-        selectedOrder.deploymentStartTime &&
-        new Date(selectedOrder.deploymentStartTime) > new Date()
-      ) {
+      if (isFutureFieldWorkCurrentStep(selectedOrder, log.step)) {
         return false;
       }
       return true;

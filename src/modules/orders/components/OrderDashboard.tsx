@@ -614,7 +614,8 @@ function getAdjustedHoursForSingleOrder(
   }
 
   const isFutureScheduledCurrentStep = (o: Order, step: string) => {
-    if (o.step !== step || o.workStatus !== "scheduled" || !o.deploymentStartTime) return false;
+    if (o.step !== step || !o.deploymentStartTime) return false;
+    if (!["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) return false;
     const scheduledAt = new Date(o.deploymentStartTime);
     return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.getTime() > Date.now();
   };
@@ -757,7 +758,8 @@ function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overti
   let totalWorkdays = 0;
   const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
   const isFutureScheduledCurrentStep = (step: string) => {
-    if (order.step !== step || order.workStatus !== "scheduled" || !order.deploymentStartTime) return false;
+    if (order.step !== step || !order.deploymentStartTime) return false;
+    if (!["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) return false;
     const scheduledAt = new Date(order.deploymentStartTime);
     return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.getTime() > Date.now();
   };
