@@ -855,6 +855,35 @@ export function WorkerDashboard({
     );
   }, [buildPromptableMissingSlots, handleDeclineCompensation]);
 
+  const showClockinResult = useCallback((title: string, message: string, attendanceSource?: Record<string, string>) => {
+    const pendingSlots = buildPromptableMissingSlots(attendanceSource).filter((item) => !item.isIgnored);
+    if (pendingSlots.length === 0) {
+      Alert.alert(title, message);
+      return;
+    }
+
+    Alert.alert(
+      title,
+      `${message}\n\nBạn đang còn ${pendingSlots.length} mốc thiếu công. Bạn có muốn đăng ký chấm công bù không?`,
+      [
+        {
+          text: "Không",
+          style: "cancel",
+          onPress: () => {
+            void handleDeclineCompensation(pendingSlots);
+          }
+        },
+        {
+          text: "Có",
+          onPress: () => {
+            setSelectedCompSlots([]);
+            setCompOpen(true);
+          }
+        }
+      ]
+    );
+  }, [buildPromptableMissingSlots, handleDeclineCompensation]);
+
   const submitOvertimeRequest = useCallback(async () => {
     const [fromHour, fromMinute] = otFrom.split(":").map(Number);
     const [toHour, toMinute] = otTo.split(":").map(Number);
@@ -1379,9 +1408,6 @@ export function WorkerDashboard({
         setAttendanceOverrides((current) => ({ ...current, [currentKey]: "normal" }));
         setShowCamera(false);
         setActiveJobToReport(null);
-        setTimeout(() => {
-          promptCompensationIfNeeded(nextAttendance);
-        }, 250);
       };
 
       try {
@@ -1415,7 +1441,7 @@ export function WorkerDashboard({
           });
         }
         await onRefresh();
-        Alert.alert("Chấm công thành công", `Đã ghi nhận mốc ${currentSlot} lúc ${currentTime}.`);
+        showClockinResult("Chấm công thành công", `Đã ghi nhận mốc ${currentSlot} lúc ${currentTime}.`, nextAttendance);
       } catch (error) {
         await enqueuePendingAction({
           id: `pending-clockin-${Date.now()}`,
@@ -1430,7 +1456,7 @@ export function WorkerDashboard({
           });
         }
         await applyLocalClockin();
-        Alert.alert("Đã lưu tạm", "Chấm công đã được lưu trên thiết bị và sẽ tự đồng bộ lại khi server ổn định.");
+        showClockinResult("Đã lưu tạm", "Chấm công đã được lưu trên thiết bị và sẽ tự đồng bộ lại khi server ổn định.", nextAttendance);
       }
     } catch (error) {
       console.warn("Lỗi chấm công:", error);
@@ -1438,7 +1464,7 @@ export function WorkerDashboard({
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeJobToReport, cameraRef, currentSlot, currentTime, effectiveAttendance, gpsAddress, gpsCoords, gpsMeta, onRefresh, serverIp, showClockinResult, today, user.id]);
 
   const handleReportDoneIndependent = async (job: any) => {
     Alert.alert(
