@@ -398,10 +398,10 @@ export function OrderDashboard({
             const autoAccept = assignConfig.targetPositionId === "production_worker" || assignConfig.targetPositionId === "installer";
             
             updateOrder(assignOrder.id, (order) => {
-              const startIso = patch.deploymentStartTime 
-                ? new Date(patch.deploymentStartTime).toISOString() 
+              const startAtValue = patch.deploymentStartTime
+                ? patch.deploymentStartTime
                 : new Date().toISOString();
-              const isScheduledFuture = autoAccept && Boolean(patch.deploymentStartTime) && new Date(startIso) > new Date();
+              const isScheduledFuture = autoAccept && Boolean(patch.deploymentStartTime) && new Date(startAtValue) > new Date();
               const logs = order.historyLogs || [];
               
               function getCorrectAssignee(currentLog: { step: string; assignee: string }): string {
@@ -428,8 +428,8 @@ export function OrderDashboard({
                 log.step === order.step ? { 
                   ...log, 
                   assignee: getCorrectAssignee(log),
-                  startedAt: startIso,
-                  acceptedAt: autoAccept && !isScheduledFuture ? startIso : undefined
+                  startedAt: isScheduledFuture ? log.startedAt : startAtValue,
+                  acceptedAt: autoAccept && !isScheduledFuture ? startAtValue : undefined
                 } : log
               );
               
@@ -443,7 +443,7 @@ export function OrderDashboard({
               return { 
                 ...order, 
                 ...cleanPatch, 
-                deploymentStartTime: startIso,
+                deploymentStartTime: startAtValue,
                 workStatus: autoAccept ? (isScheduledFuture ? "scheduled" : "working") : "unconfirmed",
                 historyLogs: updatedLogs
               };

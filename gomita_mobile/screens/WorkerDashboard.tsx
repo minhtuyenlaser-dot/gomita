@@ -267,6 +267,8 @@ const calculateUserAllowances = (
 
       if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
 
+      if (activeSiteSlots.size === 0) return;
+
       const isSiteFullDay = ["07:30", "11:30"].some((slot) => activeSiteSlots.has(slot))
         && ["13:30", "17:30"].some((slot) => activeSiteSlots.has(slot));
       calcSiteDays += 1;
