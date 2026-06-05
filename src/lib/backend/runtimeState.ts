@@ -53,11 +53,14 @@ export function resetOutdatedInstallerAssignments(orders: Order[]): { updatedOrd
   let changed = false;
   const nextOrders = orders.map((order) => {
     const hasInstaller = (order.installerNames && order.installerNames.length > 0) || order.installerName;
+    const scheduledDate = order.deploymentStartTime ? order.deploymentStartTime.slice(0, 10) : undefined;
+    const isFutureScheduled = Boolean(scheduledDate && scheduledDate > todayStr);
     if (
       ["Lắp đặt", "Nghiệm thu"].includes(order.step) &&
       hasInstaller &&
       order.assignedInstallerDate &&
-      order.assignedInstallerDate !== todayStr
+      order.assignedInstallerDate !== todayStr &&
+      !isFutureScheduled
     ) {
       changed = true;
       return {
@@ -70,6 +73,49 @@ export function resetOutdatedInstallerAssignments(orders: Order[]): { updatedOrd
     }
     return order;
   });
+  return { updatedOrders: nextOrders, changed };
+}
+
+function sanitizeFutureScheduledFieldWorkOrders(orders: Order[]): { updatedOrders: Order[]; changed: boolean } {
+  let changed = false;
+  const now = new Date();
+  const nextOrders = orders.map((order) => {
+    if (!["Láº¯p Ä‘áº·t", "Nghiá»‡m thu"].includes(order.step)) return order;
+    if (!order.deploymentStartTime) return order;
+    const startTime = new Date(order.deploymentStartTime);
+    if (Number.isNaN(startTime.getTime()) || startTime <= now) return order;
+
+    const scheduledDate = order.deploymentStartTime.slice(0, 10);
+    const nextLogs = (order.historyLogs || []).map((log) => {
+      if (log.step !== order.step) return log;
+      if (!log.startedAt && !log.acceptedAt && !log.completedAt) return log;
+      changed = true;
+      return {
+        ...log,
+        startedAt: undefined,
+        acceptedAt: undefined,
+        completedAt: undefined
+      };
+    });
+
+    const needsScheduledDateFix = order.assignedInstallerDate !== scheduledDate;
+    const needsWorkStatusFix = order.workStatus !== "scheduled";
+    if (!needsScheduledDateFix && !needsWorkStatusFix && nextLogs === order.historyLogs) {
+      return order;
+    }
+
+    if (needsScheduledDateFix || needsWorkStatusFix) {
+      changed = true;
+    }
+
+    return {
+      ...order,
+      assignedInstallerDate: scheduledDate,
+      workStatus: "scheduled" as const,
+      historyLogs: nextLogs
+    };
+  });
+
   return { updatedOrders: nextOrders, changed };
 }
 
@@ -97,16 +143,18 @@ function mergeState(base: RuntimeState, patch: RuntimePatch): RuntimeState {
   }
 
   if (patch.orders) {
-    const todayStr = getLocalTodayDateString();
     nextState.orders = patch.orders.map(o => {
       const baseOrder = base.orders.find(bo => bo.id === o.id);
       const installerNamesChanged = baseOrder
         ? JSON.stringify(baseOrder.installerNames || []) !== JSON.stringify(o.installerNames || [])
         : (o.installerNames || []).length > 0;
       if (installerNamesChanged && (o.installerNames || []).length > 0) {
+        const assignedInstallerDate = o.deploymentStartTime
+          ? o.deploymentStartTime.slice(0, 10)
+          : getLocalTodayDateString();
         return {
           ...o,
-          assignedInstallerDate: todayStr
+          assignedInstallerDate
         };
       }
       return o;
@@ -312,8 +360,9 @@ export async function loadRuntimeState(): Promise<RuntimeState> {
 
   // Reset outdated installer assignments daily
   const { updatedOrders, changed } = resetOutdatedInstallerAssignments(merged.orders);
-  if (changed) {
-    merged.orders = updatedOrders;
+  const { updatedOrders: sanitizedOrders, changed: sanitizedChanged } = sanitizeFutureScheduledFieldWorkOrders(updatedOrders);
+  if (changed || sanitizedChanged) {
+    merged.orders = sanitizedOrders;
     void saveRuntimeState(merged);
   }
   return merged;
