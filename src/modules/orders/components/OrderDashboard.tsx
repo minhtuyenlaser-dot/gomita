@@ -428,8 +428,9 @@ export function OrderDashboard({
                 log.step === order.step ? { 
                   ...log, 
                   assignee: getCorrectAssignee(log),
-                  startedAt: isScheduledFuture ? log.startedAt : startAtValue,
-                  acceptedAt: autoAccept && !isScheduledFuture ? startAtValue : undefined
+                  startedAt: isScheduledFuture ? undefined : startAtValue,
+                  acceptedAt: autoAccept && !isScheduledFuture ? startAtValue : undefined,
+                  completedAt: isScheduledFuture ? undefined : log.completedAt
                 } : log
               );
               

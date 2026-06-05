@@ -174,6 +174,14 @@ const calculateUserAllowances = (
         }
 
         (order.historyLogs || []).forEach((log: any) => {
+          if (
+            order.step === log.step &&
+            order.workStatus === "scheduled" &&
+            order.deploymentStartTime &&
+            new Date(order.deploymentStartTime) > new Date()
+          ) {
+            return;
+          }
           const logIsSiteWork = siteWorkSteps.includes(log.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
           if (!logIsSiteWork) return;
           const assignees = getOrderAssigneesForStep(order, log.step);

@@ -470,6 +470,14 @@ export function FinanceDashboard({
       const logs = order.historyLogs || [];
       for (const log of logs) {
         if (!allowedSteps.includes(log.step)) continue;
+        if (
+          order.step === log.step &&
+          order.workStatus === "scheduled" &&
+          order.deploymentStartTime &&
+          new Date(order.deploymentStartTime) > new Date()
+        ) {
+          continue;
+        }
         
         const assigneeList = getAssigneeListForStep(order, log.step);
         const finalAssignees = assigneeList.length > 0 ? assigneeList : [log.assignee].filter(Boolean);
@@ -540,13 +548,24 @@ export function FinanceDashboard({
 
     const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
     const filteredLogs = (order.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
+    const effectiveLogs = filteredLogs.filter((log) => {
+      if (
+        order.step === log.step &&
+        order.workStatus === "scheduled" &&
+        order.deploymentStartTime &&
+        new Date(order.deploymentStartTime) > new Date()
+      ) {
+        return false;
+      }
+      return true;
+    });
     
     const warrantyOrder = isWarrantyOrder(order);
     let laborCost = 0;
     if (order.customLaborCost !== undefined) {
       laborCost = order.customLaborCost;
     } else {
-      filteredLogs.forEach((log) => {
+      effectiveLogs.forEach((log) => {
         const assignees = getAssigneeListForStep(order, log.step);
         const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
         
@@ -605,7 +624,18 @@ export function FinanceDashboard({
     if (!order) return 0;
     const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
     if (!allowedSteps.includes(step)) return 0;
-    const logs = (order.historyLogs || []).filter((log) => log.step === step);
+    const logs = (order.historyLogs || []).filter((log) => {
+      if (log.step !== step) return false;
+      if (
+        order.step === log.step &&
+        order.workStatus === "scheduled" &&
+        order.deploymentStartTime &&
+        new Date(order.deploymentStartTime) > new Date()
+      ) {
+        return false;
+      }
+      return true;
+    });
     
     let laborCost = 0;
     logs.forEach((log) => {
@@ -644,7 +674,18 @@ export function FinanceDashboard({
     let laborCost = 0;
     
     const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
-    const filteredLogs = (selectedOrder.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
+    const filteredLogs = (selectedOrder.historyLogs || []).filter((log) => {
+      if (!allowedSteps.includes(log.step)) return false;
+      if (
+        selectedOrder.step === log.step &&
+        selectedOrder.workStatus === "scheduled" &&
+        selectedOrder.deploymentStartTime &&
+        new Date(selectedOrder.deploymentStartTime) > new Date()
+      ) {
+        return false;
+      }
+      return true;
+    });
     
     const logsWithTime = filteredLogs.map((log) => {
       const assignees = getAssigneeListForStep(selectedOrder, log.step);
