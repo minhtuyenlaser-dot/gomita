@@ -216,7 +216,8 @@ const calculateUserAllowances = (
         if (currentStepIsSiteWork) {
           const currentAssignees = getOrderAssigneesForStep(order, order.step);
           const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
-          if (currentAssignees.includes(displayName) && assignedDate === dateStr) {
+          const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
+          if (currentAssignees.includes(displayName) && assignedDate === dateStr && !isFuture) {
             list.push({ code: order.code, step: order.step });
           }
         }
@@ -229,6 +230,7 @@ const calculateUserAllowances = (
           if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
           if (!start) return;
+          if (new Date(start) > new Date()) return;
           const startDateText = start.substring(0, 10);
           const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
           if (dateStr >= startDateText && dateStr <= endDateText) {
@@ -241,6 +243,7 @@ const calculateUserAllowances = (
 
       const matchedWarrantyTasks = warrantyTasks.filter((task: any) => {
         if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
+        if (task.startAt && new Date(task.startAt) > new Date()) return false;
         return (task.startAt || "").slice(0, 10) === dateStr;
       });
 
@@ -280,6 +283,7 @@ const calculateUserAllowances = (
     ?? toNumericOrUndefined(overrides.responsibilityAllowanceOverride)
     ?? resolvedConfig.otherAllowance;
 
+  const calcSiteHalfDays = Math.max(0, calcSiteDays - calcSiteFullDays);
   const calcMealAllowance = ((calcFullDays - calcSiteFullDays) * lunchDailyRate) + (calcSiteFullDays * siteLunchDailyRate);
   const siteFuelAllowance = calcSiteDays * siteFuelDailyRate;
   const siteWaterAllowance = calcSiteDays * siteWaterDailyRate;
@@ -290,10 +294,10 @@ const calculateUserAllowances = (
     calcFullDays,
     calcSiteDays,
     calcSiteFullDays,
-    calcSiteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
+    calcSiteHalfDays,
     siteDays: calcSiteDays,
     siteFullDays: calcSiteFullDays,
-    siteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
+    siteHalfDays,
     fullDays: calcFullDays,
     siteDayDetails,
     lunchDailyRate,
@@ -307,7 +311,9 @@ const calculateUserAllowances = (
     otherAllowance,
     responsibilityAllowance: otherAllowance,
     totalAllowance: mealAllowance + siteAllowance + otherAllowance,
-    configSourceMonth: resolvedConfig.sourceMonth
+    configSourceMonth: resolvedConfig.sourceMonth,
+    hasMealOverride: overrides.mealAllowanceOverride !== undefined,
+    hasSiteOverride: overrides.siteAllowanceOverride !== undefined
   };
 };
 
@@ -1678,27 +1684,51 @@ export function WorkerDashboard({
               <Text style={styles.breakdownLabel}>Lương chính ({workDays} ngày):</Text>
               <Text style={styles.breakdownValue}>{Math.round(basePay).toLocaleString("vi-VN")} đ</Text>
             </View>
-            {allowances.mealAllowance > 0 && (
+            {allowances.hasMealOverride ? (
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp ăn ({allowances.fullDays} ngày):</Text>
+                <Text style={styles.breakdownLabel}>Phụ cấp ăn trưa (Nhân sự điều chỉnh):</Text>
                 <Text style={styles.breakdownValue}>{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
+            ) : (
+              <>
+                {allowances.calcFullDays - allowances.calcSiteFullDays > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>Ăn trưa tại xưởng ({allowances.calcFullDays - allowances.calcSiteFullDays} ngày × {allowances.lunchDailyRate.toLocaleString("vi-VN")}đ):</Text>
+                    <Text style={styles.breakdownValue}>{Math.round((allowances.calcFullDays - allowances.calcSiteFullDays) * allowances.lunchDailyRate).toLocaleString("vi-VN")} đ</Text>
+                  </View>
+                )}
+                {allowances.calcSiteFullDays > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>Ăn trưa công trình ({allowances.calcSiteFullDays} ngày × {allowances.siteLunchDailyRate.toLocaleString("vi-VN")}đ):</Text>
+                    <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteFullDays * allowances.siteLunchDailyRate).toLocaleString("vi-VN")} đ</Text>
+                  </View>
+                )}
+              </>
             )}
-            {allowances.siteFuelAllowance > 0 && (
+            {allowances.hasSiteOverride ? (
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Xăng xe công trình ({allowances.siteDays} ngày):</Text>
-                <Text style={styles.breakdownValue}>{Math.round(allowances.siteFuelAllowance).toLocaleString("vi-VN")} đ</Text>
+                <Text style={styles.breakdownLabel}>Phụ cấp đi công trình (Nhân sự điều chỉnh):</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
-            )}
-            {allowances.siteWaterAllowance > 0 && (
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Nước uống công trình ({allowances.siteDays} ngày):</Text>
-                <Text style={styles.breakdownValue}>{Math.round(allowances.siteWaterAllowance).toLocaleString("vi-VN")} đ</Text>
-              </View>
+            ) : (
+              <>
+                {allowances.calcSiteDays > 0 && (
+                  <>
+                    <View style={styles.breakdownRow}>
+                      <Text style={styles.breakdownLabel}>Xăng xe công trình ({allowances.calcSiteDays} ngày × {allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ):</Text>
+                      <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ</Text>
+                    </View>
+                    <View style={styles.breakdownRow}>
+                      <Text style={styles.breakdownLabel}>Nước uống công trình ({allowances.calcSiteDays} ngày × {allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ):</Text>
+                      <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteDays * allowances.siteWaterDailyRate).toLocaleString("vi-VN")} đ</Text>
+                    </View>
+                  </>
+                )}
+              </>
             )}
             {allowances.otherAllowance > 0 && (
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp khác:</Text>
+                <Text style={styles.breakdownLabel}>Phụ cấp trách nhiệm / Khác:</Text>
                 <Text style={styles.breakdownValue}>{Math.round(allowances.otherAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
             )}
@@ -1761,7 +1791,11 @@ export function WorkerDashboard({
                   </Text>
                 </View>
                 <Text style={styles.siteDayValue}>
-                  {item.isSiteFullDay ? "40.000đ suất ăn" : "30.000đ suất ăn"}
+                  {item.isSiteFullDay 
+                    ? `Ăn trưa CT: ${(allowances.siteLunchDailyRate).toLocaleString("vi-VN")}đ` 
+                    : item.isFullDay 
+                      ? `Ăn trưa xưởng: ${(allowances.lunchDailyRate).toLocaleString("vi-VN")}đ`
+                      : "Không phụ cấp ăn (nửa ngày)"}
                 </Text>
               </View>
             ))}
@@ -1840,30 +1874,53 @@ export function WorkerDashboard({
             <Text style={styles.emptyJobsText}>Hiện tại bạn không có công việc nào đang dang dở. 🌟</Text>
           </View>
         ) : (
-          activeJobs.map((job: any) => (
-            <View key={job.id} style={styles.jobItemCard}>
-              <View style={styles.jobItemHeader}>
-                <Text style={styles.jobCode}>{job.code}</Text>
-                <View style={styles.jobStatusBadge}>
-                  <Text style={styles.jobStatusText}>Đang làm</Text>
+          activeJobs.map((job: any) => {
+            const isFuture = job.deploymentStartTime && new Date(job.deploymentStartTime) > new Date();
+            return (
+              <View key={job.id} style={styles.jobItemCard}>
+                <View style={styles.jobItemHeader}>
+                  <Text style={styles.jobCode}>{job.code}</Text>
+                  <View style={[
+                    styles.jobStatusBadge,
+                    isFuture && { backgroundColor: "#dbeafe" }
+                  ]}>
+                    <Text style={[
+                      styles.jobStatusText,
+                      isFuture && { color: "#1e40af" }
+                    ]}>
+                      {isFuture ? "Chờ giờ hẹn" : "Đang làm"}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-              <Text style={styles.jobDetail}>Khách hàng: {job.customerName}</Text>
-              <Text style={styles.jobDetail}>Địa chỉ: {job.address}</Text>
-              <Text style={styles.jobDetail}>
-                Công việc: {job.kind === "warranty_task" ? "Bảo hành công trình" : job.step === "Sản xuất" ? "Sản xuất tủ" : job.step === "Bảo hành" ? "Bảo hành công trình" : "Lắp đặt nội thất"}
-              </Text>
+                <Text style={styles.jobDetail}>Khách hàng: {job.customerName}</Text>
+                <Text style={styles.jobDetail}>Địa chỉ: {job.address}</Text>
+                <Text style={styles.jobDetail}>
+                  Công việc: {job.kind === "warranty_task" ? "Bảo hành công trình" : job.step === "Sản xuất" ? "Sản xuất tủ" : job.step === "Bảo hành" ? "Bảo hành công trình" : "Lắp đặt nội thất"}
+                </Text>
+                {job.deploymentStartTime ? (
+                  <Text style={[styles.jobDetail, { color: "#2563eb", fontWeight: "bold", marginTop: 4 }]}>
+                    Giờ hẹn: {new Date(job.deploymentStartTime).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}
+                  </Text>
+                ) : null}
 
-              {/* Nút Hoàn thành Độc lập */}
-              <TouchableOpacity 
-                style={styles.doneIndependentBtn}
-                onPress={() => handleReportDoneIndependent(job)}
-              >
-                <CheckCircle2 size={16} color="#ffffff" />
-                <Text style={styles.doneIndependentBtnText}>BÁO CÁO HOÀN THÀNH CÔNG VIỆC</Text>
-              </TouchableOpacity>
-            </View>
-          ))
+                {/* Nút Hoàn thành Độc lập */}
+                {isFuture ? (
+                  <View style={[styles.doneIndependentBtn, { backgroundColor: "#cbd5e1" }]}>
+                    <Clock size={16} color="#475569" />
+                    <Text style={[styles.doneIndependentBtnText, { color: "#475569" }]}>CHỜ ĐẾN GIỜ HẸN</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity 
+                    style={styles.doneIndependentBtn}
+                    onPress={() => handleReportDoneIndependent(job)}
+                  >
+                    <CheckCircle2 size={16} color="#ffffff" />
+                    <Text style={styles.doneIndependentBtnText}>BÁO CÁO HOÀN THÀNH CÔNG VIỆC</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
         )}
       </View>
 

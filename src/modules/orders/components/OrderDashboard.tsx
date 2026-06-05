@@ -397,11 +397,12 @@ export function OrderDashboard({
             const assignConfig = getAssignConfig(position.id, assignOrder);
             const autoAccept = assignConfig.targetPositionId === "production_worker" || assignConfig.targetPositionId === "installer";
             
-            // Cập nhật historyLogs khi giao việc - lấy đúng người theo công đoạn hiện tại
             updateOrder(assignOrder.id, (order) => {
-              const nowStr = new Date().toISOString();
+              const startIso = patch.deploymentStartTime 
+                ? new Date(patch.deploymentStartTime).toISOString() 
+                : new Date().toISOString();
               const logs = order.historyLogs || [];
-              // Xác định người đảm nhận dựa trên công đoạn hiện tại
+              
               function getCorrectAssignee(currentLog: { step: string; assignee: string }): string {
                 const step = order.step;
                 if (step === "Tiếp nhận" || step === "Báo giá" || step === "Hoàn công") {
@@ -416,19 +417,32 @@ export function OrderDashboard({
                   return patch.installerName || order.installerName || currentLog.assignee;
                 } else if (step === "Nghiệm thu") {
                   return patch.supervisorName || order.supervisorName || patch.installerName || order.installerName || currentLog.assignee;
+                } else if (step === "Bảo hành") {
+                  return patch.installerName || order.installerName || currentLog.assignee;
                 }
                 return currentLog.assignee;
               }
+              
               const updatedLogs = logs.map(log => 
                 log.step === order.step ? { 
                   ...log, 
                   assignee: getCorrectAssignee(log),
-                  startedAt: nowStr 
+                  startedAt: startIso,
+                  acceptedAt: autoAccept ? startIso : undefined
                 } : log
               );
+              
+              const cleanPatch = { ...patch };
+              if (cleanPatch.isFieldWork && patch.deploymentStartTime) {
+                cleanPatch.assignedInstallerDate = patch.deploymentStartTime.slice(0, 10);
+              } else if (!cleanPatch.isFieldWork) {
+                cleanPatch.assignedInstallerDate = undefined;
+              }
+
               return { 
                 ...order, 
-                ...patch, 
+                ...cleanPatch, 
+                deploymentStartTime: startIso,
                 workStatus: autoAccept ? "working" : "unconfirmed",
                 historyLogs: updatedLogs
               };
@@ -1014,6 +1028,7 @@ function OrderSidePanel({
   const canApprove = canApproveStep(position.id, order);
   const canCancel = canCancelOrder(position.id, order);
   const status = getWorkStatusMeta(order);
+  const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
   
   // Tự động nhận việc cho Thợ sản xuất & Thợ lắp đặt (không hiển thị nút Tiếp nhận công việc cho họ)
   const isWorker = position.id === "production_worker" || position.id === "installer";
@@ -1151,6 +1166,43 @@ function OrderSidePanel({
           <div className="mb-3 font-black">Hành động</div>
           <div className="grid gap-3">
             {!canHandle ? <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-600">Vị trí này chỉ được xem, không được xử lý công đoạn hiện tại.</div> : null}
+            {["Sản xuất", "Lắp đặt", "Bảo hành"].includes(order.step) && order.workStatus === "working" && 
+             (["director", "admin", "workshop_manager", "supervisor_lead"].includes(position.id) || 
+              (order.step === "Sản xuất" && position.id === "workshop_manager") ||
+              (["Lắp đặt", "Bảo hành"].includes(order.step) && ["supervisor_lead", "site_supervisor"].includes(position.id))) ? (
+              isFuture ? (
+                <button 
+                  className="min-h-11 rounded-lg border border-slate-200 bg-slate-100 font-black text-slate-400 cursor-not-allowed flex items-center justify-center gap-2 w-full" 
+                  disabled
+                  type="button"
+                >
+                  <Clock className="h-4 w-4" />
+                  Chờ đến giờ hẹn thay thợ
+                </button>
+              ) : (
+                <button 
+                  className="min-h-11 rounded-lg border border-indigo-500 bg-indigo-50 font-black text-indigo-700 hover:bg-indigo-100 transition" 
+                  onClick={() => {
+                    const confirmed = globalThis.confirm(`Bạn có chắc chắn muốn Đánh dấu hoàn thành thay cho thợ ở bước ${order.step}?`);
+                    if (confirmed) {
+                      const nowStr = new Date().toISOString();
+                      const updatedLogs = (order.historyLogs || []).map(log => 
+                        log.step === order.step ? { ...log, completedAt: log.completedAt || nowStr } : log
+                      );
+                      onPatch({ 
+                        workStatus: "pending_confirmation", 
+                        progressPercent: 100, 
+                        historyLogs: updatedLogs
+                      });
+                    }
+                  }} 
+                  type="button"
+                  disabled={isSyncing}
+                >
+                  Giám sát tích hoàn thành thay thợ
+                </button>
+              )
+            ) : null}
             {canAcceptAssignedWork ? (
               <button 
                 className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
@@ -1166,7 +1218,7 @@ function OrderSidePanel({
                 className="min-h-11 rounded-lg bg-green-600 font-black text-white disabled:bg-slate-300" 
                 onClick={() => onApprove(order)} 
                 type="button"
-                disabled={isSyncing}
+                disabled={isSyncing || isFuture}
               >
                 Quản lý xác nhận chuyển bước
               </button>
@@ -1188,7 +1240,7 @@ function OrderSidePanel({
             ) : (
               <button 
                 className="min-h-11 rounded-lg bg-orange-500 font-black text-white disabled:bg-slate-300" 
-                disabled={!canHandle || order.workStatus === "pending_confirmation" || orderSteps.indexOf(order.step) === orderSteps.length - 1 || isSyncing} 
+                disabled={!canHandle || order.workStatus === "pending_confirmation" || orderSteps.indexOf(order.step) === orderSteps.length - 1 || isSyncing || isFuture} 
                 onClick={() => onMove(order)} 
                 type="button"
               >
@@ -1435,11 +1487,13 @@ function WarrantyTaskModal({
 function WorkflowChecks({ 
   order, 
   onPatch, 
-  positionId 
+  positionId,
+  isModal = false
 }: { 
   order: Order; 
   onPatch: (patch: Partial<Order>) => void; 
   positionId?: string; 
+  isModal?: boolean;
 }) {
   const isSale = positionId === "sale";
   const isPricingLocked = (order.quotation.estimateEditCount !== undefined && order.quotation.estimateEditCount >= 1) || (order.quotation.quoteEditCount !== undefined && order.quotation.quoteEditCount >= 1);
@@ -1496,48 +1550,47 @@ function WorkflowChecks({
   }
 
   if (order.step === "Báo giá") {
-    return (
-      <div className="grid gap-3 text-slate-950">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
-          Dự toán và báo giá được chỉnh bằng nút <span className="text-orange-600">Sửa dự toán / báo giá</span> ở phần thông tin đơn hàng.
-        </div>
-        <CheckItem label="Đã upload ảnh dự toán *" checked={order.quotation.estimatePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, estimatePhotoUploaded: checked } })} />
-        <CheckItem label="Đã upload ảnh báo giá *" checked={order.quotation.quotePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, quotePhotoUploaded: checked } })} />
-      </div>
-    );
     const accs = order.externalAccessories || Array.from({ length: 10 }, () => ({ name: "", sellPrice: 0, costPrice: 0, actualCost: 0 }));
     return (
       <div className="grid gap-3 text-slate-950">
-        <NumberInput 
-          label="Dự toán *" 
-          value={order.quotation.estimateValue} 
-          onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} 
-          disabled={isEstimateDisabled}
-        />
-        <NumberInput 
-          label="Báo giá *" 
-          value={order.quotation.quoteValue} 
-          onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
-          disabled={isQuoteDisabled}
-        />
-        {canLockPricing && (
-          <button
-            type="button"
-            onClick={lockPricing}
-            className="min-h-9 w-full rounded bg-orange-600 font-bold text-white text-xs hover:bg-orange-700 transition shadow-sm"
-          >
-            Xác nhận & Khóa Dự toán/Báo giá
-          </button>
-        )}
-        {isPricingLocked && (
-          <div className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded border border-red-200">
-            ⚠ Báo giá/Dự toán đã được khóa. Quyền Sale không thể chỉnh sửa tiếp.
+        {!isModal ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+            Dự toán và báo giá được chỉnh bằng nút <span className="text-orange-600">Sửa dự toán / báo giá</span> ở phần thông tin đơn hàng.
           </div>
-        )}
-        {!isPricingLocked && (isSale || ["admin", "director", "sale_manager"].includes(positionId || "")) && (
-          <div className="text-[11px] text-slate-500 italic">
-            * Lưu ý: Hãy click nút xác nhận bên trên sau khi hoàn thành. Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.
-          </div>
+        ) : (
+          <>
+            <NumberInput 
+              label="Dự toán *" 
+              value={order.quotation.estimateValue} 
+              onChange={(value) => onPatch({ quotation: { ...order.quotation, estimateValue: value } })} 
+              disabled={isEstimateDisabled}
+            />
+            <NumberInput 
+              label="Báo giá *" 
+              value={order.quotation.quoteValue} 
+              onChange={(value) => onPatch({ quotation: { ...order.quotation, quoteValue: value } })} 
+              disabled={isQuoteDisabled}
+            />
+            {canLockPricing && (
+              <button
+                type="button"
+                onClick={lockPricing}
+                className="min-h-9 w-full rounded bg-orange-600 font-bold text-white text-xs hover:bg-orange-700 transition shadow-sm"
+              >
+                Xác nhận & Khóa Dự toán/Báo giá
+              </button>
+            )}
+            {isPricingLocked && (
+              <div className="text-[11px] text-red-600 font-bold bg-red-50 p-2 rounded border border-red-200">
+                ⚠ Báo giá/Dự toán đã được khóa. Quyền Sale không thể chỉnh sửa tiếp.
+              </div>
+            )}
+            {!isPricingLocked && (isSale || ["admin", "director", "sale_manager"].includes(positionId || "")) && (
+              <div className="text-[11px] text-slate-500 italic">
+                * Lưu ý: Hãy click nút xác nhận bên trên sau khi hoàn thành. Sau khi khóa, quyền Sale sẽ không thể chỉnh sửa tiếp.
+              </div>
+            )}
+          </>
         )}
         <CheckItem label="Đã upload ảnh dự toán *" checked={order.quotation.estimatePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, estimatePhotoUploaded: checked } })} />
         <CheckItem label="Đã upload ảnh báo giá *" checked={order.quotation.quotePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, quotePhotoUploaded: checked } })} />
@@ -2534,7 +2587,7 @@ function MoveChecklistModal({ order, position, onClose, onSubmit, isSyncing = fa
         <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-700">
           Điền đủ thông tin và tích đủ checklist trước khi chuyển sang {nextStep ?? "bước tiếp theo"}.
         </div>
-        <WorkflowChecks order={draft} onPatch={patchDraft} positionId={position.id} />
+        <WorkflowChecks order={draft} onPatch={patchDraft} positionId={position.id} isModal={true} />
         <TransitionSummary order={draft} />
         {showErrors && issues.length ? (
           <div className="rounded-lg bg-amber-50 p-3 text-sm font-bold text-amber-700">
@@ -2566,10 +2619,11 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, 
   const eligibleAccounts = accounts.filter((account) => account.status === "active" && account.positionIds.some((positionId) => assignConfig.assignablePositionIds.includes(positionId)));
   const initialSelected = getInitialAssignedNames(order, assignConfig.targetPositionId);
   const autoFieldWork = ["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(order.step);
+  const isProd = order.step === "Sản xuất";
   const [draft, setDraft] = useState({
     selectedNames: initialSelected,
     assignedTaskNote: order.assignedTaskNote ?? "",
-    isFieldWork: autoFieldWork || !!order.isFieldWork
+    isFieldWork: !isProd && (autoFieldWork || !!order.isFieldWork)
   });
 
   const [deploymentStartTime, setDeploymentStartTime] = useState(() => {
@@ -2627,22 +2681,24 @@ function AssignTaskModal({ order, accounts, currentPosition, onClose, onSubmit, 
           Nội dung giao việc
           <textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal outline-none focus:border-orange-400" value={draft.assignedTaskNote} onChange={(event) => setDraft({ ...draft, assignedTaskNote: event.target.value })} />
         </label>
-        <label className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 px-3 text-sm font-bold text-slate-700">
-          <input
-            type="checkbox"
-            checked={draft.isFieldWork}
-            disabled={autoFieldWork}
-            onChange={(event) => setDraft((current) => ({ ...current, isFieldWork: event.target.checked }))}
-          />
-          <div className="grid gap-0.5">
-            <span>Đánh dấu đi công trình</span>
-            <span className="text-xs font-normal text-slate-500">
-              {autoFieldWork
-                ? "Công việc Lắp đặt, Nghiệm thu và Bảo hành luôn được tính là đi công trình."
-                : "Bật nếu đây là công việc ngoài công trình để tính phụ cấp theo ngày."}
-            </span>
-          </div>
-        </label>
+        {!isProd && (
+          <label className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 px-3 text-sm font-bold text-slate-700">
+            <input
+              type="checkbox"
+              checked={draft.isFieldWork}
+              disabled={autoFieldWork}
+              onChange={(event) => setDraft((current) => ({ ...current, isFieldWork: event.target.checked }))}
+            />
+            <div className="grid gap-0.5">
+              <span>Đánh dấu đi công trình</span>
+              <span className="text-xs font-normal text-slate-500">
+                {autoFieldWork
+                  ? "Công việc Lắp đặt, Nghiệm thu và Bảo hành luôn được tính là đi công trình."
+                  : "Bật nếu đây là công việc ngoài công trình để tính phụ cấp theo ngày."}
+              </span>
+            </div>
+          </label>
+        )}
         <button 
           className="min-h-12 rounded-lg bg-blue-600 font-black text-white disabled:bg-slate-300 flex items-center justify-center gap-2" 
           disabled={draft.selectedNames.length === 0 || isSyncing} 
@@ -2717,6 +2773,10 @@ function getCurrentStepWorkers(order: Order) {
 }
 
 function getWorkStatusMeta(order: Order) {
+  const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
+  if (isFuture) {
+    return { label: "Chờ giờ hẹn", className: "bg-blue-100 text-blue-700" };
+  }
   if (order.workStatus === "pending_confirmation") {
     return { label: "Chờ xác nhận", className: "bg-amber-100 text-amber-700" };
   }

@@ -146,7 +146,8 @@ export function calculateUserAllowances(
         if (currentStepIsSiteWork) {
           const currentAssignees = getOrderAssigneesForStep(order, order.step);
           const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
-          if (currentAssignees.includes(displayName) && assignedDate === dateStr) {
+          const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
+          if (currentAssignees.includes(displayName) && assignedDate === dateStr && !isFuture) {
             list.push({ code: order.code, step: order.step });
           }
         }
@@ -159,6 +160,7 @@ export function calculateUserAllowances(
           if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
           if (!start) return;
+          if (new Date(start) > new Date()) return;
           const startDateText = start.substring(0, 10);
           const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
           if (dateStr >= startDateText && dateStr <= endDateText) {
@@ -171,6 +173,7 @@ export function calculateUserAllowances(
 
       const matchedWarrantyTasks = warrantyTasks.filter((task) => {
         if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
+        if (task.startAt && new Date(task.startAt) > new Date()) return false;
         return (task.startAt || "").slice(0, 10) === dateStr;
       });
 
@@ -210,9 +213,10 @@ export function calculateUserAllowances(
     ?? toNumericOrUndefined(overrides.responsibilityAllowanceOverride)
     ?? resolvedConfig.otherAllowance;
 
+  const calcSiteHalfDays = Math.max(0, calcSiteDays - calcSiteFullDays);
   const calcMealAllowance = ((calcFullDays - calcSiteFullDays) * lunchDailyRate) + (calcSiteFullDays * siteLunchDailyRate);
-  const siteFuelAllowance = calcSiteDays * siteFuelDailyRate;
-  const siteWaterAllowance = calcSiteDays * siteWaterDailyRate;
+  const siteFuelAllowance = (calcSiteFullDays * siteFuelDailyRate) + (calcSiteHalfDays * siteFuelDailyRate / 2);
+  const siteWaterAllowance = (calcSiteFullDays * siteWaterDailyRate) + (calcSiteHalfDays * siteWaterDailyRate / 2);
   const mealAllowance = overrides.mealAllowanceOverride !== undefined ? Number(overrides.mealAllowanceOverride) : calcMealAllowance;
   const siteAllowance = overrides.siteAllowanceOverride !== undefined ? Number(overrides.siteAllowanceOverride) : (siteFuelAllowance + siteWaterAllowance);
   const totalAllowance = mealAllowance + siteAllowance + otherAllowance;
@@ -221,11 +225,11 @@ export function calculateUserAllowances(
     calcFullDays,
     calcSiteDays,
     calcSiteFullDays,
-    calcSiteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
+    calcSiteHalfDays,
     fullDays: calcFullDays,
     siteDays: calcSiteDays,
     siteFullDays: calcSiteFullDays,
-    siteHalfDays: Math.max(0, calcSiteDays - calcSiteFullDays),
+    siteHalfDays: calcSiteHalfDays,
     siteDayDetails,
     lunchDailyRate,
     siteFuelDailyRate,
@@ -570,17 +574,27 @@ export function ProfileDashboard({
               if (otPay > 0) {
                 parts.push(`Tăng ca: ${Math.round(otPay).toLocaleString("vi-VN")}đ`);
               }
-              if (allowances.mealAllowance > 0) {
-                parts.push(`Ăn trưa (${allowances.fullDays}n): ${Math.round(allowances.mealAllowance).toLocaleString("vi-VN")}đ`);
+              if (allowances.isMealOverridden) {
+                parts.push(`Ăn trưa (Nhân sự điều chỉnh): ${Math.round(allowances.mealAllowance).toLocaleString("vi-VN")}đ`);
+              } else {
+                const workshopMealDays = allowances.calcFullDays - allowances.calcSiteFullDays;
+                if (workshopMealDays > 0) {
+                  parts.push(`Ăn trưa xưởng (${workshopMealDays}n × ${allowances.lunchDailyRate.toLocaleString("vi-VN")}đ): ${Math.round(workshopMealDays * allowances.lunchDailyRate).toLocaleString("vi-VN")}đ`);
+                }
+                if (allowances.calcSiteFullDays > 0) {
+                  parts.push(`Ăn trưa công trình (${allowances.calcSiteFullDays}n × ${allowances.siteLunchDailyRate.toLocaleString("vi-VN")}đ): ${Math.round(allowances.calcSiteFullDays * allowances.siteLunchDailyRate).toLocaleString("vi-VN")}đ`);
+                }
               }
-              if (allowances.siteFuelAllowance > 0) {
-                parts.push(`Xăng xe (${allowances.siteDays}n): ${Math.round(allowances.siteFuelAllowance).toLocaleString("vi-VN")}đ`);
-              }
-              if (allowances.siteWaterAllowance > 0) {
-                parts.push(`Nước uống (${allowances.siteDays}n): ${Math.round(allowances.siteWaterAllowance).toLocaleString("vi-VN")}đ`);
+              if (allowances.isSiteOverridden) {
+                parts.push(`Phụ cấp công trình (Nhân sự điều chỉnh): ${Math.round(allowances.siteAllowance).toLocaleString("vi-VN")}đ`);
+              } else {
+                if (allowances.calcSiteDays > 0) {
+                  parts.push(`Xăng xe (${allowances.calcSiteDays}n × ${allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ): ${Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")}đ`);
+                  parts.push(`Nước uống (${allowances.calcSiteDays}n × ${allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ): ${Math.round(allowances.calcSiteDays * allowances.siteWaterDailyRate).toLocaleString("vi-VN")}đ`);
+                }
               }
               if (allowances.otherAllowance > 0) {
-                parts.push(`Phụ cấp khác: ${Math.round(allowances.otherAllowance).toLocaleString("vi-VN")}đ`);
+                parts.push(`Phụ cấp trách nhiệm / Khác: ${Math.round(allowances.otherAllowance).toLocaleString("vi-VN")}đ`);
               }
               return parts.join(" • ");
             })()
@@ -1096,24 +1110,41 @@ export function CompanyPayrollDashboard({
                   <div>{Math.round(row.totalIncome).toLocaleString("vi-VN")} đ</div>
                   <div className="text-[10px] text-slate-400 font-normal leading-tight">
                     Lương chính: {Math.round(row.basePay).toLocaleString("vi-VN")} đ
-                    {row.allowances.mealAllowance > 0 && (
+                    {row.allowances.isMealOverridden ? (
                       <>
-                        <br />Ăn trưa ({row.allowances.fullDays}n): {Math.round(row.allowances.mealAllowance).toLocaleString("vi-VN")} đ
+                        <br />Ăn trưa (Nhân sự điều chỉnh): {Math.round(row.allowances.mealAllowance).toLocaleString("vi-VN")} đ
+                      </>
+                    ) : (
+                      <>
+                        {row.allowances.calcFullDays - row.allowances.calcSiteFullDays > 0 && (
+                          <>
+                            <br />Ăn trưa xưởng ({row.allowances.calcFullDays - row.allowances.calcSiteFullDays}n × {row.allowances.lunchDailyRate.toLocaleString("vi-VN")}đ): {Math.round((row.allowances.calcFullDays - row.allowances.calcSiteFullDays) * row.allowances.lunchDailyRate).toLocaleString("vi-VN")} đ
+                          </>
+                        )}
+                        {row.allowances.calcSiteFullDays > 0 && (
+                          <>
+                            <br />Ăn trưa CT ({row.allowances.calcSiteFullDays}n × {row.allowances.siteLunchDailyRate.toLocaleString("vi-VN")}đ): {Math.round(row.allowances.calcSiteFullDays * row.allowances.siteLunchDailyRate).toLocaleString("vi-VN")} đ
+                          </>
+                        )}
                       </>
                     )}
-                    {row.allowances.siteFuelAllowance > 0 && (
+                    {row.allowances.isSiteOverridden ? (
                       <>
-                        <br />Xăng xe ({row.allowances.siteDays}n): {Math.round(row.allowances.siteFuelAllowance).toLocaleString("vi-VN")} đ
+                        <br />Phụ cấp CT (Nhân sự điều chỉnh): {Math.round(row.allowances.siteAllowance).toLocaleString("vi-VN")} đ
                       </>
-                    )}
-                    {row.allowances.siteWaterAllowance > 0 && (
+                    ) : (
                       <>
-                        <br />Nước uống ({row.allowances.siteDays}n): {Math.round(row.allowances.siteWaterAllowance).toLocaleString("vi-VN")} đ
+                        {row.allowances.calcSiteDays > 0 && (
+                          <>
+                            <br />Xăng xe ({row.allowances.calcSiteDays}n × {row.allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ): {Math.round(row.allowances.calcSiteDays * row.allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ
+                            <br />Nước uống ({row.allowances.calcSiteDays}n × {row.allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ): {Math.round(row.allowances.calcSiteDays * row.allowances.siteWaterDailyRate).toLocaleString("vi-VN")} đ
+                          </>
+                        )}
                       </>
                     )}
                     {row.allowances.otherAllowance > 0 && (
                       <>
-                        <br />Phụ cấp khác: {Math.round(row.allowances.otherAllowance).toLocaleString("vi-VN")} đ
+                        <br />Phụ cấp TN / Khác: {Math.round(row.allowances.otherAllowance).toLocaleString("vi-VN")} đ
                       </>
                     )}
                     {row.otPay > 0 && (

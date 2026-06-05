@@ -147,6 +147,14 @@ export function FinanceDashboard({
     return !!order?.isWarranty;
   }
 
+  function getOrderMonth(order: Order): string {
+    const tiepNhanLog = (order.historyLogs || []).find(log => log.step === "Tiếp nhận");
+    if (tiepNhanLog?.startedAt) {
+      return tiepNhanLog.startedAt.slice(0, 7);
+    }
+    return new Date().toISOString().slice(0, 7);
+  }
+
   function extractLocalDateText(value?: string) {
     const match = (value || "").match(/^(\d{4}-\d{2}-\d{2})/);
     return match ? match[1] : "";
@@ -563,25 +571,24 @@ export function FinanceDashboard({
       accessoryCost += acc.actualCost || acc.costPrice || 0;
     });
 
-    const transportCost = warrantyOrder ? 0 : cashTransactions
+    const transportCost = cashTransactions
       .filter((item) => item.orderId === order.id && item.category === "Vận chuyển" && (item.type === "cash_out" || item.type === "bank_out"))
       .reduce((sum, item) => sum + item.amount, 0);
 
-    const loaderCost = warrantyOrder ? 0 : cashTransactions
+    const loaderCost = cashTransactions
       .filter((item) => item.orderId === order.id && item.category === "Bốc vác" && (item.type === "cash_out" || item.type === "bank_out"))
       .reduce((sum, item) => sum + item.amount, 0);
 
     const quoteValue = order.quotation?.quoteValue || 0;
     const estimateValue = order.quotation?.estimateValue || 0;
-    const manualSpent = warrantyOrder ? 0 : cashTransactions
+    const manualSpent = cashTransactions
       .filter((item) => item.orderId === order.id && (item.type === "cash_out" || item.type === "bank_out" || item.type === "transfer"))
       .reduce((sum, item) => sum + item.amount, 0);
-    const directLaborCost = warrantyOrder ? 0 : laborCost;
-    const directSpent = directLaborCost + manualSpent;
-    const profit = quoteValue + accessorySales - directSpent;
+    const directSpent = laborCost + manualSpent;
+    const profit = warrantyOrder ? 0 : (quoteValue + accessorySales - directSpent);
 
     return {
-      laborCost: directLaborCost,
+      laborCost,
       materialCost,
       accessorySales,
       accessoryCost,
@@ -818,10 +825,22 @@ export function FinanceDashboard({
     const collectedThisMonth = monthTransactions
       .filter((item) => item.type === "cash_in" || item.type === "bank_in")
       .reduce((sum, item) => sum + item.amount, 0);
-    const directMaterial = orderFinancialRows.reduce((sum, item) => sum + item.snapshot.materialCost + item.snapshot.accessoryCost + item.snapshot.transportCost + item.snapshot.loaderCost, 0);
-    const directLabor = orderFinancialRows.reduce((sum, item) => sum + item.snapshot.laborCost, 0);
-    const totalRevenue = orderFinancialRows.reduce((sum, item) => sum + item.snapshot.quoteValue + item.snapshot.accessorySales, 0);
-    const totalProfit = orderFinancialRows.reduce((sum, item) => sum + item.snapshot.profit, 0);
+
+    const monthlyOrders = orderFinancialRows.filter(row => getOrderMonth(row.order) === reportMonth);
+    const normalOrders = monthlyOrders.filter(row => !row.order.isWarranty);
+    const warrantyOrders = monthlyOrders.filter(row => row.order.isWarranty);
+
+    const directMaterial = normalOrders.reduce((sum, item) => sum + item.snapshot.materialCost + item.snapshot.accessoryCost + item.snapshot.transportCost + item.snapshot.loaderCost, 0);
+    const directLabor = normalOrders.reduce((sum, item) => sum + item.snapshot.laborCost, 0);
+    const totalRevenue = normalOrders.reduce((sum, item) => sum + item.snapshot.quoteValue + item.snapshot.accessorySales, 0);
+    const totalProfit = normalOrders.reduce((sum, item) => sum + item.snapshot.profit, 0);
+
+    const workshopWarrantyCost = warrantyOrders.reduce((sum, item) => {
+      const incurred = (item.order.incurredCosts || []).reduce((s, c) => s + (c.amount || 0), 0);
+      const cost = item.snapshot.laborCost + item.snapshot.materialCost + item.snapshot.accessoryCost + item.snapshot.transportCost + item.snapshot.loaderCost + incurred;
+      return sum + cost;
+    }, 0);
+
     const remainingReceivable = orderFinancialRows.reduce((sum, item) => sum + item.remaining, 0);
     const overdueReceivable = orderFinancialRows
       .filter((item) => item.debtStatus === "overdue")
@@ -833,7 +852,8 @@ export function FinanceDashboard({
       directMaterial,
       directLabor,
       totalRevenue,
-      totalProfit
+      totalProfit,
+      workshopWarrantyCost
     };
   }, [cashTransactions, reportMonth, orderFinancialRows]);
 
@@ -1079,7 +1099,7 @@ export function FinanceDashboard({
       </div>
 
       {/* 1. Thanh Tổng hợp */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="text-sm font-bold text-slate-500">Đã thu tháng này</div>
           <div className="mt-2 text-2xl font-black text-blue-600">
@@ -1121,6 +1141,13 @@ export function FinanceDashboard({
             {formatCurrency(efficiencySummary.idleCost)}
           </div>
           <div className="mt-1 text-xs text-slate-400">Phần lương chưa phân bổ được vào đơn hàng trong tháng</div>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-bold text-slate-500">Chi phí vận hành bảo hành</div>
+          <div className="mt-2 text-2xl font-black text-rose-600">
+            {formatCurrency(monthlyOverview.workshopWarrantyCost)}
+          </div>
+          <div className="mt-1 text-xs text-slate-400">Chi phí phát sinh từ các đơn bảo hành trong tháng</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="text-sm font-bold text-slate-500">Lợi nhuận tạm tính</div>
@@ -1265,7 +1292,12 @@ export function FinanceDashboard({
               <tbody>
                 {orderFinancialRows.map((row) => (
                   <tr key={row.order.id} className="border-b border-slate-100 text-slate-700">
-                    <td className="py-3 font-black text-slate-900">{row.order.code}</td>
+                    <td className="py-3 font-black text-slate-900">
+                      {row.order.code}
+                      {row.order.isWarranty && (
+                        <span className="ml-2 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-black text-rose-700">BẢO HÀNH</span>
+                      )}
+                    </td>
                     <td>{row.order.customerName}</td>
                     <td>{formatCurrency(row.snapshot.quoteValue + row.snapshot.accessorySales)}</td>
                     <td>{formatCurrency(row.collected)}</td>
