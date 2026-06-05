@@ -12,6 +12,7 @@ type RuntimeData = {
   holidayDates?: string[];
   usernameDirectory?: Array<{ id: string; username: string }>;
   orders?: any[];
+  warrantyTasks?: any[];
 };
 
 const sessionStorageKey = "gomita_iphone_web_session_v1";
@@ -29,6 +30,7 @@ export default function IphoneClockinPage() {
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
+  const [warrantyTasks, setWarrantyTasks] = useState<any[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [currentAccount, setCurrentAccount] = useState<UserAccount | null>(null);
@@ -76,6 +78,7 @@ export default function IphoneClockinPage() {
     setHolidayDates(Array.isArray(data.holidayDates) ? data.holidayDates : []);
     setUsernameDirectory(Array.isArray(data.usernameDirectory) ? data.usernameDirectory : []);
     setOrders(data.orders || []);
+    setWarrantyTasks(data.warrantyTasks || []);
     if (data.account) {
       setCurrentAccount(data.account);
     }
@@ -249,6 +252,32 @@ export default function IphoneClockinPage() {
     });
   }
 
+  async function compressPhoto(file: File) {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const image = new Image();
+        image.onload = () => {
+          const ratio = image.width > 720 ? 720 / image.width : 1;
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(image.width * ratio));
+          canvas.height = Math.max(1, Math.round(image.height * ratio));
+          const context = canvas.getContext("2d");
+          if (!context) {
+            reject(new Error("Không khởi tạo được bộ nén ảnh."));
+            return;
+          }
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.72));
+        };
+        image.onerror = () => reject(new Error("Không xử lý được ảnh chấm công."));
+        image.src = String(reader.result || "");
+      };
+      reader.onerror = () => reject(new Error("Không đọc được ảnh."));
+      reader.readAsDataURL(file);
+    });
+  }
+
   async function saveAccountCredentialsLean() {
     if (!currentAccount) return;
     const nextUsername = accountUsername.trim().toLowerCase();
@@ -397,7 +426,7 @@ export default function IphoneClockinPage() {
     setSubmitting(true);
     setMessage("Đang gửi chấm công...");
     try {
-      const [photo, gps] = await Promise.all([readPhoto(file), getCurrentGpsText()]);
+      const [photo, gps] = await Promise.all([compressPhoto(file), getCurrentGpsText()]);
       const response = await fetch("/api/clockin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -436,7 +465,7 @@ export default function IphoneClockinPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: currentAccount.id,
-          date: String(currentTime.getDate()),
+          date: currentDateKey,
           slot: activeSlot,
           gps,
           time: new Date().toISOString()
@@ -453,7 +482,7 @@ export default function IphoneClockinPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: currentAccount.id,
-          date: currentTime.getDate(),
+          date: currentDateKey,
           slot: activeSlot,
           photo
         })
@@ -515,11 +544,14 @@ export default function IphoneClockinPage() {
     };
 
     const assignedOrders = orders.filter(order => isUserAssignedToCurrentStep(order, currentAccount.displayName, currentAccount.positionIds || []));
+    const assignedWarranty = warrantyTasks.filter((task) => task.assigneeId === currentAccount.id && task.status === "assigned");
+    const workingWarranty = warrantyTasks.filter((task) => task.assigneeId === currentAccount.id && task.status === "working");
     const unconfirmedJobs = assignedOrders.filter(order => order.workStatus === "unconfirmed");
     const workingJobs = assignedOrders.filter(order => order.workStatus === "working");
 
     let needSync = false;
     let nextOrders = [...orders];
+    let nextWarrantyTasks = [...warrantyTasks];
 
     for (const job of unconfirmedJobs) {
       const accept = window.confirm(`Bạn có muốn nhận việc đơn hàng ${job.code} không?`);
@@ -560,6 +592,28 @@ export default function IphoneClockinPage() {
       }
     }
 
+    for (const task of assignedWarranty) {
+      const accept = window.confirm(`Bạn có muốn nhận việc bảo hành ${task.code} không?`);
+      if (accept) {
+        needSync = true;
+        nextWarrantyTasks = nextWarrantyTasks.map((item) => (item.id === task.id ? { ...item, status: "working" } : item));
+      }
+    }
+
+    for (const task of workingWarranty) {
+      const completed = window.confirm(`Bạn đã hoàn thành công việc bảo hành ${task.code} chưa?`);
+      if (completed) {
+        try {
+          await fetch("/api/report-done", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ warrantyTaskId: task.id, workerName: currentAccount.displayName })
+          });
+          await fetchRuntimeData(currentAccount.id);
+        } catch {}
+      }
+    }
+
     if (needSync) {
       setSubmitting(true);
       setMessage("Đang cập nhật trạng thái đơn hàng...");
@@ -567,11 +621,12 @@ export default function IphoneClockinPage() {
         const response = await fetch("/api/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orders: nextOrders })
-        });
-        if (response.ok) {
-          setOrders(nextOrders);
-          setMessage("Đã cập nhật trạng thái đơn hàng thành công.");
+        body: JSON.stringify({ orders: nextOrders, warrantyTasks: nextWarrantyTasks })
+      });
+      if (response.ok) {
+        setOrders(nextOrders);
+        setWarrantyTasks(nextWarrantyTasks);
+        setMessage("Đã cập nhật trạng thái đơn hàng thành công.");
         } else {
           setMessage("Không đồng bộ được trạng thái đơn hàng.");
         }
