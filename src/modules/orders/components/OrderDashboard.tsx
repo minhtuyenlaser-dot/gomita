@@ -401,6 +401,7 @@ export function OrderDashboard({
               const startIso = patch.deploymentStartTime 
                 ? new Date(patch.deploymentStartTime).toISOString() 
                 : new Date().toISOString();
+              const isScheduledFuture = autoAccept && Boolean(patch.deploymentStartTime) && new Date(startIso) > new Date();
               const logs = order.historyLogs || [];
               
               function getCorrectAssignee(currentLog: { step: string; assignee: string }): string {
@@ -428,7 +429,7 @@ export function OrderDashboard({
                   ...log, 
                   assignee: getCorrectAssignee(log),
                   startedAt: startIso,
-                  acceptedAt: autoAccept ? startIso : undefined
+                  acceptedAt: autoAccept && !isScheduledFuture ? startIso : undefined
                 } : log
               );
               
@@ -443,7 +444,7 @@ export function OrderDashboard({
                 ...order, 
                 ...cleanPatch, 
                 deploymentStartTime: startIso,
-                workStatus: autoAccept ? "working" : "unconfirmed",
+                workStatus: autoAccept ? (isScheduledFuture ? "scheduled" : "working") : "unconfirmed",
                 historyLogs: updatedLogs
               };
             });

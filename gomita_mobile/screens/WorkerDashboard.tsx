@@ -198,27 +198,34 @@ const calculateUserAllowances = (
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-      let checkedCount = 0;
       let morningChecked = false;
       let afternoonChecked = false;
-      slots.forEach((slot) => {
+      const checkedSlots = slots.filter((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
-          checkedCount += 1;
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+          return true;
         }
+        return false;
       });
-      if (checkedCount === 0) return;
+      if (checkedSlots.length === 0) return;
+      const activeSiteSlots = new Set<string>();
 
       const matchedAssignments = orders.reduce<Array<{ code: string; step: string }>>((list, order) => {
         const currentStepIsSiteWork = siteWorkSteps.includes(order.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
         if (currentStepIsSiteWork) {
           const currentAssignees = getOrderAssigneesForStep(order, order.step);
           const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
-          const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
-          if (currentAssignees.includes(displayName) && assignedDate === dateStr && !isFuture) {
+          if (currentAssignees.includes(displayName) && assignedDate && assignedDate <= dateStr) {
             list.push({ code: order.code, step: order.step });
+            checkedSlots.forEach((slot) => {
+              if (order.deploymentStartTime && dateStr === order.deploymentStartTime.slice(0, 10)) {
+                const slotTime = new Date(`${dateStr}T${slot}:00`);
+                if (slotTime < new Date(order.deploymentStartTime)) return;
+              }
+              activeSiteSlots.add(slot);
+            });
           }
         }
 
@@ -230,11 +237,16 @@ const calculateUserAllowances = (
           if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
           if (!start) return;
-          if (new Date(start) > new Date()) return;
           const startDateText = start.substring(0, 10);
           const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
           if (dateStr >= startDateText && dateStr <= endDateText) {
             list.push({ code: order.code, step: log.step });
+            checkedSlots.forEach((slot) => {
+              const slotTime = new Date(`${dateStr}T${slot}:00`);
+              if (dateStr === startDateText && slotTime < new Date(start)) return;
+              if (log.completedAt && dateStr === endDateText && slotTime > new Date(log.completedAt)) return;
+              activeSiteSlots.add(slot);
+            });
           }
         });
 
@@ -243,13 +255,20 @@ const calculateUserAllowances = (
 
       const matchedWarrantyTasks = warrantyTasks.filter((task: any) => {
         if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
-        if (task.startAt && new Date(task.startAt) > new Date()) return false;
-        return (task.startAt || "").slice(0, 10) === dateStr;
+        const startDateText = (task.startAt || "").slice(0, 10);
+        if (!startDateText || startDateText > dateStr) return false;
+        checkedSlots.forEach((slot) => {
+          const slotTime = new Date(`${dateStr}T${slot}:00`);
+          if (task.startAt && dateStr === startDateText && slotTime < new Date(task.startAt)) return;
+          activeSiteSlots.add(slot);
+        });
+        return true;
       });
 
       if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
 
-      const isSiteFullDay = morningChecked && afternoonChecked;
+      const isSiteFullDay = ["07:30", "11:30"].some((slot) => activeSiteSlots.has(slot))
+        && ["13:30", "17:30"].some((slot) => activeSiteSlots.has(slot));
       calcSiteDays += 1;
       if (isSiteFullDay) {
         calcSiteFullDays += 1;
@@ -257,7 +276,7 @@ const calculateUserAllowances = (
       siteDayDetails.push({
         date: dateStr,
         label: `Ngày ${dayNum}/${day.getMonth() + 1}`,
-        workedSlots: checkedCount,
+        workedSlots: checkedSlots.length,
         isFullDay: morningChecked && afternoonChecked,
         isSiteFullDay,
         orders: Array.from(new Set([
@@ -985,8 +1004,10 @@ export function WorkerDashboard({
       return;
     }
 
+    const isFutureAssignedJob = (order: any) => Boolean(order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date());
+
     const assignedOrders = (apiData?.orders || []).filter((order: any) => {
-      return isUserAssignedToOrder(order, user);
+      return isUserAssignedToOrder(order, user) && !isFutureAssignedJob(order);
     });
 
     const unconfirmedJobs = assignedOrders.filter((o: any) => o.workStatus === "unconfirmed");
@@ -1669,7 +1690,7 @@ export function WorkerDashboard({
       <View style={styles.sectionCard}>
         <View style={styles.sectionHeader}>
           <CircleDollarSign size={20} color="#f97316" />
-          <Text style={styles.sectionTitle}>Thu Nhập Tạm Tính Trong Tháng</Text>
+          <Text style={styles.sectionTitle}>Tổng thu nhập dự tính trong tháng</Text>
         </View>
 
         <View style={styles.salaryWidget}>
@@ -1677,65 +1698,41 @@ export function WorkerDashboard({
             {Math.round(estimatedIncome).toLocaleString("vi-VN")} đ
           </Text>
           <Text style={styles.salaryHelp}>
-            {salaryType === "monthly" ? "Lương tháng cố định" : "Cập nhật tăng tiền ngay lập tức khi chấm công thành công"}
+            {salaryType === "monthly" ? "Lương tháng cố định" : "Cập nhật theo ngày công và phụ cấp thực tế"}
           </Text>
 
           <View style={styles.breakdownContainer}>
             <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Lương chính ({workDays} ngày):</Text>
+              <Text style={styles.breakdownLabel}>Lương cứng ({workDays} ngày):</Text>
               <Text style={styles.breakdownValue}>{Math.round(basePay).toLocaleString("vi-VN")} đ</Text>
             </View>
-            {allowances.hasMealOverride ? (
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp ăn trưa (Nhân sự điều chỉnh):</Text>
-                <Text style={styles.breakdownValue}>{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</Text>
-              </View>
-            ) : (
-              <>
-                {allowances.calcFullDays - allowances.calcSiteFullDays > 0 && (
-                  <View style={styles.breakdownRow}>
-                    <Text style={styles.breakdownLabel}>Ăn trưa tại xưởng ({allowances.calcFullDays - allowances.calcSiteFullDays} ngày × {allowances.lunchDailyRate.toLocaleString("vi-VN")}đ):</Text>
-                    <Text style={styles.breakdownValue}>{Math.round((allowances.calcFullDays - allowances.calcSiteFullDays) * allowances.lunchDailyRate).toLocaleString("vi-VN")} đ</Text>
-                  </View>
-                )}
-                {allowances.calcSiteFullDays > 0 && (
-                  <View style={styles.breakdownRow}>
-                    <Text style={styles.breakdownLabel}>Ăn trưa công trình ({allowances.calcSiteFullDays} ngày × {allowances.siteLunchDailyRate.toLocaleString("vi-VN")}đ):</Text>
-                    <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteFullDays * allowances.siteLunchDailyRate).toLocaleString("vi-VN")} đ</Text>
-                  </View>
-                )}
-              </>
-            )}
-            {allowances.hasSiteOverride ? (
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp đi công trình (Nhân sự điều chỉnh):</Text>
-                <Text style={styles.breakdownValue}>{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</Text>
-              </View>
-            ) : (
-              <>
-                {allowances.calcSiteDays > 0 && (
-                  <>
-                    <View style={[styles.breakdownRow, { backgroundColor: "#f1f5f9", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginBottom: 4 }]}>
-                      <Text style={[styles.breakdownLabel, { color: "#475569", fontSize: 11 }]}>Chi tiết đi công trình:</Text>
-                      <Text style={[styles.breakdownValue, { color: "#475569", fontSize: 11 }]}>
-                        {allowances.calcSiteFullDays} ngày cả ca | {allowances.calcSiteHalfDays} ngày nửa ca
-                      </Text>
-                    </View>
-                    <View style={styles.breakdownRow}>
-                      <Text style={styles.breakdownLabel}>Xăng xe công trình ({allowances.calcSiteDays} ngày × {allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ):</Text>
-                      <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ</Text>
-                    </View>
-                    <View style={styles.breakdownRow}>
-                      <Text style={styles.breakdownLabel}>Nước uống công trình ({allowances.calcSiteDays} ngày × {allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ):</Text>
-                      <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteDays * allowances.siteWaterDailyRate).toLocaleString("vi-VN")} đ</Text>
-                    </View>
-                  </>
-                )}
-              </>
-            )}
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Phụ cấp = tổng phụ cấp:</Text>
+              <Text style={styles.breakdownValue}>{Math.round(allowances.totalAllowance).toLocaleString("vi-VN")} đ</Text>
+            </View>
+            <View style={[styles.breakdownRow, { paddingHorizontal: 8, paddingVertical: 4, backgroundColor: "#f8fafc", borderRadius: 6 }]}>
+              <Text style={[styles.breakdownLabel, { color: "#475569", fontSize: 11 }]}>
+                • Đi công trình cả ngày: {allowances.calcSiteFullDays} ngày × {(allowances.siteFuelDailyRate + allowances.siteWaterDailyRate).toLocaleString("vi-VN")}đ
+              </Text>
+            </View>
+            <View style={[styles.breakdownRow, { paddingHorizontal: 8 }]}>
+              <Text style={[styles.breakdownLabel, { color: "#475569", fontSize: 11 }]}>
+                • Đi công trình cả ngày thêm cơm: {allowances.calcSiteFullDays} ngày × {(allowances.siteLunchDailyRate - allowances.lunchDailyRate).toLocaleString("vi-VN")}đ
+              </Text>
+            </View>
+            <View style={[styles.breakdownRow, { paddingHorizontal: 8 }]}>
+              <Text style={[styles.breakdownLabel, { color: "#475569", fontSize: 11 }]}>
+                • Đi công trình nửa ngày: {allowances.calcSiteHalfDays} ngày × {(allowances.siteFuelDailyRate + allowances.siteWaterDailyRate).toLocaleString("vi-VN")}đ
+              </Text>
+            </View>
+            <View style={[styles.breakdownRow, { paddingHorizontal: 8 }]}>
+              <Text style={[styles.breakdownLabel, { color: "#475569", fontSize: 11 }]}>
+                • Ở xưởng: {Math.max(allowances.calcFullDays - allowances.calcSiteFullDays, 0)} ngày × {allowances.lunchDailyRate.toLocaleString("vi-VN")}đ
+              </Text>
+            </View>
             {allowances.otherAllowance > 0 && (
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Phụ cấp trách nhiệm / Khác:</Text>
+                <Text style={styles.breakdownLabel}>Phụ cấp khác:</Text>
                 <Text style={styles.breakdownValue}>{Math.round(allowances.otherAllowance).toLocaleString("vi-VN")} đ</Text>
               </View>
             )}
@@ -1991,7 +1988,13 @@ export function WorkerDashboard({
               </View>
             ) : (
               <View style={styles.gridTableBorder}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                <ScrollView
+                  horizontal
+                  nestedScrollEnabled
+                  showsHorizontalScrollIndicator={true}
+                  style={{ flexGrow: 0 }}
+                  contentContainerStyle={{ paddingBottom: 4 }}
+                >
                   <View style={[styles.modalTable, { width: 70 + uniqueMissingDays.length * 80 }]}>
                     {/* Header Row */}
                     <View style={styles.modalTableHeader}>

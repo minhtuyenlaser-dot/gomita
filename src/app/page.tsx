@@ -739,7 +739,7 @@ function SyncStatusIndicator({ pendingSyncs, syncError, hasLoaded }: { pendingSy
     return (
       <div className="flex items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 border border-red-200 shadow-sm animate-pulse">
         <span className="h-2 w-2 rounded-full bg-red-500" />
-        <span className="hidden sm:inline">ChÆ°a lÆ°u Ä‘Æ°á»£c (Lá»—i káº¿t ná»‘i)</span>
+        <span className="hidden sm:inline">Chưa lưu được (Lỗi kết nối)</span>
       </div>
     );
   }
@@ -748,7 +748,7 @@ function SyncStatusIndicator({ pendingSyncs, syncError, hasLoaded }: { pendingSy
     return (
       <div className="flex items-center gap-2 rounded-full bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600 border border-orange-200 shadow-sm">
         <span className="h-3 w-3 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
-        <span className="hidden sm:inline">Äang Ä‘á»“ng bá»™ dá»¯ liá»‡u...</span>
+        <span className="hidden sm:inline">Đang đồng bộ dữ liệu...</span>
       </div>
     );
   }
@@ -756,7 +756,7 @@ function SyncStatusIndicator({ pendingSyncs, syncError, hasLoaded }: { pendingSy
   return (
     <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600 border border-emerald-200 shadow-sm">
       <span className="h-2 w-2 rounded-full bg-emerald-500" />
-      <span className="hidden sm:inline">ÄÃ£ lÆ°u lÃªn há»‡ thá»‘ng</span>
+      <span className="hidden sm:inline">Đã lưu lên hệ thống</span>
     </div>
   );
 }

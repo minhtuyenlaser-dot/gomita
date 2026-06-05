@@ -15,7 +15,7 @@ export const orderSteps = [
 export type OrderStep = (typeof orderSteps)[number];
 export type OrderPriority = "normal" | "warning" | "urgent";
 export type OrderStatus = "active" | "canceled" | "archived";
-export type WorkStatus = "working" | "pending_confirmation" | "unconfirmed";
+export type WorkStatus = "working" | "pending_confirmation" | "unconfirmed" | "scheduled";
 
 export type Order = {
   id: string;

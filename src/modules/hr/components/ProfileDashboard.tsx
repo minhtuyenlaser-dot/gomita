@@ -126,29 +126,35 @@ export function calculateUserAllowances(
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-      let checkedCount = 0;
       let morningChecked = false;
       let afternoonChecked = false;
-
-      slots.forEach((slot) => {
+      const checkedSlots = slots.filter((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
-          checkedCount += 1;
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+          return true;
         }
+        return false;
       });
 
-      if (checkedCount === 0) return;
+      if (checkedSlots.length === 0) return;
+      const activeSiteSlots = new Set<string>();
 
       const matchedAssignments = orders.reduce<Array<{ code: string; step: string }>>((list, order) => {
         const currentStepIsSiteWork = siteWorkSteps.includes(order.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
         if (currentStepIsSiteWork) {
           const currentAssignees = getOrderAssigneesForStep(order, order.step);
           const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
-          const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
-          if (currentAssignees.includes(displayName) && assignedDate === dateStr && !isFuture) {
+          if (currentAssignees.includes(displayName) && assignedDate && assignedDate <= dateStr) {
             list.push({ code: order.code, step: order.step });
+            checkedSlots.forEach((slot) => {
+              if (order.deploymentStartTime && dateStr === order.deploymentStartTime.slice(0, 10)) {
+                const slotTime = new Date(`${dateStr}T${slot}:00`);
+                if (slotTime < new Date(order.deploymentStartTime)) return;
+              }
+              activeSiteSlots.add(slot);
+            });
           }
         }
 
@@ -160,11 +166,16 @@ export function calculateUserAllowances(
           if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
           if (!start) return;
-          if (new Date(start) > new Date()) return;
           const startDateText = start.substring(0, 10);
           const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
           if (dateStr >= startDateText && dateStr <= endDateText) {
             list.push({ code: order.code, step: log.step });
+            checkedSlots.forEach((slot) => {
+              const slotTime = new Date(`${dateStr}T${slot}:00`);
+              if (dateStr === startDateText && slotTime < new Date(start)) return;
+              if (log.completedAt && dateStr === endDateText && slotTime > new Date(log.completedAt)) return;
+              activeSiteSlots.add(slot);
+            });
           }
         });
 
@@ -173,13 +184,20 @@ export function calculateUserAllowances(
 
       const matchedWarrantyTasks = warrantyTasks.filter((task) => {
         if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
-        if (task.startAt && new Date(task.startAt) > new Date()) return false;
-        return (task.startAt || "").slice(0, 10) === dateStr;
+        const startDateText = (task.startAt || "").slice(0, 10);
+        if (!startDateText || startDateText > dateStr) return false;
+        checkedSlots.forEach((slot) => {
+          const slotTime = new Date(`${dateStr}T${slot}:00`);
+          if (task.startAt && dateStr === startDateText && slotTime < new Date(task.startAt)) return;
+          activeSiteSlots.add(slot);
+        });
+        return true;
       });
 
       if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
 
-      const isSiteFullDay = morningChecked && afternoonChecked;
+      const isSiteFullDay = ["07:30", "11:30"].some((slot) => activeSiteSlots.has(slot))
+        && ["13:30", "17:30"].some((slot) => activeSiteSlots.has(slot));
       calcSiteDays += 1;
       if (isSiteFullDay) {
         calcSiteFullDays += 1;
@@ -187,7 +205,7 @@ export function calculateUserAllowances(
       siteDayDetails.push({
         date: dateStr,
         label: `Ngày ${dayNum}/${day.getMonth() + 1}`,
-        workedSlots: checkedCount,
+        workedSlots: checkedSlots.length,
         isFullDay: morningChecked && afternoonChecked,
         isSiteFullDay,
         orders: Array.from(new Set([

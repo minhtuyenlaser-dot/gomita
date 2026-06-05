@@ -10,12 +10,14 @@ type RuntimeData = {
   account?: UserAccount;
   accounts?: UserAccount[];
   attendance?: Record<string, string>;
+  attendanceDetails?: Record<string, any>;
   holidayDates?: string[];
   usernameDirectory?: Array<{ id: string; username: string }>;
   orders?: any[];
   warrantyTasks?: any[];
   workerAllowances?: Record<string, any>;
   overtimeRequests?: any[];
+  compensationRequests?: any[];
   attendanceCompensationState?: Record<string, any>;
 };
 
@@ -140,27 +142,34 @@ const calculateUserAllowances = (
     monthDays.forEach((day) => {
       const dayNum = day.getDate();
       const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
-      let checkedCount = 0;
       let morningChecked = false;
       let afternoonChecked = false;
-      slots.forEach((slot) => {
+      const checkedSlots = slots.filter((slot) => {
         const key = `${userId}-${dayNum}-${slot}`;
         if (attendance[key] === "normal" || attendance[key] === "compensated") {
-          checkedCount += 1;
           if (slot === "07:30" || slot === "11:30") morningChecked = true;
           if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+          return true;
         }
+        return false;
       });
-      if (checkedCount === 0) return;
+      if (checkedSlots.length === 0) return;
+      const activeSiteSlots = new Set<string>();
 
       const matchedAssignments = orders.reduce<Array<{ code: string; step: string }>>((list, order) => {
         const currentStepIsSiteWork = siteWorkSteps.includes(order.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
         if (currentStepIsSiteWork) {
           const currentAssignees = getOrderAssigneesForStep(order, order.step);
           const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
-          const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
-          if (currentAssignees.includes(displayName) && assignedDate === dateStr && !isFuture) {
+          if (currentAssignees.includes(displayName) && assignedDate && assignedDate <= dateStr) {
             list.push({ code: order.code, step: order.step });
+            checkedSlots.forEach((slot) => {
+              if (order.deploymentStartTime && dateStr === order.deploymentStartTime.slice(0, 10)) {
+                const slotTime = new Date(`${dateStr}T${slot}:00`);
+                if (slotTime < new Date(order.deploymentStartTime)) return;
+              }
+              activeSiteSlots.add(slot);
+            });
           }
         }
 
@@ -172,11 +181,16 @@ const calculateUserAllowances = (
           if (!finalAssignees.includes(displayName)) return;
           const start = log.acceptedAt || log.startedAt;
           if (!start) return;
-          if (new Date(start) > new Date()) return;
           const startDateText = start.substring(0, 10);
           const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
           if (dateStr >= startDateText && dateStr <= endDateText) {
             list.push({ code: order.code, step: log.step });
+            checkedSlots.forEach((slot) => {
+              const slotTime = new Date(`${dateStr}T${slot}:00`);
+              if (dateStr === startDateText && slotTime < new Date(start)) return;
+              if (log.completedAt && dateStr === endDateText && slotTime > new Date(log.completedAt)) return;
+              activeSiteSlots.add(slot);
+            });
           }
         });
 
@@ -185,13 +199,20 @@ const calculateUserAllowances = (
 
       const matchedWarrantyTasks = warrantyTasks.filter((task: any) => {
         if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
-        if (task.startAt && new Date(task.startAt) > new Date()) return false;
-        return (task.startAt || "").slice(0, 10) === dateStr;
+        const startDateText = (task.startAt || "").slice(0, 10);
+        if (!startDateText || startDateText > dateStr) return false;
+        checkedSlots.forEach((slot) => {
+          const slotTime = new Date(`${dateStr}T${slot}:00`);
+          if (task.startAt && dateStr === startDateText && slotTime < new Date(task.startAt)) return;
+          activeSiteSlots.add(slot);
+        });
+        return true;
       });
 
       if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
 
-      const isSiteFullDay = morningChecked && afternoonChecked;
+      const isSiteFullDay = ["07:30", "11:30"].some((slot) => activeSiteSlots.has(slot))
+        && ["13:30", "17:30"].some((slot) => activeSiteSlots.has(slot));
       calcSiteDays += 1;
       if (isSiteFullDay) {
         calcSiteFullDays += 1;
@@ -199,7 +220,7 @@ const calculateUserAllowances = (
       siteDayDetails.push({
         date: dateStr,
         label: `Ngày ${dayNum}/${day.getMonth() + 1}`,
-        workedSlots: checkedCount,
+        workedSlots: checkedSlots.length,
         isFullDay: morningChecked && afternoonChecked,
         isSiteFullDay,
         orders: Array.from(new Set([
@@ -290,7 +311,11 @@ export default function IphoneClockinPage() {
 
   const [workerAllowances, setWorkerAllowances] = useState<Record<string, any>>({});
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
+  const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
   const [attendanceCompensationState, setAttendanceCompensationState] = useState<Record<string, any>>({});
+  const [compOpen, setCompOpen] = useState(false);
+  const [compReason, setCompReason] = useState("");
+  const [selectedCompSlots, setSelectedCompSlots] = useState<Array<{ date: string; slot: string }>>([]);
 
   const currentDateKey = useMemo(() => {
     const year = currentTime.getFullYear();
@@ -334,6 +359,7 @@ export default function IphoneClockinPage() {
     setWarrantyTasks(data.warrantyTasks || []);
     setWorkerAllowances(data.workerAllowances || {});
     setOvertimeRequests(data.overtimeRequests || []);
+    setCompensationRequests(data.compensationRequests || []);
     setAttendanceCompensationState(data.attendanceCompensationState || {});
     if (data.account) {
       setCurrentAccount(data.account);
@@ -496,6 +522,202 @@ export default function IphoneClockinPage() {
     if (!allowances) return 0;
     return basePay + otPay + allowances.totalAllowance;
   }, [basePay, otPay, allowances]);
+
+  const lockedThroughDate = currentAccount ? attendanceCompensationState[currentAccount.id]?.lockedThroughDate || null : null;
+
+  const hasPendingCompRequest = useCallback((date: string, slot: string) => {
+    if (!currentAccount) return false;
+    return compensationRequests.some((req: any) =>
+      req.employeeId === currentAccount.id &&
+      req.date === date &&
+      Array.isArray(req.slots) &&
+      req.slots.includes(slot) &&
+      req.status !== "rejected"
+    );
+  }, [compensationRequests, currentAccount]);
+
+  const buildPromptableMissingSlots = useCallback((attendanceSource?: Record<string, string>) => {
+    if (!currentAccount) return [];
+    const source = attendanceSource || attendance;
+    const currentDay = currentTime.getDate();
+    const currentSlotIndex = activeSlot ? attendanceSlots.indexOf(activeSlot as AttendanceSlot) : -1;
+    const rows: Array<{ date: string; slot: string; day: number; isIgnored: boolean }> = [];
+
+    monthDates.forEach((day) => {
+      const dayNum = day.getDate();
+      if (day.getDay() === 0 || dayNum > currentDay) return;
+      const dateText = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+
+      attendanceSlots.forEach((slot) => {
+        const slotIndex = attendanceSlots.indexOf(slot);
+        if (dayNum === currentDay && currentSlotIndex >= 0 && slotIndex >= currentSlotIndex) return;
+        const key = `${currentAccount.id}-${dayNum}-${slot}`;
+        const kind = source[key];
+        const isLocked = Boolean(lockedThroughDate && dateText <= lockedThroughDate);
+        const isPending = hasPendingCompRequest(dateText, slot);
+        if (kind === "normal" || kind === "compensated" || kind === "leave_locked" || isPending) return;
+        rows.push({ date: dateText, slot, day: dayNum, isIgnored: isLocked });
+      });
+    });
+
+    return rows;
+  }, [activeSlot, attendance, currentAccount, currentTime, hasPendingCompRequest, lockedThroughDate, monthDates]);
+
+  const missingSlots = useMemo(() => buildPromptableMissingSlots(), [buildPromptableMissingSlots]);
+
+  const uniqueMissingDays = useMemo(() => {
+    const daysMap = new Map<number, Date>();
+    missingSlots.forEach((item) => {
+      if (item.isIgnored) return;
+      const found = monthDates.find((day) => day.getDate() === item.day);
+      if (found) daysMap.set(item.day, found);
+    });
+    return Array.from(daysMap.values()).sort((a, b) => a.getDate() - b.getDate());
+  }, [missingSlots, monthDates]);
+
+  const showCompPrompt = useCallback((attendanceSource?: Record<string, string>) => {
+    const pendingSlots = buildPromptableMissingSlots(attendanceSource).filter((item) => !item.isIgnored);
+    if (pendingSlots.length === 0) return;
+    if (window.confirm(`Bạn còn ${pendingSlots.length} mốc thiếu công. Mở bảng đăng ký chấm công bù ngay bây giờ?`)) {
+      setSelectedCompSlots([]);
+      setCompReason("");
+      setCompOpen(true);
+    }
+  }, [buildPromptableMissingSlots]);
+
+  const submitCompensations = useCallback(async () => {
+    if (!currentAccount || selectedCompSlots.length === 0 || !compReason.trim()) return;
+
+    const grouped: Record<string, string[]> = {};
+    selectedCompSlots.forEach((item) => {
+      if (!grouped[item.date]) grouped[item.date] = [];
+      grouped[item.date].push(item.slot);
+    });
+
+    const submissionSize = selectedCompSlots.length;
+    let requiredApprovals = ["hr"];
+    if (submissionSize > 8) {
+      requiredApprovals = ["hr", "department_manager", "director"];
+    } else if (submissionSize >= 4) {
+      requiredApprovals = ["hr", "department_manager"];
+    }
+
+    const groupId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const newRequests = Object.entries(grouped).map(([date, slotList], index) => ({
+      id: `comp-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 9)}`,
+      groupId,
+      employeeId: currentAccount.id,
+      employeeName: currentAccount.displayName,
+      employeePositionLevel: currentAccount.positionIds?.includes("hr") ? "department_head" : "staff",
+      date,
+      slots: slotList,
+      reason: compReason.trim(),
+      missingCountInMonth: submissionSize,
+      requiredApprovals,
+      approvals: [],
+      status: "pending",
+      createdAt: new Date().toISOString()
+    }));
+
+    setSubmitting(true);
+    try {
+      const response = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compensationRequests: [...newRequests, ...compensationRequests]
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        setMessage(result?.error || "Không gửi được đăng ký chấm công bù.");
+        return;
+      }
+
+      await fetch("/api/attendance-compensation-response", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentAccount.id,
+          decision: "reset"
+        })
+      }).catch(() => {});
+
+      setCompOpen(false);
+      setCompReason("");
+      setSelectedCompSlots([]);
+      await fetchRuntimeData(currentAccount.id);
+      setMessage(`Đã gửi ${submissionSize} mốc chấm công bù.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không gửi được đăng ký chấm công bù.");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [compReason, compensationRequests, currentAccount, fetchRuntimeData, selectedCompSlots]);
+
+  const scheduledJobs = useMemo(() => {
+    if (!currentAccount) return [];
+    const now = currentTime;
+    const scheduledOrders = orders
+      .filter((order) => {
+        const assigned = getOrderAssigneesForStep(order, order.step).includes(currentAccount.displayName);
+        return assigned && Boolean(order.deploymentStartTime) && new Date(order.deploymentStartTime) > now;
+      })
+      .map((order) => ({
+        id: order.id,
+        code: order.code,
+        step: order.step,
+        kind: "order" as const,
+        startAt: order.deploymentStartTime,
+        customerName: order.customerName || ""
+      }));
+
+    const scheduledWarranty = warrantyTasks
+      .filter((task) => task.assigneeId === currentAccount.id && task.startAt && new Date(task.startAt) > now)
+      .map((task) => ({
+        id: task.id,
+        code: task.code,
+        step: "Bảo hành",
+        kind: "warranty" as const,
+        startAt: task.startAt,
+        customerName: task.customerName || ""
+      }));
+
+    return [...scheduledOrders, ...scheduledWarranty].sort((a, b) => new Date(a.startAt || 0).getTime() - new Date(b.startAt || 0).getTime());
+  }, [currentAccount, currentTime, orders, warrantyTasks]);
+
+  const activeJobCards = useMemo(() => {
+    if (!currentAccount) return [];
+    const now = currentTime;
+    const activeOrders = orders
+      .filter((order) => {
+        const assigned = getOrderAssigneesForStep(order, order.step).includes(currentAccount.displayName);
+        if (!assigned) return false;
+        if (order.deploymentStartTime && new Date(order.deploymentStartTime) > now) return false;
+        return ["unconfirmed", "working", "pending_confirmation"].includes(order.workStatus || "");
+      })
+      .map((order) => ({
+        id: order.id,
+        code: order.code,
+        step: order.step,
+        kind: "order" as const,
+        status: order.workStatus || "",
+        customerName: order.customerName || ""
+      }));
+
+    const activeWarranty = warrantyTasks
+      .filter((task) => task.assigneeId === currentAccount.id && (!task.startAt || new Date(task.startAt) <= now) && ["assigned", "working", "pending_confirmation"].includes(task.status))
+      .map((task) => ({
+        id: task.id,
+        code: task.code,
+        step: "Bảo hành",
+        kind: "warranty" as const,
+        status: task.status,
+        customerName: task.customerName || ""
+      }));
+
+    return [...activeWarranty, ...activeOrders];
+  }, [currentAccount, currentTime, orders, warrantyTasks]);
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -837,8 +1059,13 @@ export default function IphoneClockinPage() {
         })
       }).catch(() => {});
 
+      const nextAttendance = {
+        ...attendance,
+        [`${currentAccount.id}-${currentTime.getDate()}-${activeSlot}`]: "normal"
+      };
       await fetchRuntimeData(currentAccount.id);
       setMessage(`Đã chấm công mốc ${activeSlot}.`);
+      showCompPrompt(nextAttendance);
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Chấm công thất bại.");
@@ -892,9 +1119,13 @@ export default function IphoneClockinPage() {
       return stepAssignees.includes(userDisplayName);
     };
 
-    const assignedOrders = orders.filter(order => isUserAssignedToCurrentStep(order, currentAccount.displayName, currentAccount.positionIds || []));
-    const assignedWarranty = warrantyTasks.filter((task) => task.assigneeId === currentAccount.id && task.status === "assigned");
-    const workingWarranty = warrantyTasks.filter((task) => task.assigneeId === currentAccount.id && task.status === "working");
+    const now = new Date();
+    const isFutureAssignedJob = (order: any) => Boolean(order.deploymentStartTime && new Date(order.deploymentStartTime) > now);
+    const isFutureWarranty = (task: any) => Boolean(task.startAt && new Date(task.startAt) > now);
+
+    const assignedOrders = orders.filter(order => isUserAssignedToCurrentStep(order, currentAccount.displayName, currentAccount.positionIds || []) && !isFutureAssignedJob(order));
+    const assignedWarranty = warrantyTasks.filter((task) => task.assigneeId === currentAccount.id && task.status === "assigned" && !isFutureWarranty(task));
+    const workingWarranty = warrantyTasks.filter((task) => task.assigneeId === currentAccount.id && task.status === "working" && !isFutureWarranty(task));
     const unconfirmedJobs = assignedOrders.filter(order => order.workStatus === "unconfirmed");
     const workingJobs = assignedOrders.filter(order => order.workStatus === "working");
 
@@ -1179,6 +1410,61 @@ export default function IphoneClockinPage() {
                   </p>
                 ) : null}
               </div>
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-black text-slate-800">Công việc được giao</div>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">
+                      Tách rõ việc đang tới hạn và việc đã hẹn cho ngày/giờ sau.
+                    </div>
+                  </div>
+                  <div className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-slate-600">
+                    {activeJobCards.length} việc hiện tại • {scheduledJobs.length} việc sắp giao
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {activeJobCards.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-xs font-semibold text-slate-400">
+                      Chưa có việc cần nhận hoặc hoàn thành hôm nay.
+                    </div>
+                  ) : (
+                    activeJobCards.map((job) => (
+                      <div key={`${job.kind}-${job.id}`} className="rounded-xl bg-white px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-black text-slate-800">{job.code}</div>
+                            <div className="mt-1 text-xs font-semibold text-slate-500">{job.step} • {job.customerName || "Không gắn khách hàng"}</div>
+                          </div>
+                          <span className="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-black text-emerald-700">
+                            {job.status === "working" ? "Đang làm" : job.status === "pending_confirmation" ? "Chờ xác nhận" : "Chờ nhận"}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  {scheduledJobs.length > 0 ? (
+                    <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3">
+                      <div className="text-xs font-black uppercase tracking-[0.16em] text-orange-600">Sắp giao</div>
+                      <div className="mt-2 space-y-2">
+                        {scheduledJobs.map((job) => (
+                          <div key={`${job.kind}-${job.id}`} className="rounded-xl bg-white px-3 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-black text-slate-800">{job.code}</div>
+                                <div className="mt-1 text-xs font-semibold text-slate-500">{job.step} • {job.customerName || "Không gắn khách hàng"}</div>
+                              </div>
+                              <div className="text-right text-[11px] font-black text-orange-600">
+                                <div>Chờ triển khai</div>
+                                <div>{new Date(job.startAt || "").toLocaleString("vi-VN")}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
               <div className="mt-4">
                 <label className="block text-sm font-black text-slate-800">Chụp ảnh chấm công</label>
                 <input
@@ -1220,7 +1506,7 @@ export default function IphoneClockinPage() {
             <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
                 <CircleDollarSign className="h-5 w-5 text-orange-500" />
-                <h2 className="text-lg font-black text-slate-800">Thu nhập dự tính trong tháng</h2>
+                <h2 className="text-lg font-black text-slate-800">Tổng thu nhập dự tính trong tháng</h2>
               </div>
 
               <div className="mt-4 text-center">
@@ -1228,7 +1514,7 @@ export default function IphoneClockinPage() {
                   {Math.round(estimatedIncome).toLocaleString("vi-VN")} đ
                 </div>
                 <div className="mt-1 text-xs font-semibold text-slate-400">
-                  {salaryType === "monthly" ? "Lương tháng cố định" : "Cập nhật tăng tiền ngay lập tức khi chấm công thành công"}
+                  {salaryType === "monthly" ? "Lương tháng cố định" : "Cập nhật theo ngày công và phụ cấp thực tế"}
                 </div>
               </div>
 
@@ -1240,39 +1526,19 @@ export default function IphoneClockinPage() {
 
                 {allowances && (
                   <>
-                    {/* Phụ cấp ăn trưa */}
                     <div className="flex justify-between font-semibold">
-                      <span className="text-slate-500">Phụ cấp ăn trưa:</span>
-                      <span className="text-slate-800">{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</span>
+                      <span className="text-slate-500">Phụ cấp = tổng phụ cấp:</span>
+                      <span className="text-slate-800">{Math.round(allowances.totalAllowance).toLocaleString("vi-VN")} đ</span>
                     </div>
-                    {!allowances.hasMealOverride && (
-                      <div className="pl-3 text-xs text-slate-500 space-y-1">
-                        {allowances.calcFullDays - allowances.calcSiteFullDays > 0 && (
-                          <div>• Ăn trưa xưởng: {allowances.calcFullDays - allowances.calcSiteFullDays} ngày × {allowances.lunchDailyRate.toLocaleString("vi-VN")}đ</div>
-                        )}
-                        {allowances.calcSiteFullDays > 0 && (
-                          <div>• Ăn trưa công trình: {allowances.calcSiteFullDays} ngày × {allowances.siteLunchDailyRate.toLocaleString("vi-VN")}đ</div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Phụ cấp đi công trình */}
-                    <div className="flex justify-between font-semibold mt-2">
-                      <span className="text-slate-500">Phụ cấp đi công trình:</span>
-                      <span className="text-slate-800">{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</span>
+                    <div className="pl-3 text-xs text-slate-500 space-y-1">
+                      <div>• Đi công trình cả ngày: {allowances.calcSiteFullDays} ngày × {(allowances.siteFuelDailyRate + allowances.siteWaterDailyRate).toLocaleString("vi-VN")}đ</div>
+                      <div>• Đi công trình cả ngày thêm cơm: {allowances.calcSiteFullDays} ngày × {(allowances.siteLunchDailyRate - allowances.lunchDailyRate).toLocaleString("vi-VN")}đ</div>
+                      <div>• Đi công trình nửa ngày: {allowances.calcSiteHalfDays} ngày × {(allowances.siteFuelDailyRate + allowances.siteWaterDailyRate).toLocaleString("vi-VN")}đ</div>
+                      <div>• Ở xưởng: {Math.max(allowances.calcFullDays - allowances.calcSiteFullDays, 0)} ngày × {allowances.lunchDailyRate.toLocaleString("vi-VN")}đ</div>
                     </div>
-                    {!allowances.hasSiteOverride && allowances.calcSiteDays > 0 && (
-                      <div className="pl-3 text-xs text-slate-500 space-y-1">
-                        <div>• Chi tiết: {allowances.calcSiteFullDays} ngày cả ca | {allowances.calcSiteHalfDays} ngày nửa ca</div>
-                        <div>• Xăng xe: {allowances.calcSiteDays} ngày × {allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ</div>
-                        <div>• Nước uống: {allowances.calcSiteDays} ngày × {allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ</div>
-                      </div>
-                    )}
-
-                    {/* Phụ cấp trách nhiệm / Khác */}
                     {allowances.otherAllowance > 0 && (
                       <div className="flex justify-between font-semibold mt-2">
-                        <span className="text-slate-500">Phụ cấp trách nhiệm / Khác:</span>
+                        <span className="text-slate-500">Phụ cấp khác:</span>
                         <span className="text-slate-800">{Math.round(allowances.otherAllowance).toLocaleString("vi-VN")} đ</span>
                       </div>
                     )}
@@ -1341,6 +1607,112 @@ export default function IphoneClockinPage() {
                 <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-amber-400" /> Nghỉ</span>
                 <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-slate-300" /> Chưa chấm</span>
               </div>
+            </section>
+            <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black">Chấm công bù</h2>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Chỉ hiện các mốc đã qua, chưa chấm và chưa bị khóa.
+                  </p>
+                </div>
+                <button
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 disabled:opacity-50"
+                  disabled={uniqueMissingDays.length === 0}
+                  onClick={() => setCompOpen((current) => !current)}
+                  type="button"
+                >
+                  {compOpen ? "Ẩn bảng bù công" : "Mở bảng bù công"}
+                </button>
+              </div>
+              {compOpen ? (
+                <div className="mt-4">
+                  {uniqueMissingDays.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-400">
+                      Không còn mốc thiếu công hợp lệ để đăng ký bù.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200">
+                        <div
+                          className="grid min-w-[560px] bg-slate-50 text-xs font-bold text-slate-600"
+                          style={{ gridTemplateColumns: `80px repeat(${uniqueMissingDays.length}, 80px)` }}
+                        >
+                          <div className="border-b border-r border-slate-200 bg-white px-2 py-2">Mốc</div>
+                          {uniqueMissingDays.map((day) => (
+                            <div key={day.toISOString()} className="border-b border-r border-slate-200 px-1 py-2 text-center last:border-r-0">
+                              {day.getDate()}/{day.getMonth() + 1}
+                            </div>
+                          ))}
+                          {attendanceSlots.map((slot) => (
+                            <>
+                              <div key={`${slot}-label`} className="border-r border-slate-200 bg-white px-2 py-3 font-black text-slate-800">
+                                {slot}
+                              </div>
+                              {uniqueMissingDays.map((day) => {
+                                const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+                                const key = `${currentAccount.id}-${day.getDate()}-${slot}`;
+                                const kind = attendance[key];
+                                const isLocked = Boolean(lockedThroughDate && dateStr <= lockedThroughDate);
+                                const isChecked = selectedCompSlots.some((item) => item.date === dateStr && item.slot === slot);
+                                if (kind === "normal" || kind === "compensated") {
+                                  return <div key={`${dateStr}-${slot}`} className="flex items-center justify-center border-r border-t border-slate-200 bg-emerald-50 px-1 py-3 text-[11px] font-black text-emerald-600">Đã chấm</div>;
+                                }
+                                if (isLocked) {
+                                  return <div key={`${dateStr}-${slot}`} className="flex items-center justify-center border-r border-t border-slate-200 bg-amber-50 px-1 py-3 text-[11px] font-black text-amber-600">Khóa</div>;
+                                }
+                                return (
+                                  <button
+                                    key={`${dateStr}-${slot}`}
+                                    className={`border-r border-t border-slate-200 px-1 py-3 text-[11px] font-black ${isChecked ? "bg-orange-500 text-white" : "bg-white text-orange-600"}`}
+                                    onClick={() => {
+                                      setSelectedCompSlots((current) => (
+                                        isChecked
+                                          ? current.filter((item) => !(item.date === dateStr && item.slot === slot))
+                                          : [...current, { date: dateStr, slot }]
+                                      ));
+                                    }}
+                                    type="button"
+                                  >
+                                    {isChecked ? "Đã chọn" : "Chọn"}
+                                  </button>
+                                );
+                              })}
+                            </>
+                          ))}
+                        </div>
+                      </div>
+                      <textarea
+                        className="mt-3 min-h-[92px] w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-orange-400"
+                        onChange={(event) => setCompReason(event.target.value)}
+                        placeholder="Lý do chấm công bù"
+                        value={compReason}
+                      />
+                      <div className="mt-3 flex gap-3">
+                        <button
+                          className="h-11 flex-1 rounded-xl border border-slate-200 bg-white font-black text-slate-700"
+                          onClick={() => {
+                            setCompOpen(false);
+                            setCompReason("");
+                            setSelectedCompSlots([]);
+                          }}
+                          type="button"
+                        >
+                          Hủy
+                        </button>
+                        <button
+                          className="h-11 flex-1 rounded-xl bg-orange-500 font-black text-white disabled:opacity-60"
+                          disabled={selectedCompSlots.length === 0 || !compReason.trim() || submitting}
+                          onClick={() => void submitCompensations()}
+                          type="button"
+                        >
+                          Gửi chấm công bù
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : null}
             </section>
           </>
         )}
