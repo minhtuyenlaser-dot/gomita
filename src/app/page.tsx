@@ -117,6 +117,7 @@ export default function HomePage() {
   }, []);
 
   const [orders, setOrders] = useState<Order[]>(demoOrders);
+  const [warrantyTasks, setWarrantyTasks] = useState<any[]>([]);
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
   const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
@@ -264,6 +265,10 @@ export default function HomePage() {
             setOrders(data.orders);
             }
           }
+          if (data.warrantyTasks) {
+            markRemoteSnapshot("warrantyTasks", data.warrantyTasks);
+            setWarrantyTasks(data.warrantyTasks);
+          }
           if (data.overtimeRequests) {
             markRemoteSnapshot("overtimeRequests", data.overtimeRequests);
             setOvertimeRequests(data.overtimeRequests);
@@ -318,6 +323,11 @@ export default function HomePage() {
   }, []);
 
   // Tự động đồng bộ ngược lại backend trung tâm
+  useEffect(() => {
+    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("warrantyTasks", warrantyTasks)) return;
+    scheduleSync("warrantyTasks", warrantyTasks);
+  }, [warrantyTasks]);
+
   useEffect(() => {
     if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts) || shouldSkipDangerousEmptySync("accounts", accounts) || shouldSkipSuspiciousShrinkSync("accounts", accounts)) return;
     scheduleSync("accounts", accounts);
@@ -435,6 +445,8 @@ export default function HomePage() {
           currentAccountLevel={currentPosition.level}
           position={currentPosition} 
           orders={orders}
+          warrantyTasks={warrantyTasks}
+          onWarrantyTasksChange={setWarrantyTasks}
           setOrders={setOrders}
           overtimeRequests={overtimeRequests}
           compensationRequests={compensationRequests}
@@ -457,6 +469,7 @@ export default function HomePage() {
           leaveRequests={leaveRequests}
           onLeaveRequestsChange={setLeaveRequests}
           orders={orders}
+          warrantyTasks={warrantyTasks}
           workerAllowances={workerAllowances}
         />
       )}
@@ -466,6 +479,7 @@ export default function HomePage() {
           overtimeRequests={overtimeRequests} 
           attendance={attendance} 
           orders={orders}
+          warrantyTasks={warrantyTasks}
           workerAllowances={workerAllowances}
           onWorkerAllowancesChange={updateWorkerAllowances}
         />
@@ -503,6 +517,7 @@ export default function HomePage() {
           onDataRestored={(restoredData) => {
             if (restoredData.accounts) setAccounts(restoredData.accounts);
             if (restoredData.orders) setOrders(restoredData.orders);
+            if (restoredData.warrantyTasks) setWarrantyTasks(restoredData.warrantyTasks);
             if (restoredData.overtimeRequests) setOvertimeRequests(restoredData.overtimeRequests);
             if (restoredData.compensationRequests) setCompensationRequests(restoredData.compensationRequests);
             if (restoredData.leaveRequests) setLeaveRequests(restoredData.leaveRequests);

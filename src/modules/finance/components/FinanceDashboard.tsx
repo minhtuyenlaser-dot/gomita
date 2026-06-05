@@ -34,6 +34,7 @@ export function FinanceDashboard({
   customerDebts?: CustomerDebt[];
   onCustomerDebtsChange?: React.Dispatch<React.SetStateAction<CustomerDebt[]>>;
 }) {
+  const canExportFinance = ["accountant", "director"].includes(currentPosition?.id || "");
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id ?? "");
   const selectedOrder = useMemo(() => orders.find(o => o.id === selectedOrderId) ?? orders[0], [orders, selectedOrderId]);
   const [mainTab, setMainTab] = useState<"overview" | "efficiency" | "profit">("overview");
@@ -1130,6 +1131,7 @@ export function FinanceDashboard({
         </div>
       </div>
 
+      {canExportFinance ? (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -1162,6 +1164,7 @@ export function FinanceDashboard({
           </div>
         </div>
       </section>
+      ) : null}
 
       {mainTab === "efficiency" && (
         <section className="grid gap-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1435,7 +1438,7 @@ export function FinanceDashboard({
                       type="button"
                       onClick={() => exportOrderToExcel(selectedOrder, accounts, overtimeRequests, cashTransactions, orders)}
                       title="Tải toàn bộ dữ liệu đơn hàng (Excel)"
-                      className="flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
+                      className={canExportFinance ? "flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm" : "hidden"}
                     >
                       <Download className="h-3 w-3" />
                       Tải Excel

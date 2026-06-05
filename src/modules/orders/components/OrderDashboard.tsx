@@ -45,6 +45,7 @@ import {
   type OrderStep
 } from "../orderFlow";
 import { exportOrderToExcel as exportOrderToExcelShared } from "../excelExport";
+import type { WarrantyTask } from "@/lib/backend/types";
 
 type Notice = { type: "success" | "warning"; text: string };
 type WorkerAttendanceKind = "normal" | "compensated";
@@ -125,7 +126,9 @@ export function OrderDashboard({
   attendance = {},
   onAttendanceChange,
   isSyncing = false,
-  cashTransactions = []
+  cashTransactions = [],
+  warrantyTasks = [],
+  onWarrantyTasksChange
 }: { 
   accounts: UserAccount[]; 
   position: Position; 
@@ -141,6 +144,8 @@ export function OrderDashboard({
   onAttendanceChange: (att: Record<string, string>) => void;
   isSyncing?: boolean;
   cashTransactions?: any[];
+  warrantyTasks?: WarrantyTask[];
+  onWarrantyTasksChange?: React.Dispatch<React.SetStateAction<WarrantyTask[]>>;
 }) {
   const [showArchived, setShowArchived] = useState(false);
   const validAccountNames = useMemo(
@@ -165,6 +170,8 @@ export function OrderDashboard({
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [assignOrder, setAssignOrder] = useState<Order | null>(null);
   const [moveOrder, setMoveOrder] = useState<Order | null>(null);
+  const [warrantyOrder, setWarrantyOrder] = useState<Order | null>(null);
+  const [pricingOrder, setPricingOrder] = useState<Order | null>(null);
   const [showCanceled, setShowCanceled] = useState(false);
   const [draggingOrderId, setDraggingOrderId] = useState("");
   const [dragOverStep, setDragOverStep] = useState<OrderStep | null>(null);
@@ -328,6 +335,8 @@ export function OrderDashboard({
             isSyncing={isSyncing}
             cashTransactions={cashTransactions}
             orders={orders}
+            onOpenPricing={() => setPricingOrder(selectedOrder)}
+            onOpenWarranty={() => setWarrantyOrder(selectedOrder)}
           />
         ) : (
           <aside className="border-t border-slate-200 bg-white p-4 text-slate-500 xl:border-l xl:border-t-0">Chưa có đơn phù hợp với quyền.</aside>
@@ -437,6 +446,48 @@ export function OrderDashboard({
             moveSelected(patchedOrder);
           }}
           isSyncing={isSyncing}
+        />
+      ) : null}
+
+      {warrantyOrder ? (
+        <WarrantyTaskModal
+          order={warrantyOrder}
+          accounts={accounts}
+          currentUserName={currentUserName}
+          onClose={() => setWarrantyOrder(null)}
+          onSubmit={async (payload) => {
+            const response = await fetch("/api/warranty-tasks", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok || !result?.success) {
+              throw new Error(result?.error || "Không tạo được công việc bảo hành.");
+            }
+            onWarrantyTasksChange?.((current) => [result.task, ...current]);
+            setWarrantyOrder(null);
+            showNotice("success", `Đã giao việc bảo hành ${result.task?.code ?? ""}.`);
+          }}
+        />
+      ) : null}
+
+      {pricingOrder ? (
+        <PricingEditModal
+          order={pricingOrder}
+          positionId={position.id}
+          onClose={() => setPricingOrder(null)}
+          onSubmit={(quotationPatch) => {
+            updateOrder(pricingOrder.id, (current) => ({
+              ...current,
+              quotation: {
+                ...current.quotation,
+                ...quotationPatch
+              }
+            }));
+            setPricingOrder(null);
+            showNotice("success", `Đã cập nhật dự toán / báo giá cho ${pricingOrder.code}.`);
+          }}
         />
       ) : null}
     </section>
@@ -900,7 +951,9 @@ function OrderSidePanel({
   overtimeRequests = [],
   isSyncing = false,
   cashTransactions = [],
-  orders = []
+  orders = [],
+  onOpenPricing,
+  onOpenWarranty
 }: {
   accounts: UserAccount[];
   order: Order;
@@ -915,6 +968,8 @@ function OrderSidePanel({
   isSyncing?: boolean;
   cashTransactions?: any[];
   orders?: Order[];
+  onOpenPricing?: () => void;
+  onOpenWarranty?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
   const isSale = position.id === "sale";
@@ -941,6 +996,7 @@ function OrderSidePanel({
 
 
   const canPrice = canViewOrderPricing(position.id, currentUserName, order);
+  const canEditPricing = canPrice && (isSale || ["admin", "director", "sale_manager"].includes(position.id));
   const issues = getTransitionIssues(order);
   const canSupplement = (["sale", "designer"].includes(position.id) && getAssignedNames(order, position.id).includes(currentUserName)) || ["sale_manager", "design_manager", "director", "admin"].includes(position.id);
   const canHandle = canHandleCurrentStep(position.id, order);
@@ -962,9 +1018,9 @@ function OrderSidePanel({
           <h2 className="font-black">Chi tiết đơn hàng</h2>
           <button
             type="button"
-            onClick={exportOrderToExcel}
+            onClick={() => {}}
             title="Tải toàn bộ dữ liệu đơn hàng (Excel)"
-            className="flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
+            className="hidden"
           >
             <Download className="h-3 w-3" />
             Tải Excel
@@ -1003,7 +1059,7 @@ function OrderSidePanel({
         {activeTab === "Thông tin" ? (
           <div className="grid gap-4">
             <OrderInfo order={order} positionId={position.id} />
-            {canPrice && (
+            {false && canPrice && (
               <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3 grid gap-3">
                 <div className="font-bold text-slate-800 text-xs uppercase tracking-wide">Dự toán & Báo giá khách</div>
                 <NumberInput 
@@ -1039,6 +1095,27 @@ function OrderSidePanel({
                 )}
               </div>
             )}
+            {canPrice ? (
+              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3 grid gap-3">
+                <div className="font-bold text-slate-800 text-xs uppercase tracking-wide">Dự toán & Báo giá khách</div>
+                <InfoBlock label="Giá dự toán" value={`${order.quotation.estimateValue.toLocaleString("vi-VN")} đ`} />
+                <InfoBlock label="Giá báo khách" value={`${order.quotation.quoteValue.toLocaleString("vi-VN")} đ`} />
+                {isPricingLocked ? (
+                  <div className="text-[11px] text-red-600 font-bold bg-red-50 p-1.5 rounded border border-red-100">
+                    Báo giá / dự toán đã khóa. Quyền Sale không thể chỉnh sửa tiếp.
+                  </div>
+                ) : null}
+                {canEditPricing ? (
+                  <button
+                    type="button"
+                    onClick={onOpenPricing}
+                    className="min-h-10 rounded-lg border border-orange-200 bg-white px-3 text-xs font-black text-orange-600 hover:bg-orange-50"
+                  >
+                    Sửa dự toán / báo giá
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {canHandle && (
               <div className="mt-4 border-t border-slate-200 pt-4">
                 <div className="mb-2 font-black text-slate-800 text-sm">Nhập liệu & Checklist công việc</div>
@@ -1117,6 +1194,16 @@ function OrderSidePanel({
                 Giao việc
               </button>
             ) : null}
+            {["supervisor_lead", "director", "admin"].includes(position.id) ? (
+              <button
+                className="min-h-11 rounded-lg border border-violet-200 bg-violet-50 font-black text-violet-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400"
+                onClick={onOpenWarranty}
+                type="button"
+                disabled={isSyncing}
+              >
+                Bảo hành
+              </button>
+            ) : null}
             <button 
               className="min-h-11 rounded-lg border border-slate-200 font-bold disabled:bg-slate-100 disabled:text-slate-400" 
               onClick={() => onPatch({ finalNote: `${order.finalNote} (Đã tạo yêu cầu trả đơn/tách đơn)` })} 
@@ -1138,7 +1225,7 @@ function OrderSidePanel({
             {["accountant", "director", "admin"].includes(position.id) && order.step === "Hoàn công" && order.checklist.paymentCollected ? (
               <div className="grid gap-3">
                 <button 
-                  className="min-h-11 rounded-lg border border-green-500 bg-green-50 font-black text-green-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400" 
+                  className="hidden" 
                   onClick={() => exportOrderToExcelShared(order, accounts, overtimeRequests, cashTransactions)} 
                   type="button"
                   disabled={isSyncing}
@@ -1176,6 +1263,160 @@ function OrderInfo({ order, positionId }: { order: Order; positionId: string }) 
       <InfoBlock label="Ghi chú cuối" value={order.finalNote} />
       {!workerView ? <InfoBlock label="Khảo sát" value={`${order.survey.floor || "Chưa có"} · Cầu thang: ${order.survey.stairWidth || "Chưa có"} · Thang máy: ${order.survey.elevatorWidth || "Chưa có"} · Ô tô cách cửa: ${order.survey.carDistance || "Chưa có"}`} /> : null}
     </div>
+  );
+}
+
+function PricingEditModal({
+  order,
+  positionId,
+  onClose,
+  onSubmit
+}: {
+  order: Order;
+  positionId: string;
+  onClose: () => void;
+  onSubmit: (quotationPatch: Partial<Order["quotation"]>) => void;
+}) {
+  const [estimateValue, setEstimateValue] = useState(order.quotation.estimateValue || 0);
+  const [quoteValue, setQuoteValue] = useState(order.quotation.quoteValue || 0);
+  const canLockPricing = !((order.quotation.estimateEditCount ?? 0) >= 1 || (order.quotation.quoteEditCount ?? 0) >= 1) && ["sale", "sale_manager", "director", "admin"].includes(positionId);
+
+  return (
+    <Modal title={`Sửa dự toán / báo giá ${order.code}`} onClose={onClose}>
+      <div className="grid gap-3 text-slate-900">
+        <NumberInput label="Giá dự toán *" value={estimateValue} onChange={setEstimateValue} />
+        <NumberInput label="Giá báo khách *" value={quoteValue} onChange={setQuoteValue} />
+        <button
+          type="button"
+          onClick={() =>
+            onSubmit({
+              estimateValue,
+              quoteValue
+            })
+          }
+          className="min-h-11 rounded-lg bg-orange-500 font-black text-white disabled:bg-slate-300"
+          disabled={estimateValue <= 0 || quoteValue <= 0}
+        >
+          Lưu dự toán / báo giá
+        </button>
+        {canLockPricing ? (
+          <button
+            type="button"
+            onClick={() =>
+              onSubmit({
+                estimateValue,
+                quoteValue,
+                estimateEditCount: 1,
+                quoteEditCount: 1
+              })
+            }
+            className="min-h-11 rounded-lg border border-orange-200 bg-orange-50 font-black text-orange-700"
+            disabled={estimateValue <= 0 || quoteValue <= 0}
+          >
+            Lưu và khóa
+          </button>
+        ) : null}
+      </div>
+    </Modal>
+  );
+}
+
+function WarrantyTaskModal({
+  order,
+  accounts,
+  currentUserName,
+  onClose,
+  onSubmit
+}: {
+  order: Order;
+  accounts: UserAccount[];
+  currentUserName: string;
+  onClose: () => void;
+  onSubmit: (payload: {
+    customerName: string;
+    address: string;
+    supervisorName: string;
+    supervisorId: string;
+    assigneeId: string;
+    assigneeName: string;
+    assigneePositionId: string;
+    startAt: string;
+    note?: string;
+  }) => Promise<void>;
+}) {
+  const assignees = accounts.filter((account) => account.positionIds.some((positionId) => ["production_worker", "installer"].includes(positionId)));
+  const [assigneeId, setAssigneeId] = useState(assignees[0]?.id ?? "");
+  const [startAt, setStartAt] = useState(() => new Date().toISOString().slice(0, 16));
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const selectedAssignee = assignees.find((account) => account.id === assigneeId);
+
+  return (
+    <Modal title={`Giao việc bảo hành ${order.customerName}`} onClose={onClose}>
+      <div className="grid gap-3 text-slate-900">
+        <InfoBlock label="Khách hàng" value={order.customerName} />
+        <InfoBlock label="Địa chỉ" value={order.address} />
+        <label className="grid gap-2 text-sm font-bold text-slate-700">
+          Nhân sự thực hiện
+          <select
+            className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-bold outline-none focus:border-orange-400"
+            value={assigneeId}
+            onChange={(event) => setAssigneeId(event.target.value)}
+          >
+            {assignees.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.displayName} - {positions.find((position) => position.id === account.positionIds[0])?.name ?? account.positionIds[0]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-sm font-bold text-slate-700">
+          Thời gian bắt đầu
+          <input
+            type="datetime-local"
+            className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-bold outline-none focus:border-orange-400"
+            value={startAt}
+            onChange={(event) => setStartAt(event.target.value)}
+          />
+        </label>
+        <label className="grid gap-2 text-sm font-bold text-slate-700">
+          Ghi chú
+          <textarea
+            className="min-h-24 rounded-lg border border-slate-200 p-3 text-sm outline-none focus:border-orange-400"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Nội dung bảo hành cần thực hiện"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={!selectedAssignee || !startAt || submitting}
+          onClick={async () => {
+            if (!selectedAssignee) return;
+            setSubmitting(true);
+            try {
+              await onSubmit({
+                customerName: order.customerName,
+                address: order.address,
+                supervisorName: currentUserName,
+                supervisorId: "",
+                assigneeId: selectedAssignee.id,
+                assigneeName: selectedAssignee.displayName,
+                assigneePositionId: selectedAssignee.positionIds[0] ?? "",
+                startAt: new Date(startAt).toISOString(),
+                note: note.trim() || undefined
+              });
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          className="min-h-11 rounded-lg bg-violet-600 font-black text-white disabled:bg-slate-300"
+        >
+          Giao việc bảo hành
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1243,6 +1484,15 @@ function WorkflowChecks({
   }
 
   if (order.step === "Báo giá") {
+    return (
+      <div className="grid gap-3 text-slate-950">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+          Dự toán và báo giá được chỉnh bằng nút <span className="text-orange-600">Sửa dự toán / báo giá</span> ở phần thông tin đơn hàng.
+        </div>
+        <CheckItem label="Đã upload ảnh dự toán *" checked={order.quotation.estimatePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, estimatePhotoUploaded: checked } })} />
+        <CheckItem label="Đã upload ảnh báo giá *" checked={order.quotation.quotePhotoUploaded} onChange={(checked) => onPatch({ quotation: { ...order.quotation, quotePhotoUploaded: checked } })} />
+      </div>
+    );
     const accs = order.externalAccessories || Array.from({ length: 10 }, () => ({ name: "", sellPrice: 0, costPrice: 0, actualCost: 0 }));
     return (
       <div className="grid gap-3 text-slate-950">

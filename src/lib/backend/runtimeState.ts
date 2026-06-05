@@ -3,7 +3,7 @@ import type { LeaveRequest } from "@/modules/hr/leave";
 import { demoOrders, type Order } from "@/modules/orders/orderFlow";
 import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
 import { createSupabaseAdminClient } from "@/lib/backend/supabaseAdmin";
-import type { LegacyJsonSnapshot, NotificationSubscription } from "@/lib/backend/types";
+import type { LegacyJsonSnapshot, NotificationSubscription, WarrantyTask } from "@/lib/backend/types";
 import { sendWebPushNotification } from "@/lib/backend/webPush";
 import { canUseOvertime, positions } from "@/modules/hr/roles";
 import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
@@ -22,6 +22,7 @@ export function buildDefaultRuntimeState(): RuntimeState {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     accounts: demoAccounts,
     orders: demoOrders,
+    warrantyTasks: [],
     overtimeRequests: [],
     compensationRequests: [],
     leaveRequests: [],
@@ -478,6 +479,10 @@ function getAssignedOrdersForUser(state: RuntimeState, userId: string) {
   });
 }
 
+function getAssignedWarrantyTasksForUser(state: RuntimeState, userId: string) {
+  return (state.warrantyTasks || []).filter((task) => task.assigneeId === userId);
+}
+
 export async function buildMobileBootstrap(userId: string) {
   const state = await loadRuntimeState();
   const account = getAccountById(state, userId);
@@ -502,7 +507,8 @@ export async function buildMobileBootstrap(userId: string) {
     compensationRequests: (state.compensationRequests || []).filter((request: any) => request.employeeId === userId),
     overtimeRequests: (state.overtimeRequests || []).filter((request: any) => request.userId === userId),
     workerAllowances: state.workerAllowances || {},
-    orders: getAssignedOrdersForUser(state, userId)
+    orders: getAssignedOrdersForUser(state, userId),
+    warrantyTasks: getAssignedWarrantyTasksForUser(state, userId)
   };
 }
 
@@ -829,8 +835,21 @@ export async function createCompensationBatch(payload: {
   return requests;
 }
 
-export async function applyReportDone(payload: { orderCode: string; workerName: string }) {
+export async function applyReportDone(payload: { orderCode?: string; warrantyTaskId?: string; workerName: string }) {
   const state = await loadRuntimeState();
+  if (payload.warrantyTaskId) {
+    state.warrantyTasks = (state.warrantyTasks || []).map((task) =>
+      task.id === payload.warrantyTaskId
+        ? { ...task, status: "pending_confirmation" }
+        : task
+    );
+    await saveRuntimeState(state);
+    return state;
+  }
+
+  if (!payload.orderCode) {
+    throw new Error("Thiếu mã đơn hàng hoặc mã công việc bảo hành.");
+  }
   state.orders = state.orders.map((order) => {
     if (order.code !== payload.orderCode) return order;
 
@@ -849,6 +868,47 @@ export async function applyReportDone(payload: { orderCode: string; workerName: 
   });
   await saveRuntimeState(state);
   return state;
+}
+
+export async function createWarrantyTask(payload: {
+  customerName: string;
+  address: string;
+  assigneeId: string;
+  assigneeName: string;
+  assigneePositionId: string;
+  supervisorId: string;
+  supervisorName: string;
+  createdBy: string;
+  startAt: string;
+  note?: string;
+  orderId?: string;
+  orderCode?: string;
+}) {
+  const state = await loadRuntimeState();
+  const task: WarrantyTask = {
+    id: `warranty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    code: `BH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    customerName: payload.customerName,
+    address: payload.address,
+    orderId: payload.orderId,
+    orderCode: payload.orderCode,
+    supervisorId: payload.supervisorId,
+    supervisorName: payload.supervisorName,
+    assigneeId: payload.assigneeId,
+    assigneeName: payload.assigneeName,
+    assigneePositionId: payload.assigneePositionId,
+    startAt: payload.startAt,
+    createdAt: new Date().toISOString(),
+    createdBy: payload.createdBy,
+    note: payload.note?.trim() || "",
+    status: "assigned",
+    isFieldWork: true,
+    kind: "warranty_task"
+  };
+
+  state.warrantyTasks = [task, ...(state.warrantyTasks || [])];
+  await saveRuntimeState(state);
+  return { state, task };
 }
 
 export async function deleteRuntimeOrder(payload: { orderId: string }) {

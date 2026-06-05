@@ -8,6 +8,7 @@ import type { LeaveRequest, LeaveType } from "../leave";
 import { leaveStatusLabels, leaveTypeLabels } from "../leave";
 import { canUseOvertime, type Position } from "../roles";
 import type { Order } from "@/modules/orders/orderFlow";
+import type { WarrantyTask } from "@/lib/backend/types";
 import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
@@ -84,6 +85,7 @@ export function calculateUserAllowances(
   monthDays: Date[],
   attendance: Record<string, string>,
   orders: Order[],
+  warrantyTasks: WarrantyTask[],
   workerAllowances: Record<string, any>,
   isWorker: boolean
 ) {
@@ -167,7 +169,12 @@ export function calculateUserAllowances(
         return list;
       }, []);
 
-      if (matchedAssignments.length === 0) return;
+      const matchedWarrantyTasks = warrantyTasks.filter((task) => {
+        if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
+        return (task.startAt || "").slice(0, 10) === dateStr;
+      });
+
+      if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
 
       const isSiteFullDay = morningChecked && afternoonChecked;
       calcSiteDays += 1;
@@ -180,8 +187,14 @@ export function calculateUserAllowances(
         workedSlots: checkedCount,
         isFullDay: morningChecked && afternoonChecked,
         isSiteFullDay,
-        orders: Array.from(new Set(matchedAssignments.map((item) => item.code))),
-        steps: Array.from(new Set(matchedAssignments.map((item) => item.step)))
+        orders: Array.from(new Set([
+          ...matchedAssignments.map((item) => item.code),
+          ...matchedWarrantyTasks.map((item) => item.code)
+        ])),
+        steps: Array.from(new Set([
+          ...matchedAssignments.map((item) => item.step),
+          ...matchedWarrantyTasks.map(() => "Bảo hành")
+        ]))
       });
     });
   }
@@ -242,6 +255,7 @@ export function ProfileDashboard({
   leaveRequests = [],
   onLeaveRequestsChange,
   orders = [],
+  warrantyTasks = [],
   workerAllowances = {}
 }: { 
   account: UserAccount; 
@@ -254,6 +268,7 @@ export function ProfileDashboard({
   leaveRequests?: LeaveRequest[];
   onLeaveRequestsChange?: (requests: LeaveRequest[]) => void;
   orders?: Order[];
+  warrantyTasks?: WarrantyTask[];
   workerAllowances?: Record<string, any>;
 }) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
@@ -340,8 +355,8 @@ export function ProfileDashboard({
   const isWorker = ["production_worker", "installer"].includes(position.id);
 
   const allowances = useMemo(() => {
-    return calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances, isWorker);
-  }, [isWorker, account.id, account.displayName, monthDays, attendance, orders, workerAllowances]);
+    return calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, warrantyTasks, workerAllowances, isWorker);
+  }, [isWorker, account.id, account.displayName, monthDays, attendance, orders, warrantyTasks, workerAllowances]);
 
   const basePay = useMemo(() => {
     if (salaryType === "monthly") {
@@ -921,6 +936,7 @@ export function CompanyPayrollDashboard({
   overtimeRequests = [],
   attendance = {},
   orders = [],
+  warrantyTasks = [],
   workerAllowances = {},
   onWorkerAllowancesChange
 }: { 
@@ -928,6 +944,7 @@ export function CompanyPayrollDashboard({
   overtimeRequests?: any[]; 
   attendance?: Record<string, string>;
   orders?: Order[];
+  warrantyTasks?: WarrantyTask[];
   workerAllowances?: Record<string, any>;
   onWorkerAllowancesChange?: (allowances: Record<string, any>) => void;
 }) {
@@ -1015,7 +1032,7 @@ export function CompanyPayrollDashboard({
     const salaryValue = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);
     
     const isWorker = account.positionIds.some((id) => ["production_worker", "installer"].includes(id));
-    const allowances = calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances, isWorker);
+    const allowances = calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, warrantyTasks, workerAllowances, isWorker);
     
     const basePay = salaryType === "monthly"
       ? (maxWorkDays ? (salaryValue / maxWorkDays) * work : 0)

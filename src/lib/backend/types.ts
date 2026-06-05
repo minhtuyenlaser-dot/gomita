@@ -33,9 +33,31 @@ export type NotificationSubscription = {
   updatedAt: string;
 };
 
+export type WarrantyTask = {
+  id: string;
+  code: string;
+  customerName: string;
+  address: string;
+  orderId?: string;
+  orderCode?: string;
+  supervisorId: string;
+  supervisorName: string;
+  assigneeId: string;
+  assigneeName: string;
+  assigneePositionId: string;
+  startAt: string;
+  createdAt: string;
+  createdBy: string;
+  note?: string;
+  status: "assigned" | "working" | "pending_confirmation" | "completed";
+  isFieldWork: true;
+  kind: "warranty_task";
+};
+
 export type LegacyJsonSnapshot = {
   accounts: UserAccount[];
   orders: Order[];
+  warrantyTasks?: WarrantyTask[];
   overtimeRequests: any[];
   compensationRequests: any[];
   leaveRequests: LeaveRequest[];

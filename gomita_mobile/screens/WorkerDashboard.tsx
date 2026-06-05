@@ -158,6 +158,7 @@ const calculateUserAllowances = (
   monthDays: Date[],
   attendance: Record<string, string>,
   orders: any[],
+  warrantyTasks: any[],
   workerAllowances: Record<string, any>,
   isWorker: boolean
 ) => {
@@ -238,7 +239,12 @@ const calculateUserAllowances = (
         return list;
       }, []);
 
-      if (matchedAssignments.length === 0) return;
+      const matchedWarrantyTasks = warrantyTasks.filter((task: any) => {
+        if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
+        return (task.startAt || "").slice(0, 10) === dateStr;
+      });
+
+      if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
 
       const isSiteFullDay = morningChecked && afternoonChecked;
       calcSiteDays += 1;
@@ -251,8 +257,14 @@ const calculateUserAllowances = (
         workedSlots: checkedCount,
         isFullDay: morningChecked && afternoonChecked,
         isSiteFullDay,
-        orders: Array.from(new Set(matchedAssignments.map((item) => item.code))),
-        steps: Array.from(new Set(matchedAssignments.map((item) => item.step)))
+        orders: Array.from(new Set([
+          ...matchedAssignments.map((item) => item.code),
+          ...matchedWarrantyTasks.map((item: any) => item.code)
+        ])),
+        steps: Array.from(new Set([
+          ...matchedAssignments.map((item) => item.step),
+          ...matchedWarrantyTasks.map(() => "Bảo hành")
+        ]))
       });
     });
   }
@@ -749,10 +761,11 @@ export function WorkerDashboard({
       monthDays, 
       effectiveAttendance, 
       apiData?.orders || [], 
+      apiData?.warrantyTasks || [],
       apiData?.workerAllowances || {},
       isWorker
     );
-  }, [isWorker, user.id, user.displayName, monthDays, effectiveAttendance, apiData?.orders, apiData?.workerAllowances]);
+  }, [isWorker, user.id, user.displayName, monthDays, effectiveAttendance, apiData?.orders, apiData?.warrantyTasks, apiData?.workerAllowances]);
 
   const basePay = useMemo(() => {
     if (salaryType === "monthly") {
@@ -778,22 +791,27 @@ export function WorkerDashboard({
 
   // Lọc công việc đang được giao của thợ hôm nay
   const activeJobs = useMemo(() => {
-    if (!apiData || !apiData.orders) return [];
-    return apiData.orders.filter((order: any) => {
+    const orderJobs = (apiData?.orders || []).filter((order: any) => {
       return isUserAssignedToOrder(order, user) && order.workStatus === "working";
     });
+    const warrantyJobs = (apiData?.warrantyTasks || []).filter((task: any) =>
+      task.assigneeId === user.id && ["assigned", "working", "pending_confirmation"].includes(task.status)
+    );
+    return [...warrantyJobs, ...orderJobs];
   }, [apiData, user]);
 
   const assignedOrders = useMemo(() => {
-    if (!apiData || !apiData.orders) return [];
-    return apiData.orders.filter((order: any) => {
+    const orderJobs = (apiData?.orders || []).filter((order: any) => {
       return isUserAssignedToOrder(order, user);
     });
+    const warrantyJobs = (apiData?.warrantyTasks || []).filter((task: any) => task.assigneeId === user.id);
+    return [...warrantyJobs, ...orderJobs];
   }, [apiData, user]);
 
   useEffect(() => {
-    if (!selectedOrderCode && assignedOrders.length > 0) {
-      setSelectedOrderCode(assignedOrders[0].code || "");
+    const overtimeEligibleOrders = assignedOrders.filter((item: any) => item.kind !== "warranty_task");
+    if (!selectedOrderCode && overtimeEligibleOrders.length > 0) {
+      setSelectedOrderCode(overtimeEligibleOrders[0].code || "");
     }
   }, [assignedOrders, selectedOrderCode]);
 
@@ -1134,11 +1152,11 @@ export function WorkerDashboard({
 
     try {
       // Chụp ảnh selfie với tỉ lệ nén tối ưu (25%) để truyền tải dữ liệu nhanh và tiết kiệm dung lượng
-      const photo = await cameraRef.takePictureAsync({ quality: 0.4, base64: false, skipProcessing: true });
+      const photo = await cameraRef.takePictureAsync({ quality: 0.3, base64: false, skipProcessing: true });
       const compressedPhoto = await manipulateAsync(
         photo.uri,
-        [{ resize: { width: 960 } }],
-        { compress: 0.3, format: SaveFormat.JPEG, base64: true }
+        [{ resize: { width: 720 } }],
+        { compress: 0.2, format: SaveFormat.JPEG, base64: true }
       );
       
       // Gửi chấm công lên API Server
@@ -1481,10 +1499,17 @@ export function WorkerDashboard({
               const response = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  orderCode: job.code,
-                  workerName: user.displayName
-                })
+                body: JSON.stringify(
+                  job.kind === "warranty_task"
+                    ? {
+                        warrantyTaskId: job.id,
+                        workerName: user.displayName
+                      }
+                    : {
+                        orderCode: job.code,
+                        workerName: user.displayName
+                      }
+                )
               });
               const resJson = await response.json();
               if (resJson.success) {
@@ -1826,7 +1851,7 @@ export function WorkerDashboard({
               <Text style={styles.jobDetail}>Khách hàng: {job.customerName}</Text>
               <Text style={styles.jobDetail}>Địa chỉ: {job.address}</Text>
               <Text style={styles.jobDetail}>
-                Công việc: {job.step === "Sản xuất" ? "Sản xuất tủ" : job.step === "Bảo hành" ? "Bảo hành công trình" : "Lắp đặt nội thất"}
+                Công việc: {job.kind === "warranty_task" ? "Bảo hành công trình" : job.step === "Sản xuất" ? "Sản xuất tủ" : job.step === "Bảo hành" ? "Bảo hành công trình" : "Lắp đặt nội thất"}
               </Text>
 
               {/* Nút Hoàn thành Độc lập */}
@@ -2694,46 +2719,50 @@ const styles = StyleSheet.create({
     backgroundColor: "#071a38",
     zIndex: 200,
     justifyContent: "space-between",
-    padding: 24,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
   },
   cameraHeader: {
     alignItems: "center",
-    marginTop: 20,
+    marginTop: 6,
   },
   cameraHeaderText: {
     color: "#ffffff",
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "900",
   },
   cameraHeaderSub: {
     color: "#94a3b8",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "bold",
-    marginTop: 6,
+    marginTop: 4,
+    textAlign: "center",
   },
   cameraFrame: {
     flex: 1,
-    maxHeight: screenWidth * 1.1,
-    aspectRatio: 3/4,
-    borderRadius: 20,
+    maxHeight: screenWidth * 0.88,
+    aspectRatio: 3 / 4,
+    borderRadius: 16,
     overflow: "hidden",
     borderWidth: 3,
     borderColor: "#f97316",
     alignSelf: "center",
-    marginVertical: 20,
+    marginVertical: 12,
+    width: "100%",
   },
   cameraNative: {
     flex: 1,
   },
   cameraFooter: {
     alignItems: "center",
-    gap: 16,
-    marginBottom: 10,
+    gap: 12,
+    marginBottom: 0,
   },
   captureCircleBtn: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     borderWidth: 4,
     borderColor: "#ffffff",
     justifyContent: "center",
