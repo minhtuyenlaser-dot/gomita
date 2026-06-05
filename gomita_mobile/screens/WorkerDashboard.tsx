@@ -186,21 +186,21 @@ const calculateUserAllowances = (
   const key = `${userId}-${currentMonthStr}`;
   const overrides = workerAllowances[key] || {};
 
-  const siteDays = overrides.siteDays !== undefined ? overrides.siteDays : calcSiteDays;
-  const siteFullDays = overrides.siteFullDays !== undefined ? overrides.siteFullDays : calcSiteFullDays;
-  const fullDays = overrides.fullDays !== undefined ? overrides.fullDays : calcFullDays;
+  const mealAllowance = overrides.mealAllowanceOverride !== undefined 
+    ? overrides.mealAllowanceOverride 
+    : (calcFullDays * 30000);
 
-  // 4. Calculate allowance money
-  const mealAllowance = fullDays * 30000;
-  const siteAllowance = siteDays * 50000 + siteFullDays * 10000; // xăng xe 40k, nước 10k, ăn thêm 10k
+  const siteAllowance = overrides.siteAllowanceOverride !== undefined 
+    ? overrides.siteAllowanceOverride 
+    : (calcSiteDays * 50000 + calcSiteFullDays * 10000);
 
   return {
     calcFullDays,
     calcSiteDays,
     calcSiteFullDays,
-    siteDays,
-    siteFullDays,
-    fullDays,
+    siteDays: calcSiteDays,
+    siteFullDays: calcSiteFullDays,
+    fullDays: calcFullDays,
     mealAllowance,
     siteAllowance
   };

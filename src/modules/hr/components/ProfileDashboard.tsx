@@ -109,23 +109,25 @@ export function calculateUserAllowances(
   const key = `${userId}-${currentMonthStr}`;
   const overrides = workerAllowances[key] || {};
 
-  const siteDays = overrides.siteDays !== undefined ? overrides.siteDays : calcSiteDays;
-  const siteFullDays = overrides.siteFullDays !== undefined ? overrides.siteFullDays : calcSiteFullDays;
-  const fullDays = overrides.fullDays !== undefined ? overrides.fullDays : calcFullDays;
+  const mealAllowance = overrides.mealAllowanceOverride !== undefined 
+    ? overrides.mealAllowanceOverride 
+    : (calcFullDays * 30000);
 
-  // 4. Calculate allowance money
-  const mealAllowance = fullDays * 30000;
-  const siteAllowance = siteDays * 50000 + siteFullDays * 10000; // xăng xe 40k, nước 10k, ăn thêm 10k
+  const siteAllowance = overrides.siteAllowanceOverride !== undefined 
+    ? overrides.siteAllowanceOverride 
+    : (calcSiteDays * 50000 + calcSiteFullDays * 10000);
 
   return {
     calcFullDays,
     calcSiteDays,
     calcSiteFullDays,
-    siteDays,
-    siteFullDays,
-    fullDays,
+    fullDays: calcFullDays,
+    siteDays: calcSiteDays,
+    siteFullDays: calcSiteFullDays,
     mealAllowance,
-    siteAllowance
+    siteAllowance,
+    isMealOverridden: overrides.mealAllowanceOverride !== undefined,
+    isSiteOverridden: overrides.siteAllowanceOverride !== undefined
   };
 }
 
@@ -819,24 +821,28 @@ export function CompanyPayrollDashboard({
     calcFullDays: number;
     calcSiteDays: number;
     calcSiteFullDays: number;
-    siteDays: number;
-    siteFullDays: number;
-    fullDays: number;
+    mealAllowance: number;
+    siteAllowance: number;
+    isMealOverridden: boolean;
+    isSiteOverridden: boolean;
   } | null>(null);
 
-  const [siteDaysVal, setSiteDaysVal] = useState<number | "">("");
-  const [siteFullDaysVal, setSiteFullDaysVal] = useState<number | "">("");
-  const [fullDaysVal, setFullDaysVal] = useState<number | "">("");
+  const [mealAllowanceVal, setMealAllowanceVal] = useState<number | "">("");
+  const [siteAllowanceVal, setSiteAllowanceVal] = useState<number | "">("");
+  const [isMealEditable, setIsMealEditable] = useState<boolean>(false);
+  const [isSiteEditable, setIsSiteEditable] = useState<boolean>(false);
 
   useEffect(() => {
     if (editingItem) {
-      setSiteDaysVal(editingItem.siteDays);
-      setSiteFullDaysVal(editingItem.siteFullDays);
-      setFullDaysVal(editingItem.fullDays);
+      setMealAllowanceVal(editingItem.mealAllowance);
+      setSiteAllowanceVal(editingItem.siteAllowance);
+      setIsMealEditable(editingItem.isMealOverridden);
+      setIsSiteEditable(editingItem.isSiteOverridden);
     } else {
-      setSiteDaysVal("");
-      setSiteFullDaysVal("");
-      setFullDaysVal("");
+      setMealAllowanceVal("");
+      setSiteAllowanceVal("");
+      setIsMealEditable(false);
+      setIsSiteEditable(false);
     }
   }, [editingItem]);
 
@@ -966,9 +972,10 @@ export function CompanyPayrollDashboard({
                         calcFullDays: row.allowances.calcFullDays,
                         calcSiteDays: row.allowances.calcSiteDays,
                         calcSiteFullDays: row.allowances.calcSiteFullDays,
-                        siteDays: row.allowances.siteDays,
-                        siteFullDays: row.allowances.siteFullDays,
-                        fullDays: row.allowances.fullDays,
+                        mealAllowance: row.allowances.mealAllowance,
+                        siteAllowance: row.allowances.siteAllowance,
+                        isMealOverridden: row.allowances.isMealOverridden,
+                        isSiteOverridden: row.allowances.isSiteOverridden,
                       })}
                       className="rounded border border-orange-500 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-600 hover:bg-orange-100 transition animate-pulse"
                     >
@@ -998,58 +1005,92 @@ export function CompanyPayrollDashboard({
               <div>
                 <span className="text-xs font-bold text-slate-500 block mb-1">MỐC TỰ ĐỘNG (DỰA TRÊN CHẤM CÔNG & LOGS)</span>
                 <div className="rounded bg-slate-50 p-2 text-xs text-slate-600 leading-relaxed">
-                  • Ngày ăn trưa cả ngày (tự động): {editingItem.calcFullDays} ngày<br />
-                  • Ngày đi công trình (tự động): {editingItem.calcSiteDays} ngày<br />
-                  • Ngày công trình cả ngày (tự động): {editingItem.calcSiteFullDays} ngày
+                  • Ngày ăn trưa cả ngày: {editingItem.calcFullDays} ngày (Tự động: {Math.round(editingItem.calcFullDays * 30000).toLocaleString("vi-VN")} đ)<br />
+                  • Ngày đi công trình: {editingItem.calcSiteDays} ngày công trình, {editingItem.calcSiteFullDays} ngày cả ngày (Tự động: {Math.round(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000).toLocaleString("vi-VN")} đ)
                 </div>
               </div>
 
-              <label className="grid gap-1">
-                <span className="font-bold text-slate-700">Số ngày hưởng phụ cấp ăn trưa (30k/ngày)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={fullDaysVal}
-                  onChange={(e) => setFullDaysVal(e.target.value === "" ? "" : Number(e.target.value))}
-                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
-                  placeholder={`Mặc định: ${editingItem.calcFullDays}`}
-                />
-              </label>
+              <div className="grid gap-1">
+                <span className="font-bold text-slate-700">Tiền phụ cấp ăn trưa (VNĐ)</span>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    disabled={!isMealEditable}
+                    value={mealAllowanceVal}
+                    onChange={(e) => setMealAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
+                    className="flex-1 rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                    placeholder={`Mặc định: ${Math.round(editingItem.calcFullDays * 30000).toLocaleString("vi-VN")} đ`}
+                  />
+                  {!isMealEditable ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsMealEditable(true)}
+                      className="rounded border border-orange-500 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-600 hover:bg-orange-100 transition whitespace-nowrap"
+                    >
+                      Sửa
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMealEditable(false);
+                        setMealAllowanceVal(editingItem.calcFullDays * 30000);
+                      }}
+                      className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
+                    >
+                      Tự động
+                    </button>
+                  )}
+                </div>
+              </div>
 
-              <label className="grid gap-1">
-                <span className="font-bold text-slate-700">Số ngày đi công trình (50k/ngày xăng + nước)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={siteDaysVal}
-                  onChange={(e) => setSiteDaysVal(e.target.value === "" ? "" : Number(e.target.value))}
-                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
-                  placeholder={`Mặc định: ${editingItem.calcSiteDays}`}
-                />
-              </label>
-
-              <label className="grid gap-1">
-                <span className="font-bold text-slate-700">Số ngày công trình cả ngày (ăn thêm +10k/ngày)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={siteFullDaysVal}
-                  onChange={(e) => setSiteFullDaysVal(e.target.value === "" ? "" : Number(e.target.value))}
-                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
-                  placeholder={`Mặc định: ${editingItem.calcSiteFullDays}`}
-                />
-              </label>
+              <div className="grid gap-1">
+                <span className="font-bold text-slate-700">Tiền phụ cấp công trình (VNĐ)</span>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    disabled={!isSiteEditable}
+                    value={siteAllowanceVal}
+                    onChange={(e) => setSiteAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
+                    className="flex-1 rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                    placeholder={`Mặc định: ${Math.round(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000).toLocaleString("vi-VN")} đ`}
+                  />
+                  {!isSiteEditable ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsSiteEditable(true)}
+                      className="rounded border border-orange-500 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-600 hover:bg-orange-100 transition whitespace-nowrap"
+                    >
+                      Sửa
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSiteEditable(false);
+                        setSiteAllowanceVal(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000);
+                      }}
+                      className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
+                    >
+                      Tự động
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="mt-6 flex items-center justify-between gap-3 border-t pt-4">
               <button
+                type="button"
                 onClick={() => {
-                  setFullDaysVal(editingItem.calcFullDays);
-                  setSiteDaysVal(editingItem.calcSiteDays);
-                  setSiteFullDaysVal(editingItem.calcSiteFullDays);
+                  setMealAllowanceVal(editingItem.calcFullDays * 30000);
+                  setSiteAllowanceVal(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000);
+                  setIsMealEditable(false);
+                  setIsSiteEditable(false);
                 }}
                 className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
               >
@@ -1058,12 +1099,14 @@ export function CompanyPayrollDashboard({
               
               <div className="flex gap-2">
                 <button
+                  type="button"
                   onClick={() => setEditingItem(null)}
                   className="rounded border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition"
                 >
                   Hủy
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
                     const targetKey = `${editingItem.userId}-${currentMonthStr}`;
@@ -1071,9 +1114,8 @@ export function CompanyPayrollDashboard({
                     const nextAllowances = {
                       ...workerAllowances,
                       [targetKey]: {
-                        fullDays: fullDaysVal === "" ? undefined : fullDaysVal,
-                        siteDays: siteDaysVal === "" ? undefined : siteDaysVal,
-                        siteFullDays: siteFullDaysVal === "" ? undefined : siteFullDaysVal,
+                        mealAllowanceOverride: isMealEditable && mealAllowanceVal !== "" ? Number(mealAllowanceVal) : undefined,
+                        siteAllowanceOverride: isSiteEditable && siteAllowanceVal !== "" ? Number(siteAllowanceVal) : undefined,
                       }
                     };
                     onWorkerAllowancesChange?.(nextAllowances);
