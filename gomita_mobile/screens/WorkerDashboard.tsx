@@ -40,6 +40,172 @@ const overtimeHiddenPositionIds = [
   "workshop_manager"
 ];
 
+const isStepMatchingUserPosition = (step: string, positionIds: string[]) => {
+  const normalized = positionIds.map(p => p.trim().toLowerCase());
+  if (normalized.includes("admin") || normalized.includes("director")) return true;
+
+  if (["Tiếp nhận", "Báo giá", "Hoàn công"].includes(step)) {
+    return normalized.includes("sale") || normalized.includes("sale_manager");
+  }
+  if (step === "Thiết kế") {
+    return normalized.includes("designer") || normalized.includes("design_manager");
+  }
+  if (step === "Ra file") {
+    return normalized.includes("file_operator") || normalized.includes("workshop_manager");
+  }
+  if (step === "Sản xuất") {
+    return normalized.includes("production_worker") || normalized.includes("workshop_manager");
+  }
+  if (["Lắp đặt", "Nghiệm thu"].includes(step)) {
+    return normalized.includes("installer") || normalized.includes("supervisor_lead") || normalized.includes("site_supervisor");
+  }
+  return false;
+};
+
+const isUserAssignedToOrder = (order: any, user: any) => {
+  const userPos = user.positionIds || [];
+  const name = user.displayName;
+  const isStepMatched = isStepMatchingUserPosition(order.step, userPos);
+  if (!isStepMatched) return false;
+
+  if (order.step === "Sản xuất") {
+    return (order.productionWorkerNames || []).includes(name) || order.productionWorkerName === name;
+  }
+  if (order.step === "Lắp đặt") {
+    return (order.installerNames || []).includes(name) || order.installerName === name;
+  }
+  if (order.step === "Thiết kế") {
+    return (order.designerNames || []).includes(name) || order.designerName === name;
+  }
+  if (order.step === "Ra file") {
+    return (order.fileOperatorNames || []).includes(name) || order.fileOperatorName === name;
+  }
+  if (["Tiếp nhận", "Báo giá", "Hoàn công"].includes(order.step)) {
+    const sales = order.saleName ? order.saleName.split(",").map((s: any) => s.trim()) : [];
+    return sales.includes(name);
+  }
+  if (order.step === "Nghiệm thu") {
+    return (order.supervisorNames || []).includes(name) || order.supervisorName === name;
+  }
+  return false;
+};
+
+const calculateUserAllowances = (
+  userId: string,
+  displayName: string,
+  monthDays: Date[],
+  attendance: Record<string, string>,
+  orders: any[],
+  workerAllowances: Record<string, any>
+) => {
+  const now = new Date();
+  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  // 1. Calculate calcFullDays
+  let calcFullDays = 0;
+  monthDays.forEach((day) => {
+    const dayNum = day.getDate();
+    let morningChecked = false;
+    let afternoonChecked = false;
+    
+    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+    slotsForDay.forEach((slot) => {
+      const key = `${userId}-${dayNum}-${slot}`;
+      if (attendance[key] === "normal" || attendance[key] === "compensated") {
+        if (slot === "07:30" || slot === "11:30") morningChecked = true;
+        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+      }
+    });
+
+    if (morningChecked && afternoonChecked) {
+      calcFullDays += 1;
+    }
+  });
+
+  // 2. Calculate calcSiteDays and calcSiteFullDays
+  let calcSiteDays = 0;
+  let calcSiteFullDays = 0;
+
+  monthDays.forEach((day) => {
+    const dayNum = day.getDate();
+    const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+
+    // Has user clocked in at all on this day?
+    let checkedCount = 0;
+    let morningChecked = false;
+    let afternoonChecked = false;
+    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+    slotsForDay.forEach((slot) => {
+      const key = `${userId}-${dayNum}-${slot}`;
+      if (attendance[key] === "normal" || attendance[key] === "compensated") {
+        checkedCount++;
+        if (slot === "07:30" || slot === "11:30") morningChecked = true;
+        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+      }
+    });
+
+    if (checkedCount === 0) return; // Didn't work today
+
+    // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
+    const hasSiteJob = orders.some((order) => {
+      if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
+        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+        const isAssigned = assignees.includes(displayName);
+        if (isAssigned && order.assignedInstallerDate === dateStr) {
+          return true;
+        }
+      }
+
+      return (order.historyLogs || []).some((log: any) => {
+        const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
+        if (!isLắpĐặt) return false;
+
+        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+        const logAssignees = log.assignee ? [log.assignee] : [];
+        const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
+        if (!finalAssignees.includes(displayName)) return false;
+
+        const start = log.acceptedAt || log.startedAt;
+        if (!start) return false;
+        const startDateText = start.substring(0, 10);
+        const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
+
+        return dateStr >= startDateText && dateStr <= endDateText;
+      });
+    });
+
+    if (hasSiteJob) {
+      calcSiteDays += 1;
+      if (morningChecked && afternoonChecked) {
+        calcSiteFullDays += 1;
+      }
+    }
+  });
+
+  // 3. Read overrides from workerAllowances
+  const key = `${userId}-${currentMonthStr}`;
+  const overrides = workerAllowances[key] || {};
+
+  const siteDays = overrides.siteDays !== undefined ? overrides.siteDays : calcSiteDays;
+  const siteFullDays = overrides.siteFullDays !== undefined ? overrides.siteFullDays : calcSiteFullDays;
+  const fullDays = overrides.fullDays !== undefined ? overrides.fullDays : calcFullDays;
+
+  // 4. Calculate allowance money
+  const mealAllowance = fullDays * 30000;
+  const siteAllowance = siteDays * 50000 + siteFullDays * 10000; // xăng xe 40k, nước 10k, ăn thêm 10k
+
+  return {
+    calcFullDays,
+    calcSiteDays,
+    calcSiteFullDays,
+    siteDays,
+    siteFullDays,
+    fullDays,
+    mealAllowance,
+    siteAllowance
+  };
+};
+
 export function WorkerDashboard({ 
   user, 
   serverIp, 
@@ -75,6 +241,20 @@ export function WorkerDashboard({
   // Đồng hồ thời gian thực di động
   const [currentTime, setCurrentTime] = useState("");
   const [currentDate, setCurrentDate] = useState("");
+
+  // Lấy mốc giờ chấm công hiện tại
+  const currentSlot = useMemo(() => {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMin = now.getMinutes();
+    const currentVal = currentHour * 60 + currentMin;
+
+    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return "07:30";
+    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return "11:30";
+    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return "13:30";
+    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return "17:30";
+    return "07:30"; // Mặc định hiển thị mốc 07:30 nếu ngoài giờ
+  }, [currentTime]);
 
   // Trạng thái Chấm công bù di động
   const [compOpen, setCompOpen] = useState(false);
@@ -358,11 +538,7 @@ export function WorkerDashboard({
     async function requestPermissions() {
       const cameraStatus = await ExpoCamera.requestCameraPermissionsAsync();
       setCameraPermission(cameraStatus.status === "granted");
-      if (ExpoCamera.Constants?.Type?.front) {
-        setCameraType(ExpoCamera.Constants.Type.front);
-      } else {
-        setCameraType("front");
-      }
+      setCameraType("front");
 
       const locationStatus = await Location.requestForegroundPermissionsAsync();
       setLocationPermission(locationStatus.status === "granted");
@@ -388,19 +564,7 @@ export function WorkerDashboard({
     return () => clearInterval(interval);
   }, []);
 
-  // Lấy mốc giờ chấm công hiện tại
-  const currentSlot = useMemo(() => {
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMin = now.getMinutes();
-    const currentVal = currentHour * 60 + currentMin;
 
-    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return "07:30";
-    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return "11:30";
-    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return "13:30";
-    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return "17:30";
-    return "07:30"; // Mặc định hiển thị mốc 07:30 nếu ngoài giờ
-  }, [currentTime]);
 
   const todayDateString = useMemo(() => {
     const now = new Date();
@@ -481,33 +645,55 @@ export function WorkerDashboard({
   const salaryType = user.salaryType ?? "daily";
   const salaryValue = user.salaryValue ?? (user.positionIds.includes("hr") ? 420000 : user.positionIds.includes("accountant") ? 400000 : 350000);
 
-  const estimatedIncome = useMemo(() => {
+  const isWorker = useMemo(() => {
+    return (user.positionIds || []).some((p: string) => ["production_worker", "installer"].includes(p));
+  }, [user.positionIds]);
+
+  const allowances = useMemo(() => {
+    if (!isWorker) return { siteDays: 0, siteFullDays: 0, fullDays: 0, mealAllowance: 0, siteAllowance: 0 };
+    return calculateUserAllowances(
+      user.id, 
+      user.displayName, 
+      monthDays, 
+      effectiveAttendance, 
+      apiData?.orders || [], 
+      apiData?.workerAllowances || {}
+    );
+  }, [isWorker, user.id, user.displayName, monthDays, effectiveAttendance, apiData?.orders, apiData?.workerAllowances]);
+
+  const basePay = useMemo(() => {
     if (salaryType === "monthly") {
       return maxWorkDays ? (salaryValue / maxWorkDays) * workDays : 0;
     }
-    const base = workDays * salaryValue;
-    const otPay = otHours * 1.5 * (salaryValue / 8);
-    return base + otPay;
-  }, [salaryType, salaryValue, workDays, otHours, maxWorkDays]);
+    return workDays * salaryValue;
+  }, [salaryType, salaryValue, workDays, maxWorkDays]);
+
+  const otPay = useMemo(() => {
+    return otHours * 1.5 * (salaryValue / 8);
+  }, [otHours, salaryValue]);
+
+  const estimatedIncome = useMemo(() => {
+    let total = basePay + otPay;
+    if (isWorker) {
+      total += allowances.mealAllowance + allowances.siteAllowance;
+    }
+    return total;
+  }, [basePay, otPay, isWorker, allowances]);
 
   // Lọc công việc đang được giao của thợ hôm nay
   const activeJobs = useMemo(() => {
     if (!apiData || !apiData.orders) return [];
     return apiData.orders.filter((order: any) => {
-      // Thợ phải nằm trong danh sách được giao phó
-      const isAssigned = (order.installerNames && order.installerNames.includes(user.displayName)) ||
-                         (order.productionWorkerNames && order.productionWorkerNames.includes(user.displayName));
-      return isAssigned && order.workStatus === "working";
+      return isUserAssignedToOrder(order, user) && order.workStatus === "working";
     });
-  }, [apiData, user.displayName]);
+  }, [apiData, user]);
 
   const assignedOrders = useMemo(() => {
     if (!apiData || !apiData.orders) return [];
     return apiData.orders.filter((order: any) => {
-      return (Array.isArray(order.installerNames) && order.installerNames.includes(user.displayName)) ||
-        (Array.isArray(order.productionWorkerNames) && order.productionWorkerNames.includes(user.displayName));
+      return isUserAssignedToOrder(order, user);
     });
-  }, [apiData, user.displayName]);
+  }, [apiData, user]);
 
   useEffect(() => {
     if (!selectedOrderCode && assignedOrders.length > 0) {
@@ -650,15 +836,111 @@ export function WorkerDashboard({
       return;
     }
 
-    // Lọc các đơn đang làm thực tế
-    if (activeJobs.length > 0) {
-      // Có việc chưa báo hoàn thành -> Hỏi thông minh!
-      setActiveJobToReport(activeJobs[0]);
-      setAskModalOpen(true);
-    } else {
-      // Không có việc đang làm -> Đi thẳng vào Chụp ảnh + GPS
-      await startCameraAndGps();
+    const assignedOrders = (apiData?.orders || []).filter((order: any) => {
+      return isUserAssignedToOrder(order, user);
+    });
+
+    const unconfirmedJobs = assignedOrders.filter((o: any) => o.workStatus === "unconfirmed");
+    const workingJobs = assignedOrders.filter((o: any) => o.workStatus === "working");
+
+    let needSync = false;
+    let nextOrders = [...(apiData?.orders || [])];
+
+    const askUnconfirmed = async (index: number): Promise<void> => {
+      if (index >= unconfirmedJobs.length) return;
+      const job = unconfirmedJobs[index];
+      return new Promise<void>((resolve) => {
+        Alert.alert(
+          "Tiếp nhận công việc",
+          `Bạn có muốn tiếp nhận việc cho đơn hàng ${job.code} không?`,
+          [
+            {
+              text: "Không",
+              onPress: () => resolve(askUnconfirmed(index + 1))
+            },
+            {
+              text: "Có",
+              onPress: () => {
+                needSync = true;
+                const nowStr = new Date().toISOString();
+                nextOrders = nextOrders.map((o: any) => {
+                  if (o.id !== job.id) return o;
+                  const updatedLogs = (o.historyLogs || []).map((log: any) => 
+                    log.step === o.step ? { ...log, acceptedAt: nowStr } : log
+                  );
+                  return {
+                    ...o,
+                    workStatus: "working",
+                    historyLogs: updatedLogs
+                  };
+                });
+                resolve(askUnconfirmed(index + 1));
+              }
+            }
+          ]
+        );
+      });
+    };
+
+    const askWorking = async (index: number): Promise<void> => {
+      if (index >= workingJobs.length) return;
+      const job = workingJobs[index];
+      return new Promise<void>((resolve) => {
+        Alert.alert(
+          "Hoàn thành công việc",
+          `Bạn đã hoàn thành công việc của đơn hàng ${job.code} chưa?`,
+          [
+            {
+              text: "Chưa",
+              onPress: () => resolve(askWorking(index + 1))
+            },
+            {
+              text: "Rồi",
+              onPress: () => {
+                needSync = true;
+                const nowStr = new Date().toISOString();
+                nextOrders = nextOrders.map((o: any) => {
+                  if (o.id !== job.id) return o;
+                  const updatedLogs = (o.historyLogs || []).map((log: any) => 
+                    log.step === o.step ? { ...log, completedAt: log.completedAt || nowStr } : log
+                  );
+                  return {
+                    ...o,
+                    workStatus: "pending_confirmation",
+                    progressPercent: 100,
+                    historyLogs: updatedLogs
+                  };
+                });
+                resolve(askWorking(index + 1));
+              }
+            }
+          ]
+        );
+      });
+    };
+
+    await askUnconfirmed(0);
+    await askWorking(0);
+
+    if (needSync) {
+      setLoading(true);
+      try {
+        const response = await fetch(getApiUrl(serverIp, "/api/sync"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orders: nextOrders })
+        });
+        if (response.ok) {
+          await onRefresh();
+        }
+      } catch (err) {
+        console.warn("Lỗi đồng bộ nhận/hoàn thành việc:", err);
+      } finally {
+        setLoading(false);
+      }
     }
+
+    await startCameraAndGps();
   };
 
   const startCameraAndGps = async () => {
@@ -1243,6 +1525,29 @@ export function WorkerDashboard({
           <Text style={styles.salaryHelp}>
             {salaryType === "monthly" ? "Lương tháng cố định" : "Cập nhật tăng tiền ngay lập tức khi chấm công thành công"}
           </Text>
+
+          <View style={styles.breakdownContainer}>
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Lương chính ({workDays} ngày):</Text>
+              <Text style={styles.breakdownValue}>{Math.round(basePay).toLocaleString("vi-VN")} đ</Text>
+            </View>
+            {isWorker && (
+              <>
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>Phụ cấp ăn ({allowances.fullDays} ngày):</Text>
+                  <Text style={styles.breakdownValue}>{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</Text>
+                </View>
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>Phụ cấp công trình ({allowances.siteDays} ngày):</Text>
+                  <Text style={styles.breakdownValue}>{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</Text>
+                </View>
+              </>
+            )}
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Tăng ca ({otHours} giờ):</Text>
+              <Text style={styles.breakdownValue}>{Math.round(otPay).toLocaleString("vi-VN")} đ</Text>
+            </View>
+          </View>
 
           <View style={styles.salaryMetrics}>
             <View style={styles.metricItem}>
@@ -1919,6 +2224,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
+  legendLabel: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: "700",
+  },
   dot: {
     width: 10,
     height: 10,
@@ -2049,7 +2359,10 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     position: "absolute",
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: "rgba(0, 0, 0, 0.6)",
     justifyContent: "center",
     alignItems: "center",
@@ -2189,7 +2502,10 @@ const styles = StyleSheet.create({
   },
   cameraOverlay: {
     position: "absolute",
-    inset: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: "#071a38",
     zIndex: 200,
     justifyContent: "space-between",
@@ -2493,5 +2809,30 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 13,
     fontWeight: "900",
+  },
+  breakdownContainer: {
+    width: "100%",
+    backgroundColor: "#0b2041",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e3a66",
+    padding: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+  breakdownRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  breakdownLabel: {
+    fontSize: 12,
+    color: "#94a3b8",
+    fontWeight: "600",
+  },
+  breakdownValue: {
+    fontSize: 12,
+    color: "#f8fafc",
+    fontWeight: "700",
   }
 });

@@ -11,6 +11,7 @@ type RuntimeData = {
   attendance?: Record<string, string>;
   holidayDates?: string[];
   usernameDirectory?: Array<{ id: string; username: string }>;
+  orders?: any[];
 };
 
 const sessionStorageKey = "gomita_iphone_web_session_v1";
@@ -27,6 +28,7 @@ export default function IphoneClockinPage() {
   const [usernameDirectory, setUsernameDirectory] = useState<Array<{ id: string; username: string }>>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [currentAccount, setCurrentAccount] = useState<UserAccount | null>(null);
@@ -73,6 +75,7 @@ export default function IphoneClockinPage() {
     setAttendance(data.attendance || {});
     setHolidayDates(Array.isArray(data.holidayDates) ? data.holidayDates : []);
     setUsernameDirectory(Array.isArray(data.usernameDirectory) ? data.usernameDirectory : []);
+    setOrders(data.orders || []);
     if (data.account) {
       setCurrentAccount(data.account);
     }
@@ -466,6 +469,122 @@ export default function IphoneClockinPage() {
     }
   }
 
+  async function handleClockInButtonClick() {
+    if (!currentAccount) return;
+
+    const isStepMatchingUserPosition = (step: string, positionIds: string[]) => {
+      const normalized = positionIds.map(p => p.trim().toLowerCase());
+      if (normalized.includes("admin") || normalized.includes("director")) return true;
+
+      if (["Tiếp nhận", "Báo giá", "Hoàn công"].includes(step)) {
+        return normalized.includes("sale") || normalized.includes("sale_manager");
+      }
+      if (step === "Thiết kế") {
+        return normalized.includes("designer") || normalized.includes("design_manager");
+      }
+      if (step === "Ra file") {
+        return normalized.includes("file_operator") || normalized.includes("workshop_manager");
+      }
+      if (step === "Sản xuất") {
+        return normalized.includes("production_worker") || normalized.includes("workshop_manager");
+      }
+      if (["Lắp đặt", "Nghiệm thu"].includes(step)) {
+        return normalized.includes("installer") || normalized.includes("supervisor_lead") || normalized.includes("site_supervisor");
+      }
+      return false;
+    };
+
+    const isUserAssignedToCurrentStep = (order: any, userDisplayName: string, userPositionIds: string[]) => {
+      if (!isStepMatchingUserPosition(order.step, userPositionIds)) return false;
+
+      let stepAssignees: string[] = [];
+      if (["Tiếp nhận", "Báo giá", "Hoàn công"].includes(order.step)) {
+        stepAssignees = order.saleName ? order.saleName.split(",").map((s: string) => s.trim()).filter(Boolean) : [];
+      } else if (order.step === "Thiết kế") {
+        stepAssignees = ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
+      } else if (order.step === "Ra file") {
+        stepAssignees = ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
+      } else if (order.step === "Sản xuất") {
+        stepAssignees = ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
+      } else if (order.step === "Lắp đặt") {
+        stepAssignees = ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
+      } else if (order.step === "Nghiệm thu") {
+        stepAssignees = ((order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName]) as string[]).filter(Boolean);
+      }
+      return stepAssignees.includes(userDisplayName);
+    };
+
+    const assignedOrders = orders.filter(order => isUserAssignedToCurrentStep(order, currentAccount.displayName, currentAccount.positionIds || []));
+    const unconfirmedJobs = assignedOrders.filter(order => order.workStatus === "unconfirmed");
+    const workingJobs = assignedOrders.filter(order => order.workStatus === "working");
+
+    let needSync = false;
+    let nextOrders = [...orders];
+
+    for (const job of unconfirmedJobs) {
+      const accept = window.confirm(`Bạn có muốn nhận việc đơn hàng ${job.code} không?`);
+      if (accept) {
+        needSync = true;
+        const nowStr = new Date().toISOString();
+        nextOrders = nextOrders.map(o => {
+          if (o.id !== job.id) return o;
+          const updatedLogs = (o.historyLogs || []).map((log: any) => 
+            log.step === o.step ? { ...log, acceptedAt: nowStr } : log
+          );
+          return {
+            ...o,
+            workStatus: "working",
+            historyLogs: updatedLogs
+          };
+        });
+      }
+    }
+
+    for (const job of workingJobs) {
+      const completed = window.confirm(`Bạn đã hoàn thành đơn hàng ${job.code} chưa?`);
+      if (completed) {
+        needSync = true;
+        const nowStr = new Date().toISOString();
+        nextOrders = nextOrders.map(o => {
+          if (o.id !== job.id) return o;
+          const updatedLogs = (o.historyLogs || []).map((log: any) => 
+            log.step === o.step ? { ...log, completedAt: log.completedAt || nowStr } : log
+          );
+          return {
+            ...o,
+            workStatus: "pending_confirmation",
+            progressPercent: 100,
+            historyLogs: updatedLogs
+          };
+        });
+      }
+    }
+
+    if (needSync) {
+      setSubmitting(true);
+      setMessage("Đang cập nhật trạng thái đơn hàng...");
+      try {
+        const response = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orders: nextOrders })
+        });
+        if (response.ok) {
+          setOrders(nextOrders);
+          setMessage("Đã cập nhật trạng thái đơn hàng thành công.");
+        } else {
+          setMessage("Không đồng bộ được trạng thái đơn hàng.");
+        }
+      } catch (err) {
+        setMessage("Lỗi kết nối khi cập nhật đơn hàng.");
+      } finally {
+        setSubmitting(false);
+      }
+    }
+
+    fileInputRef.current?.click();
+  }
+
   const todayStatusText = useMemo(() => {
     if (!currentAccount) return "Chưa đăng nhập";
     return attendanceSlots
@@ -675,7 +794,7 @@ export default function IphoneClockinPage() {
                 <button
                   className="mt-2 flex h-12 w-full items-center justify-center rounded-xl bg-orange-500 px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={submitting || isHoliday || !activeSlot}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={handleClockInButtonClick}
                   type="button"
                 >
                   {submitting ? "Đang gửi chấm công..." : "Chụp ảnh chấm công"}

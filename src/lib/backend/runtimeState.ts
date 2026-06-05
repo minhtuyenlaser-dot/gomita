@@ -32,8 +32,44 @@ export function buildDefaultRuntimeState(): RuntimeState {
     attendanceDetails: {},
     attendanceCompensationState: {},
     feedbackEntries: [],
-    pushSubscriptions: []
+    pushSubscriptions: [],
+    workerAllowances: {}
   };
+}
+
+export function getLocalTodayDateString(): string {
+  const d = new Date();
+  const utc = d.getTime() + d.getTimezoneOffset() * 60000;
+  const localTime = new Date(utc + 3600000 * 7); // UTC+7
+  const dd = String(localTime.getDate()).padStart(2, "0");
+  const mm = String(localTime.getMonth() + 1).padStart(2, "0");
+  const yyyy = localTime.getFullYear();
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export function resetOutdatedInstallerAssignments(orders: Order[]): { updatedOrders: Order[]; changed: boolean } {
+  const todayStr = getLocalTodayDateString();
+  let changed = false;
+  const nextOrders = orders.map((order) => {
+    const hasInstaller = (order.installerNames && order.installerNames.length > 0) || order.installerName;
+    if (
+      ["Lắp đặt", "Nghiệm thu"].includes(order.step) &&
+      hasInstaller &&
+      order.assignedInstallerDate &&
+      order.assignedInstallerDate !== todayStr
+    ) {
+      changed = true;
+      return {
+        ...order,
+        installerName: "",
+        installerNames: [],
+        assignedInstallerDate: undefined,
+        workStatus: "unconfirmed" as const
+      };
+    }
+    return order;
+  });
+  return { updatedOrders: nextOrders, changed };
 }
 
 function mergeState(base: RuntimeState, patch: RuntimePatch): RuntimeState {
@@ -57,6 +93,23 @@ function mergeState(base: RuntimeState, patch: RuntimePatch): RuntimeState {
 
   if (Array.isArray(patch.orders) && isSuspiciousCollectionShrink(base.orders, patch.orders, (item) => item.id || item.code)) {
     nextState.orders = base.orders;
+  }
+
+  if (patch.orders) {
+    const todayStr = getLocalTodayDateString();
+    nextState.orders = patch.orders.map(o => {
+      const baseOrder = base.orders.find(bo => bo.id === o.id);
+      const installerNamesChanged = baseOrder
+        ? JSON.stringify(baseOrder.installerNames || []) !== JSON.stringify(o.installerNames || [])
+        : (o.installerNames || []).length > 0;
+      if (installerNamesChanged && (o.installerNames || []).length > 0) {
+        return {
+          ...o,
+          assignedInstallerDate: todayStr
+        };
+      }
+      return o;
+    });
   }
 
   return nextState;
@@ -254,7 +307,15 @@ export async function loadRuntimeState(): Promise<RuntimeState> {
 
   const base = buildDefaultRuntimeState();
   const state = (data?.state ?? {}) as Partial<RuntimeState>;
-  return mergeState(base, state);
+  const merged = mergeState(base, state);
+
+  // Reset outdated installer assignments daily
+  const { updatedOrders, changed } = resetOutdatedInstallerAssignments(merged.orders);
+  if (changed) {
+    merged.orders = updatedOrders;
+    void saveRuntimeState(merged);
+  }
+  return merged;
 }
 
 export async function saveRuntimeState(state: RuntimeState) {
@@ -587,10 +648,25 @@ export async function applyClockIn(payload: {
   if (payload.orderCode) {
     state.orders = state.orders.map((order) => {
       if (order.code !== payload.orderCode) return order;
+
+      let updatedLogs = order.historyLogs || [];
+      if (payload.isCompleted) {
+        const nowStr = new Date().toISOString();
+        updatedLogs = (order.historyLogs || []).map(log => 
+          log.step === order.step ? { ...log, completedAt: log.completedAt || nowStr } : log
+        );
+      } else if (order.workStatus === "unconfirmed") {
+        const nowStr = new Date().toISOString();
+        updatedLogs = (order.historyLogs || []).map(log => 
+          log.step === order.step ? { ...log, acceptedAt: nowStr } : log
+        );
+      }
+
       return {
         ...order,
         workStatus: payload.isCompleted ? "pending_confirmation" : "working",
-        progressPercent: payload.isCompleted ? 100 : order.progressPercent
+        progressPercent: payload.isCompleted ? 100 : order.progressPercent,
+        historyLogs: updatedLogs
       };
     });
   }
@@ -756,11 +832,18 @@ export async function applyReportDone(payload: { orderCode: string; workerName: 
   const state = await loadRuntimeState();
   state.orders = state.orders.map((order) => {
     if (order.code !== payload.orderCode) return order;
+
+    const nowStr = new Date().toISOString();
+    const updatedLogs = (order.historyLogs || []).map(log => 
+      log.step === order.step ? { ...log, completedAt: log.completedAt || nowStr } : log
+    );
+
     return {
       ...order,
       workStatus: "pending_confirmation",
       progressPercent: 100,
-      finalNote: `Thợ ${payload.workerName} báo cáo hoàn thành qua Mobile App`
+      finalNote: `Thợ ${payload.workerName} báo cáo hoàn thành qua Mobile App`,
+      historyLogs: updatedLogs
     };
   });
   await saveRuntimeState(state);

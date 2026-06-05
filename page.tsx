@@ -2,6 +2,7 @@
 
 import {
   BriefcaseBusiness,
+  Camera,
   CalendarCheck,
   ChevronDown,
   Clock,
@@ -10,7 +11,6 @@ import {
   LineChart,
   LogOut,
   Menu,
-  MessageSquareMore,
   ReceiptText,
   Settings,
   ShieldCheck,
@@ -26,11 +26,10 @@ import { LoginScreen } from "@/modules/hr/components/LoginScreen";
 import { CompanyPayrollDashboard, ProfileDashboard } from "@/modules/hr/components/ProfileDashboard";
 import { BackupRestoreDashboard } from "@/modules/hr/components/BackupRestoreDashboard";
 import type { LeaveRequest } from "@/modules/hr/leave";
-import { canUseOvertime, getMenuForPosition, mustClockIn, positions } from "@/modules/hr/roles";
+import { getMenuForPosition, mustClockIn, positions } from "@/modules/hr/roles";
 import { FinanceDashboard } from "@/modules/finance/components/FinanceDashboard";
 import type { CashTransaction, CustomerDebt } from "@/modules/finance/types";
 import { getApiUrl } from "@/lib/api";
-import type { FeedbackEntry } from "@/lib/backend/types";
 import { OrderDashboard } from "@/modules/orders/components/OrderDashboard";
 import { demoOrders, type Order, getAssignedNames } from "@/modules/orders/orderFlow";
 import { AttendanceDashboard } from "@/modules/attendance/components/AttendanceDashboard";
@@ -46,8 +45,7 @@ const iconMap = {
   settings: Settings,
   production: Folder,
   archive: Folder,
-  admin: ShieldCheck,
-  feedback: MessageSquareMore
+  admin: ShieldCheck
 };
 
 function isValidStoredAccount(value: unknown): value is UserAccount {
@@ -75,8 +73,8 @@ export default function HomePage() {
   const [activeModule, setActiveModule] = useState("orders");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [overtimeOpen, setOvertimeOpen] = useState(false);
+  const [clockOpen, setClockOpen] = useState(false);
   const [toast, setToast] = useState("");
-  const [backendError, setBackendError] = useState("");
   const [currentSystemTime, setCurrentSystemTime] = useState(() => new Date());
 
   // Khôi phục phiên đăng nhập từ localStorage khi F5
@@ -116,126 +114,58 @@ export default function HomePage() {
     return () => clearInterval(timer);
   }, []);
 
+  const isAnyClockInSlotOpen = useMemo(() => {
+    return ["07:30", "11:30", "13:30", "17:30"].some((slot) => {
+      const [hour, minute] = slot.split(":").map(Number);
+      const slotTime = new Date(currentSystemTime);
+      slotTime.setHours(hour, minute, 0, 0);
+      const opensAt = new Date(slotTime);
+      opensAt.setMinutes(opensAt.getMinutes() - 15);
+      const closesAt = new Date(slotTime);
+      closesAt.setHours(closesAt.getHours() + 1);
+      return currentSystemTime >= opensAt && currentSystemTime <= closesAt;
+    });
+  }, [currentSystemTime]);
+
   const [orders, setOrders] = useState<Order[]>(demoOrders);
   const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
   const [compensationRequests, setCompensationRequests] = useState<any[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [customerDebts, setCustomerDebts] = useState<CustomerDebt[]>([]);
-  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntry[]>([]);
   const [holidayDates, setHolidayDates] = useState<string[]>([]);
   const [attendance, setAttendance] = useState<Record<string, string>>({});
   const [attendanceDetails, setAttendanceDetails] = useState<Record<string, { photo: string; gps: string; time: string }>>({});
-  const [workerAllowances, setWorkerAllowances] = useState<Record<string, any>>({});
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedbackText, setFeedbackText] = useState("");
-  const hasLoadedRemoteRef = useRef(false);
-  const remoteSnapshotsRef = useRef<Record<string, string>>({});
-  const accountsRef = useRef(accounts);
-  const ordersRef = useRef(orders);
-  const [pendingSyncs, setPendingSyncs] = useState(0);
-  const [syncError, setSyncError] = useState("");
-  const syncTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
 
-  function performSync(key: string, data: any) {
-    setPendingSyncs(prev => prev + 1);
-    setSyncError("");
-    fetch(getApiUrl("/api/sync"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [key]: data })
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Sync failed");
-        markRemoteSnapshot(key, data);
-      })
-      .catch((err) => {
-        console.error("Sync error for " + key + ":", err);
-        setSyncError("ChÆ°a lÆ°u Ä‘Æ°á»£c (Lá»—i káº¿t ná»‘i)");
-      })
-      .finally(() => {
-        setPendingSyncs(prev => Math.max(0, prev - 1));
-      });
-  }
+  // Lọc công việc đang được giao cho người dùng này hôm nay (nếu là thợ)
+  const userActiveJobs = useMemo(() => {
+    if (!currentAccount) return [];
+    return orders.filter((order) => {
+      const isAssigned = (order.installerNames && order.installerNames.includes(currentAccount.displayName)) ||
+                         (order.productionWorkerNames && order.productionWorkerNames.includes(currentAccount.displayName));
+      return isAssigned && order.workStatus === "working";
+    });
+  }, [orders, currentAccount]);
 
-  function scheduleSync(key: string, data: any) {
-    if (syncTimeoutsRef.current[key]) {
-      clearTimeout(syncTimeoutsRef.current[key]);
-    }
-    syncTimeoutsRef.current[key] = setTimeout(() => {
-      performSync(key, data);
-    }, 1000);
-  }
+  const currentSlot = useMemo(() => {
+    const currentHour = currentSystemTime.getHours();
+    const currentMin = currentSystemTime.getMinutes();
+    const currentVal = currentHour * 60 + currentMin;
 
-  const updateWorkerAllowances = (nextAllowances: Record<string, any>) => {
-    setWorkerAllowances(nextAllowances);
-    scheduleSync("workerAllowances", nextAllowances);
-  };
+    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return "07:30";
+    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return "11:30";
+    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return "13:30";
+    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return "17:30";
+    return "";
+  }, [currentSystemTime]);
 
-  useEffect(() => {
-    return () => {
-      Object.values(syncTimeoutsRef.current).forEach(clearTimeout);
-    };
-  }, []);
+  const todayDate = useMemo(() => currentSystemTime.getDate(), [currentSystemTime]);
 
-  const serializeSyncValue = (value: unknown) => JSON.stringify(value ?? null);
-  const markRemoteSnapshot = (key: string, value: unknown) => {
-    remoteSnapshotsRef.current[key] = serializeSyncValue(value);
-  };
-  const isRemoteSnapshot = (key: string, value: unknown) => remoteSnapshotsRef.current[key] === serializeSyncValue(value);
-  const getCollectionSize = (value: unknown) => {
-    if (Array.isArray(value)) return value.length;
-    if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length;
-    return 0;
-  };
-  const parseRemoteSnapshot = (key: string) => {
-    const raw = remoteSnapshotsRef.current[key];
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      return null;
-    }
-  };
-  const shouldRejectSuspiciousEmptyState = (key: string, nextValue: unknown, currentValue: unknown) => {
-    if (!["accounts", "orders"].includes(key)) return false;
-    const nextSize = getCollectionSize(nextValue);
-    if (nextSize > 0) return false;
-    const currentSize = getCollectionSize(currentValue);
-    const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
-    return currentSize > 0 || previousRemoteSize > 0;
-  };
-  const shouldSkipDangerousEmptySync = (key: string, value: unknown) => {
-    if (!["accounts", "orders"].includes(key)) return false;
-    const nextSize = getCollectionSize(value);
-    if (nextSize > 0) return false;
-    const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
-    return previousRemoteSize > 0;
-  };
-  const shouldRejectSuspiciousShrinkState = (key: string, nextValue: unknown, currentValue: unknown) => {
-    if (!["accounts", "orders"].includes(key)) return false;
-    const nextSize = getCollectionSize(nextValue);
-    const currentSize = getCollectionSize(currentValue);
-    if (currentSize < 5 || nextSize >= currentSize) return false;
-    if (nextSize === 0) return true;
-    return nextSize / currentSize < 0.5;
-  };
-  const shouldSkipSuspiciousShrinkSync = (key: string, value: unknown) => {
-    if (!["accounts", "orders"].includes(key)) return false;
-    const nextSize = getCollectionSize(value);
-    const previousRemoteSize = getCollectionSize(parseRemoteSnapshot(key));
-    if (previousRemoteSize < 5 || nextSize >= previousRemoteSize) return false;
-    if (nextSize === 0) return true;
-    return nextSize / previousRemoteSize < 0.5;
-  };
-
-  useEffect(() => {
-    accountsRef.current = accounts;
-  }, [accounts]);
-
-  useEffect(() => {
-    ordersRef.current = orders;
-  }, [orders]);
+  const hasClockedInCurrentSlot = useMemo(() => {
+    if (!currentAccount || !currentSlot) return false;
+    const key = `${currentAccount.id}-${todayDate}-${currentSlot}`;
+    return attendance[key] === "normal" || attendance[key] === "compensated";
+  }, [attendance, currentAccount, todayDate, currentSlot]);
 
   // Đồng bộ thời gian thực với GOMITA API Server dùng chung
   useEffect(() => {
@@ -243,143 +173,160 @@ export default function HomePage() {
       fetch(getApiUrl("/api/data"))
         .then((res) => res.json())
         .then((data) => {
-          setBackendError("");
-          if (data.accounts) {
-            if (shouldRejectSuspiciousEmptyState("accounts", data.accounts, accountsRef.current)) {
-              setBackendError("Backend vừa trả về danh sách nhân sự rỗng bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đăng nhập.");
-            } else if (shouldRejectSuspiciousShrinkState("accounts", data.accounts, accountsRef.current)) {
-              setBackendError("Backend vừa trả về danh sách nhân sự bị thu nhỏ bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu.");
-            } else {
-            markRemoteSnapshot("accounts", data.accounts);
-            setAccounts(data.accounts);
-            }
-          }
-          if (data.orders) {
-            if (shouldRejectSuspiciousEmptyState("orders", data.orders, ordersRef.current)) {
-              setBackendError("Backend vừa trả về danh sách đơn hàng rỗng bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đang chạy.");
-            } else if (shouldRejectSuspiciousShrinkState("orders", data.orders, ordersRef.current)) {
-              setBackendError("Backend vừa trả về danh sách đơn hàng bị thu nhỏ bất thường. Hệ thống tạm bỏ qua để tránh mất dữ liệu đang chạy.");
-            } else {
-            markRemoteSnapshot("orders", data.orders);
-            setOrders(data.orders);
-            }
-          }
-          if (data.overtimeRequests) {
-            markRemoteSnapshot("overtimeRequests", data.overtimeRequests);
-            setOvertimeRequests(data.overtimeRequests);
-          }
-          if (data.compensationRequests) {
-            markRemoteSnapshot("compensationRequests", data.compensationRequests);
-            setCompensationRequests(data.compensationRequests);
-          }
-          if (data.leaveRequests) {
-            markRemoteSnapshot("leaveRequests", data.leaveRequests);
-            setLeaveRequests(data.leaveRequests);
-          }
-          if (data.cashTransactions) {
-            markRemoteSnapshot("cashTransactions", data.cashTransactions);
-            setCashTransactions(data.cashTransactions);
-          }
-          if (data.customerDebts) {
-            markRemoteSnapshot("customerDebts", data.customerDebts);
-            setCustomerDebts(data.customerDebts);
-          }
-          if (data.feedbackEntries) {
-            markRemoteSnapshot("feedbackEntries", data.feedbackEntries);
-            setFeedbackEntries(data.feedbackEntries);
-          }
-          if (data.holidayDates) {
-            markRemoteSnapshot("holidayDates", data.holidayDates);
-            setHolidayDates(data.holidayDates);
-          }
-          if (data.attendance) {
-            markRemoteSnapshot("attendance", data.attendance);
-            setAttendance(data.attendance);
-          }
-          if (data.attendanceDetails) {
-            markRemoteSnapshot("attendanceDetails", data.attendanceDetails);
-            setAttendanceDetails(data.attendanceDetails);
-          }
-          if (data.workerAllowances) {
-            markRemoteSnapshot("workerAllowances", data.workerAllowances);
-            setWorkerAllowances(data.workerAllowances);
-          }
-          hasLoadedRemoteRef.current = true;
+          if (data.accounts) setAccounts(data.accounts);
+          if (data.orders) setOrders(data.orders);
+          if (data.overtimeRequests) setOvertimeRequests(data.overtimeRequests);
+          if (data.compensationRequests) setCompensationRequests(data.compensationRequests);
+          if (data.leaveRequests) setLeaveRequests(data.leaveRequests);
+          if (data.cashTransactions) setCashTransactions(data.cashTransactions);
+          if (data.customerDebts) setCustomerDebts(data.customerDebts);
+          if (data.holidayDates) setHolidayDates(data.holidayDates);
+          if (data.attendance) setAttendance(data.attendance);
+          if (data.attendanceDetails) setAttendanceDetails(data.attendanceDetails);
         })
         .catch((err) => {
-          console.error("Không kết nối được backend trung tâm.", err);
-          setBackendError("Không kết nối được backend trung tâm. Dữ liệu đơn hàng, nhân sự và tài chính sẽ không cập nhật cho đến khi kết nối lại.");
+          console.warn("API Server offline, sử dụng dữ liệu offline.", err);
+          // Cơ chế Fallback offline lấy từ localStorage
+          const savedAccounts = readStoredJson<UserAccount[]>("gomita_web_accounts_v2");
+          if (savedAccounts) setAccounts(savedAccounts);
+
+          const savedOrders = readStoredJson<Order[]>("gomita_web_orders_v2");
+          if (savedOrders) setOrders(savedOrders);
+
+          const savedOt = readStoredJson<any[]>("gomita_web_ot_v2");
+          if (savedOt) setOvertimeRequests(savedOt);
+
+          const savedComp = readStoredJson<any[]>("gomita_web_comp_v3");
+          if (savedComp) setCompensationRequests(savedComp);
+
+          const savedLeaveRequests = readStoredJson<LeaveRequest[]>("gomita_web_leave_requests_v1");
+          if (savedLeaveRequests) setLeaveRequests(savedLeaveRequests);
+
+          const savedCashTransactions = readStoredJson<CashTransaction[]>("gomita_web_cash_transactions_v1");
+          if (savedCashTransactions) setCashTransactions(savedCashTransactions);
+
+          const savedCustomerDebts = readStoredJson<CustomerDebt[]>("gomita_web_customer_debts_v1");
+          if (savedCustomerDebts) setCustomerDebts(savedCustomerDebts);
+
+          const savedHolidayDates = readStoredJson<string[]>("gomita_web_holidays_v1");
+          if (savedHolidayDates) setHolidayDates(savedHolidayDates);
+
+          const savedAttendance = readStoredJson<Record<string, string>>("gomita_web_attendance_v3");
+          if (savedAttendance) setAttendance(savedAttendance);
+
+          const savedAttendanceDetails = readStoredJson<Record<string, { photo: string; gps: string; time: string }>>("gomita_web_attendance_details_v3");
+          if (savedAttendanceDetails) setAttendanceDetails(savedAttendanceDetails);
         });
     }
 
     fetchData();
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(fetchData, 2000); // Polling mỗi 2 giây
     return () => clearInterval(interval);
   }, []);
 
-  // Tự động đồng bộ ngược lại backend trung tâm
+  // Tự động đồng bộ ngược lại API Server và lưu localStorage khi Web App thay dữ liệu
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || accounts === demoAccounts || isRemoteSnapshot("accounts", accounts) || shouldSkipDangerousEmptySync("accounts", accounts) || shouldSkipSuspiciousShrinkSync("accounts", accounts)) return;
-    scheduleSync("accounts", accounts);
+    if (accounts === demoAccounts) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accounts })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_accounts_v2", JSON.stringify(accounts));
   }, [accounts]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || orders === demoOrders || isRemoteSnapshot("orders", orders) || shouldSkipDangerousEmptySync("orders", orders) || shouldSkipSuspiciousShrinkSync("orders", orders)) return;
-    scheduleSync("orders", orders);
+    if (orders === demoOrders) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orders })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_orders_v2", JSON.stringify(orders));
   }, [orders]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("overtimeRequests", overtimeRequests)) return;
-    scheduleSync("overtimeRequests", overtimeRequests);
+    if (overtimeRequests.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overtimeRequests })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_ot_v2", JSON.stringify(overtimeRequests));
   }, [overtimeRequests]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("compensationRequests", compensationRequests)) return;
-    scheduleSync("compensationRequests", compensationRequests);
+    if (compensationRequests.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ compensationRequests })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_comp_v3", JSON.stringify(compensationRequests));
   }, [compensationRequests]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("leaveRequests", leaveRequests)) return;
-    scheduleSync("leaveRequests", leaveRequests);
+    if (leaveRequests.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leaveRequests })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_leave_requests_v1", JSON.stringify(leaveRequests));
   }, [leaveRequests]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("cashTransactions", cashTransactions)) return;
-    scheduleSync("cashTransactions", cashTransactions);
+    if (cashTransactions.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cashTransactions })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_cash_transactions_v1", JSON.stringify(cashTransactions));
   }, [cashTransactions]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("customerDebts", customerDebts)) return;
-    scheduleSync("customerDebts", customerDebts);
+    if (customerDebts.length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customerDebts })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_customer_debts_v1", JSON.stringify(customerDebts));
   }, [customerDebts]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("feedbackEntries", feedbackEntries)) return;
-    scheduleSync("feedbackEntries", feedbackEntries);
-  }, [feedbackEntries]);
-
-  useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("holidayDates", holidayDates)) return;
-    scheduleSync("holidayDates", holidayDates);
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holidayDates })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_holidays_v1", JSON.stringify(holidayDates));
   }, [holidayDates]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("attendance", attendance)) return;
-    scheduleSync("attendance", attendance);
+    if (Object.keys(attendance).length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attendance })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_attendance_v3", JSON.stringify(attendance));
   }, [attendance]);
 
   useEffect(() => {
-    if (!hasLoadedRemoteRef.current || isRemoteSnapshot("attendanceDetails", attendanceDetails)) return;
-    scheduleSync("attendanceDetails", attendanceDetails);
+    if (Object.keys(attendanceDetails).length === 0) return;
+    fetch(getApiUrl("/api/sync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attendanceDetails })
+    }).catch(() => {});
+    localStorage.setItem("gomita_web_attendance_details_v3", JSON.stringify(attendanceDetails));
   }, [attendanceDetails]);
 
   const allowedPositions = useMemo(() => currentAccount ? positions.filter((position) => currentAccount.positionIds?.includes(position.id)) : [], [currentAccount]);
   const currentPosition = positions.find((position) => position.id === positionId) ?? allowedPositions[0] ?? positions[0];
   const menu = useMemo(() => getMenuForPosition(currentPosition.id), [currentPosition.id]);
-  const sortedFeedbackEntries = useMemo(
-    () => [...feedbackEntries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [feedbackEntries]
-  );
 
   // Bộ lọc các đơn hàng được giao cho người dùng hiện tại để chọn khi tăng ca
   const assignedOrders = useMemo(() => {
@@ -409,22 +356,6 @@ export default function HomePage() {
     setActiveModule(nextMenu[0]?.id ?? "orders");
   }
 
-  function submitFeedback() {
-    if (!currentAccount || !feedbackText.trim()) return;
-    const entry: FeedbackEntry = {
-      id: `feedback-${Date.now()}`,
-      senderId: currentAccount.id,
-      senderName: currentAccount.displayName,
-      senderPosition: currentPosition.name,
-      content: feedbackText.trim(),
-      createdAt: new Date().toISOString()
-    };
-    setFeedbackEntries((current) => [entry, ...current]);
-    setFeedbackText("");
-    setFeedbackOpen(false);
-    setToast("Đã gửi góp ý PM.");
-  }
-
   const content = (
     <>
       {activeModule === "orders" && (
@@ -441,8 +372,6 @@ export default function HomePage() {
           onCompensationRequestsChange={setCompensationRequests}
           attendance={attendance}
           onAttendanceChange={setAttendance}
-          isSyncing={pendingSyncs > 0 || !!syncError}
-          cashTransactions={cashTransactions}
         />
       )}
       {activeModule === "profile" && (
@@ -456,20 +385,9 @@ export default function HomePage() {
           onCompensationRequestsChange={setCompensationRequests}
           leaveRequests={leaveRequests}
           onLeaveRequestsChange={setLeaveRequests}
-          orders={orders}
-          workerAllowances={workerAllowances}
         />
       )}
-      {activeModule === "reports" && (
-        <CompanyPayrollDashboard 
-          accounts={accounts} 
-          overtimeRequests={overtimeRequests} 
-          attendance={attendance} 
-          orders={orders}
-          workerAllowances={workerAllowances}
-          onWorkerAllowancesChange={updateWorkerAllowances}
-        />
-      )}
+      {activeModule === "reports" && <CompanyPayrollDashboard accounts={accounts} overtimeRequests={overtimeRequests} attendance={attendance} />}
       {activeModule === "attendance" && (
         <AttendanceDashboard 
           position={currentPosition}
@@ -487,8 +405,6 @@ export default function HomePage() {
           setOrders={setOrders} 
           overtimeRequests={overtimeRequests} 
           accounts={accounts}
-          attendance={attendance}
-          attendanceDetails={attendanceDetails}
           currentPosition={currentPosition}
           cashTransactions={cashTransactions}
           onCashTransactionsChange={setCashTransactions}
@@ -497,7 +413,6 @@ export default function HomePage() {
         />
       )}
       {activeModule === "hr" && <AccountManagement accounts={accounts} currentAccountId={currentAccount.id} currentPositionId={currentPosition.id} onAccountsChange={setAccounts} holidayDates={holidayDates} onHolidayDatesChange={setHolidayDates} leaveRequests={leaveRequests} onLeaveRequestsChange={setLeaveRequests} attendance={attendance} attendanceDetails={attendanceDetails} />}
-      {activeModule === "feedback" && <FeedbackDashboard feedbackEntries={sortedFeedbackEntries} />}
       {activeModule === "admin" && (
         <BackupRestoreDashboard 
           onDataRestored={(restoredData) => {
@@ -508,7 +423,6 @@ export default function HomePage() {
             if (restoredData.leaveRequests) setLeaveRequests(restoredData.leaveRequests);
             if (restoredData.cashTransactions) setCashTransactions(restoredData.cashTransactions);
             if (restoredData.customerDebts) setCustomerDebts(restoredData.customerDebts);
-            if (restoredData.feedbackEntries) setFeedbackEntries(restoredData.feedbackEntries);
             if (restoredData.holidayDates) setHolidayDates(restoredData.holidayDates);
             if (restoredData.attendance) setAttendance(restoredData.attendance);
             if (restoredData.attendanceDetails) setAttendanceDetails(restoredData.attendanceDetails);
@@ -519,7 +433,7 @@ export default function HomePage() {
     </>
   );
 
-  if (["production_worker", "installer", "site_supervisor"].includes(currentPosition.id)) {
+  if (["production_worker", "installer", "workshop_manager", "site_supervisor"].includes(currentPosition.id)) {
     return (
       <main className="min-h-screen bg-slate-50">
         <WorkerTopBar 
@@ -529,20 +443,10 @@ export default function HomePage() {
           positionName={currentPosition.name} 
           onLogout={() => setCurrentAccount(null)} 
           onPositionChange={changePosition} 
-          pendingSyncs={pendingSyncs}
-          syncError={syncError}
-          hasLoaded={hasLoadedRemoteRef.current}
+          hasClockedInCurrentSlot={hasClockedInCurrentSlot}
         />
         <div className="p-4 pb-24 md:p-6">{content}</div>
-        <FeedbackLauncher onOpen={() => setFeedbackOpen(true)} />
         <WorkerBottomNav activeModule={activeModule} onChange={setActiveModule} />
-        <FeedbackComposer
-          open={feedbackOpen}
-          value={feedbackText}
-          onChange={setFeedbackText}
-          onClose={() => setFeedbackOpen(false)}
-          onSubmit={submitFeedback}
-        />
       </main>
     );
   }
@@ -572,7 +476,7 @@ export default function HomePage() {
             })}
           </nav>
 
-          {mustClockIn(currentPosition.id) ? <SidebarClock canUseOvertime={canUseOvertime(currentPosition.id)} onOvertime={() => setOvertimeOpen(true)} /> : null}
+          {mustClockIn(currentPosition.id) ? <SidebarClock onOvertime={() => setOvertimeOpen(true)} hasClockedInCurrentSlot={hasClockedInCurrentSlot} /> : null}
         </div>
       </aside>
 
@@ -588,12 +492,6 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-4">
-
-            <SyncStatusIndicator pendingSyncs={pendingSyncs} syncError={syncError} hasLoaded={hasLoadedRemoteRef.current} />
-            <button className="hidden min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-black text-slate-700 hover:bg-slate-50 md:flex" onClick={() => setFeedbackOpen(true)} type="button">
-              <MessageSquareMore className="h-4 w-4 text-orange-500" />
-              Góp ý PM
-            </button>
             <RoleSelect allowedPositions={allowedPositions} value={currentPosition.id} onChange={changePosition} />
             <div className="hidden items-center gap-3 md:flex">
               <div className="grid h-11 w-11 place-items-center rounded-full bg-slate-200"><UserCircle className="h-8 w-8 text-slate-500" /></div>
@@ -610,52 +508,86 @@ export default function HomePage() {
         </header>
 
         <div className="p-4 md:p-7">
-          {backendError ? (
-            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
-              {backendError}
-            </div>
-          ) : null}
           {toast ? <div className="mb-4 flex items-center justify-between rounded-lg border border-green-200 bg-green-50 p-3 text-sm font-bold text-green-700">{toast}<button onClick={() => setToast("")} type="button"><X className="h-4 w-4" /></button></div> : null}
           {content}
         </div>
       </section>
 
-      <FeedbackLauncher onOpen={() => setFeedbackOpen(true)} />
-      <FeedbackComposer
-        open={feedbackOpen}
-        value={feedbackText}
-        onChange={setFeedbackText}
-        onClose={() => setFeedbackOpen(false)}
-        onSubmit={submitFeedback}
-      />
-
       {overtimeOpen ? (
         <OvertimeModal 
           assignedOrders={assignedOrders} 
           onClose={() => setOvertimeOpen(false)} 
-          onSubmit={async (req) => {
-            try {
-              const response = await fetch("/api/overtime/request", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  userId: currentAccount.id,
-                  from: req.from,
-                  to: req.to,
-                  reason: req.reason,
-                  orderCode: req.orderCode
-                })
-              });
-              const result = await response.json();
-              if (!response.ok || !result?.request) {
-                throw new Error(result?.error || "Không gửi được đăng ký tăng ca.");
-              }
-              setOvertimeRequests((current) => [result.request, ...current]);
-              setOvertimeOpen(false);
-              setToast(`Đã đăng ký tăng ca thành công ${result.request.hours} giờ cho đơn ${result.request.orderCode}.`);
-            } catch (error) {
-              setToast(error instanceof Error ? error.message : "Không gửi được đăng ký tăng ca.");
+          onSubmit={(req) => {
+            setOvertimeOpen(false);
+            const newRequest = {
+              id: `ot-${Date.now()}`,
+              userId: currentAccount.id,
+              userDisplayName: currentAccount.displayName,
+              ...req,
+              status: "approved",
+              createdAt: new Date().toISOString()
+            };
+            setOvertimeRequests(current => [newRequest, ...current]);
+            setToast(`Đã đăng ký tăng ca thành công ${req.hours} giờ cho đơn ${req.orderCode || "chung"}.`);
+          }} 
+        />
+      ) : null}
+      {clockOpen ? (
+        <ClockInModal 
+          employeeName={currentAccount.displayName} 
+          activeJobs={userActiveJobs.map(o => o.code)}
+          onClose={() => setClockOpen(false)} 
+          onSubmit={(message: string, completedJobCodes: string[], photoBase64?: string, gpsText?: string) => {
+            const now = new Date();
+            const currentHour = now.getHours();
+            const currentMin = now.getMinutes();
+            const currentVal = currentHour * 60 + currentMin;
+            
+            let activeSlot = "07:30";
+            if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) activeSlot = "07:30";
+            else if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) activeSlot = "11:30";
+            else if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) activeSlot = "13:30";
+            else if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) activeSlot = "17:30";
+            
+            const dayNum = now.getDate();
+            const key = `${currentAccount.id}-${dayNum}-${activeSlot}`;
+            
+            // Cập nhật chấm công
+            setAttendance((prev) => ({
+              ...prev,
+              [key]: "normal"
+            }));
+
+            if (photoBase64 || gpsText) {
+              setAttendanceDetails((prev) => ({
+                ...prev,
+                [key]: {
+                  photo: photoBase64 || "",
+                  gps: gpsText || "",
+                  time: now.toLocaleTimeString("vi-VN", { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                }
+              }));
             }
+
+            // Cập nhật trạng thái các đơn hàng báo xong
+            if (completedJobCodes.length > 0) {
+              setOrders((currOrders) =>
+                currOrders.map((o) => {
+                  if (completedJobCodes.includes(o.code)) {
+                    return {
+                      ...o,
+                      workStatus: "pending_confirmation",
+                      progressPercent: 100,
+                      finalNote: `Thợ báo hoàn thành khi chấm công trên Web App`
+                    };
+                  }
+                  return o;
+                })
+              );
+            }
+
+            setClockOpen(false);
+            setToast(message);
           }} 
         />
       ) : null}
@@ -663,7 +595,7 @@ export default function HomePage() {
   );
 }
 
-function SidebarClock({ onOvertime, canUseOvertime }: { onOvertime: () => void; canUseOvertime: boolean }) {
+function SidebarClock({ onOvertime, hasClockedInCurrentSlot }: { onOvertime: () => void; hasClockedInCurrentSlot: boolean }) {
   const [mounted, setMounted] = useState(false);
   const [timeStr, setTimeStr] = useState("07:30:00");
   const [dateStr, setDateStr] = useState("Thứ 6, 24/05/2024");
@@ -708,40 +640,8 @@ function SidebarClock({ onOvertime, canUseOvertime }: { onOvertime: () => void; 
       <div className="rounded-lg border border-white/15 bg-white/5 p-4 text-center">
         <div className="text-3xl font-black text-orange-400">{timeStr}</div>
         <div className="mt-1 text-sm text-slate-300">{dateStr}</div>
-        {canUseOvertime ? (
-          <button className="mt-4 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
-        ) : null}
+        <button className="mt-4 min-h-10 w-full rounded-lg border border-orange-400 font-bold text-orange-200 hover:bg-white/5 transition" onClick={onOvertime} type="button">Đăng ký tăng ca</button>
       </div>
-    </div>
-  );
-}
-
-
-function SyncStatusIndicator({ pendingSyncs, syncError, hasLoaded }: { pendingSyncs: number; syncError: string; hasLoaded: boolean }) {
-  if (!hasLoaded) return null;
-  
-  if (syncError) {
-    return (
-      <div className="flex items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 border border-red-200 shadow-sm animate-pulse">
-        <span className="h-2 w-2 rounded-full bg-red-500" />
-        <span className="hidden sm:inline">ChÆ°a lÆ°u Ä‘Æ°á»£c (Lá»—i káº¿t ná»‘i)</span>
-      </div>
-    );
-  }
-  
-  if (pendingSyncs > 0) {
-    return (
-      <div className="flex items-center gap-2 rounded-full bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600 border border-orange-200 shadow-sm">
-        <span className="h-3 w-3 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
-        <span className="hidden sm:inline">Äang Ä‘á»“ng bá»™ dá»¯ liá»‡u...</span>
-      </div>
-    );
-  }
-  
-  return (
-    <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600 border border-emerald-200 shadow-sm">
-      <span className="h-2 w-2 rounded-full bg-emerald-500" />
-      <span className="hidden sm:inline">ÄÃ£ lÆ°u lÃªn há»‡ thá»‘ng</span>
     </div>
   );
 }
@@ -753,9 +653,7 @@ function WorkerTopBar({
   positionId,
   onPositionChange,
   onLogout,
-  pendingSyncs,
-  syncError,
-  hasLoaded
+  hasClockedInCurrentSlot
 }: {
   account: UserAccount;
   allowedPositions: typeof positions;
@@ -763,10 +661,21 @@ function WorkerTopBar({
   positionId: string;
   onPositionChange: (value: string) => void;
   onLogout: () => void;
-  pendingSyncs: number;
-  syncError: string;
-  hasLoaded: boolean;
+  hasClockedInCurrentSlot: boolean;
 }) {
+  const isAnyClockInSlotOpen = useMemo(() => {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMin = now.getMinutes();
+    const currentVal = currentHour * 60 + currentMin;
+
+    if (currentVal >= 7 * 60 + 15 && currentVal <= 8 * 60 + 30) return true;
+    if (currentVal >= 11 * 60 + 15 && currentVal <= 12 * 60 + 30) return true;
+    if (currentVal >= 13 * 60 + 15 && currentVal <= 14 * 60 + 30) return true;
+    if (currentVal >= 17 * 60 + 15 && currentVal <= 18 * 60 + 30) return true;
+    return false;
+  }, []);
+
   return (
     <header className="flex min-h-20 items-center justify-between bg-slate-950 px-4 text-white md:px-7">
       <div className="flex items-center gap-8">
@@ -780,8 +689,7 @@ function WorkerTopBar({
         </div>
       </div>
       <div className="flex items-center gap-2 md:gap-8">
-        <SyncStatusIndicator pendingSyncs={pendingSyncs} syncError={syncError} hasLoaded={hasLoaded} />
-        <div className="hidden text-xs font-bold text-blue-100 md:block">Chấm công trên điện thoại</div>
+        {isAnyClockInSlotOpen && !hasClockedInCurrentSlot ? <div className="hidden text-xs font-bold text-blue-100 md:block">Chấm công trên điện thoại</div> : null}
         <RoleSelect dark allowedPositions={allowedPositions} value={positionId} onChange={onPositionChange} />
         <div className="hidden items-center gap-3 md:flex">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-slate-200"><UserCircle className="h-9 w-9 text-slate-500" /></div>
@@ -815,89 +723,6 @@ function WorkerBottomNav({ activeModule, onChange }: { activeModule: string; onC
   );
 }
 
-function FeedbackLauncher({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button
-      className="fixed bottom-4 right-4 z-20 flex min-h-12 items-center gap-2 rounded-full bg-orange-500 px-4 font-black text-white shadow-lg hover:bg-orange-600"
-      onClick={onOpen}
-      type="button"
-    >
-      <MessageSquareMore className="h-4 w-4" />
-      Góp ý PM
-    </button>
-  );
-}
-
-function FeedbackComposer({
-  open,
-  value,
-  onChange,
-  onClose,
-  onSubmit
-}: {
-  open: boolean;
-  value: string;
-  onChange: (value: string) => void;
-  onClose: () => void;
-  onSubmit: () => void;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-      <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-xl font-black">Góp ý phần mềm</h3>
-            <p className="text-sm text-slate-500">Nội dung này lưu tạm để Giám đốc xem và xử lý.</p>
-          </div>
-          <button className="rounded-full border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" onClick={onClose} type="button">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <textarea
-          className="mt-4 min-h-40 w-full rounded-xl border border-slate-200 p-4 outline-none focus:border-orange-400"
-          placeholder="Nhập góp ý, lỗi gặp phải, đề xuất sửa..."
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <div className="mt-4 flex justify-end gap-3">
-          <button className="min-h-11 rounded-lg border border-slate-200 px-4 font-black text-slate-700" onClick={onClose} type="button">Đóng</button>
-          <button className="min-h-11 rounded-lg bg-orange-500 px-4 font-black text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={!value.trim()} onClick={onSubmit} type="button">Gửi góp ý</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FeedbackDashboard({ feedbackEntries }: { feedbackEntries: FeedbackEntry[] }) {
-  return (
-    <section className="grid gap-5">
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-xl font-black">Góp ý phần mềm</h2>
-        <p className="mt-1 text-sm text-slate-500">Danh sách góp ý tạm thời để Giám đốc xem, không ảnh hưởng tới dữ liệu nghiệp vụ chính.</p>
-      </div>
-      <div className="grid gap-3">
-        {feedbackEntries.length === 0 ? (
-          <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm font-bold text-slate-500 shadow-sm">Chưa có góp ý nào.</div>
-        ) : (
-          feedbackEntries.map((entry) => (
-            <article key={entry.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="font-black text-slate-900">{entry.senderName}</div>
-                  <div className="text-sm text-slate-500">{entry.senderPosition}</div>
-                </div>
-                <div className="text-sm font-bold text-slate-500">{new Date(entry.createdAt).toLocaleString("vi-VN")}</div>
-              </div>
-              <div className="mt-3 rounded-lg bg-slate-50 p-4 text-sm text-slate-700">{entry.content}</div>
-            </article>
-          ))
-        )}
-      </div>
-    </section>
-  );
-}
-
 function RoleSelect({ value, onChange, allowedPositions, dark = false }: { value: string; onChange: (value: string) => void; allowedPositions: typeof positions; dark?: boolean }) {
   return (
     <select className={`h-10 rounded-lg border px-3 text-sm font-bold outline-none ${dark ? "border-white/20 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900"}`} value={value} onChange={(event) => onChange(event.target.value)}>
@@ -913,7 +738,7 @@ function OvertimeModal({
 }: { 
   assignedOrders: Order[]; 
   onClose: () => void; 
-  onSubmit: (request: { from: string; to: string; reason: string; orderCode: string; hours: number }) => Promise<void> | void 
+  onSubmit: (request: { from: string; to: string; reason: string; orderCode: string; hours: number }) => void 
 }) {
   const [from, setFrom] = useState("18:00");
   const [to, setTo] = useState("20:00");
@@ -929,7 +754,6 @@ function OvertimeModal({
   }
 
   function submit() {
-    if (!selectedOrderCode) return;
     onSubmit({
       from,
       to,
@@ -955,7 +779,7 @@ function OvertimeModal({
               onChange={(e) => setSelectedOrderCode(e.target.value)}
             >
               {assignedOrders.length === 0 ? (
-                <option value="">Chưa có đơn hàng được giao</option>
+                <option value="">Tăng ca chung (Không chọn đơn)</option>
               ) : (
                 assignedOrders.map(order => (
                   <option key={order.id} value={order.code}>{order.code} - {order.customerName}</option>
@@ -963,16 +787,148 @@ function OvertimeModal({
               )}
             </select>
           </label>
-          {assignedOrders.length === 0 ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-              Bạn cần được giao đơn hàng trước khi đăng ký tăng ca.
-            </div>
-          ) : null}
           <label className="grid gap-1 text-sm font-bold">Từ giờ<input className="h-11 rounded-lg border border-slate-200 px-3 font-normal" type="time" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
           <label className="grid gap-1 text-sm font-bold">Đến giờ<input className="h-11 rounded-lg border border-slate-200 px-3 font-normal" type="time" value={to} onChange={(event) => setTo(event.target.value)} /></label>
           <label className="grid gap-1 text-sm font-bold">Lý do<textarea className="min-h-24 rounded-lg border border-slate-200 p-3 font-normal" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Nhập lý do nếu cần" /></label>
-          <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!selectedOrderCode || assignedOrders.length === 0} onClick={submit} type="button">Gửi đăng ký tăng ca</button>
+          <button className="min-h-12 rounded-lg bg-orange-500 font-black text-white" onClick={submit} type="button">Gửi đăng ký tăng ca</button>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function ClockInModal({ 
+  employeeName, 
+  activeJobs = [], 
+  onClose, 
+  onSubmit 
+}: { 
+  employeeName: string; 
+  activeJobs?: string[]; 
+  onClose: () => void; 
+  onSubmit: (message: string, completedJobCodes: string[], photoBase64?: string, gpsText?: string) => void 
+}) {
+  const [jobIndex, setJobIndex] = useState(0);
+  const [completedJobs, setCompletedJobs] = useState<string[]>([]);
+  const [cameraReady, setCameraReady] = useState(activeJobs.length === 0);
+  const [gpsText, setGpsText] = useState("Đang lấy định vị...");
+  
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState(false);
+
+  useEffect(() => {
+    if (!cameraReady) return;
+    if (!navigator.geolocation) {
+      setGpsText("Không hỗ trợ GPS trên thiết bị này");
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        (position) => setGpsText(`Vị trí hiện tại: Hải Phòng (${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)})`),
+        () => setGpsText("Không lấy được GPS, cần cấp quyền định vị")
+      );
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+      .then((s) => {
+        setStream(s);
+        setCameraError(false);
+        if (videoRef.current) videoRef.current.srcObject = s;
+      })
+      .catch((err) => {
+        console.warn("Camera warning:", err);
+        setCameraError(true);
+      });
+
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [cameraReady]);
+
+  function answer(done: boolean) {
+    const code = activeJobs[jobIndex];
+    if (done) {
+      setCompletedJobs((prev) => [...prev, code]);
+    }
+    if (jobIndex + 1 < activeJobs.length) {
+      setJobIndex(jobIndex + 1);
+      return;
+    }
+    setCameraReady(true);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4">
+      <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-xl font-black">Chấm công</h2>
+          <button className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100" onClick={() => {
+            if (stream) stream.getTracks().forEach((track) => track.stop());
+            onClose();
+          }} type="button"><X className="h-5 w-5" /></button>
+        </div>
+        {!cameraReady ? (
+          <div className="grid gap-4 text-center">
+            <div className="text-sm font-bold text-slate-500">{jobIndex + 1}/{activeJobs.length}</div>
+            <div>Bạn đã làm xong đơn hàng</div>
+            <div className="text-xl font-black">{activeJobs[jobIndex]}</div>
+            <div className="grid gap-3">
+              <button className="min-h-12 rounded-lg border border-green-500 font-black text-green-600" onClick={() => answer(true)} type="button">Đã xong</button>
+              <button className="min-h-12 rounded-lg border border-red-400 font-black text-red-500" onClick={() => answer(false)} type="button">Chưa xong</button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            <div className="rounded-lg bg-slate-100 p-2 overflow-hidden aspect-[4/3] relative flex items-center justify-center border">
+              {cameraError ? (
+                <div className="text-center p-4">
+                  <Camera className="mx-auto h-14 w-14 text-slate-400" />
+                  <div className="mt-2 font-bold text-red-500">Không mở được camera</div>
+                  <div className="mt-1 text-xs text-slate-500">Vui lòng kiểm tra quyền camera của trình duyệt.</div>
+                </div>
+              ) : (
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover rounded scale-x-[-1]" />
+              )}
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3 text-sm font-bold text-slate-700">
+              <div>Nhân viên: {employeeName}</div>
+              <div>Thời gian: {new Date().toLocaleString("vi-VN")}</div>
+              <div>{gpsText}</div>
+            </div>
+            <button className="min-h-12 rounded-lg bg-green-600 font-black text-white" onClick={() => {
+              if (stream) stream.getTracks().forEach((track) => track.stop());
+              
+              let photoBase64 = "";
+              if (!cameraError && videoRef.current) {
+                try {
+                  const canvas = document.createElement("canvas");
+                  canvas.width = videoRef.current.videoWidth || 640;
+                  canvas.height = videoRef.current.videoHeight || 480;
+                  const ctx = canvas.getContext("2d");
+                  if (ctx) {
+                    // Mirror image to match the video element style scale-x-[-1]
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                    photoBase64 = canvas.toDataURL("image/jpeg", 0.7);
+                  }
+                } catch (err) {
+                  console.error("Lỗi chụp ảnh selfie:", err);
+                }
+              }
+
+              onSubmit(
+                `Đã chấm công cho ${employeeName}. Đã ghi nhận giờ, ngày, GPS và chụp ảnh thành công.`,
+                completedJobs,
+                photoBase64,
+                gpsText
+              );
+            }} type="button">
+              Chụp ảnh và lưu chấm công
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

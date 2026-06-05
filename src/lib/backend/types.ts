@@ -47,6 +47,7 @@ export type LegacyJsonSnapshot = {
   attendanceCompensationState?: Record<string, unknown>;
   feedbackEntries?: FeedbackEntry[];
   pushSubscriptions?: NotificationSubscription[];
+  workerAllowances?: Record<string, any>;
 };
 
 export type LegacyExportRow = Record<string, unknown>;

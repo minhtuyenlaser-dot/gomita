@@ -444,6 +444,71 @@ export function FinanceDashboard({
     }
   }
 
+  function getAdjustedHours(
+    workerName: string,
+    targetOrderId: string,
+    targetStep: string,
+    allOrders: Order[]
+  ): number {
+    const intervals: Array<{ orderId: string; step: string; start: Date; end: Date }> = [];
+    const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
+
+    for (const order of allOrders) {
+      const logs = order.historyLogs || [];
+      for (const log of logs) {
+        if (!allowedSteps.includes(log.step)) continue;
+        
+        const assigneeList = getAssigneeListForStep(order, log.step);
+        const finalAssignees = assigneeList.length > 0 ? assigneeList : [log.assignee].filter(Boolean);
+        if (!finalAssignees.includes(workerName)) continue;
+
+        let startStr = log.startedAt;
+        if (["Thiết kế", "Ra file"].includes(log.step)) {
+          startStr = log.acceptedAt;
+        }
+        if (!startStr) continue;
+
+        const start = new Date(startStr);
+        const end = log.completedAt ? new Date(log.completedAt) : new Date();
+        if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) continue;
+
+        intervals.push({ orderId: order.id, step: log.step, start, end });
+      }
+    }
+
+    if (intervals.length === 0) return 0;
+
+    const timestampsSet = new Set<number>();
+    for (const iv of intervals) {
+      timestampsSet.add(iv.start.getTime());
+      timestampsSet.add(iv.end.getTime());
+    }
+    const sortedTimes = Array.from(timestampsSet).sort((a, b) => a - b);
+
+    let totalAdjustedHours = 0;
+
+    for (let i = 0; i < sortedTimes.length - 1; i++) {
+      const tStart = sortedTimes[i];
+      const tEnd = sortedTimes[i + 1];
+      const tMid = (tStart + tEnd) / 2;
+
+      const active = intervals.filter(iv => iv.start.getTime() <= tMid && iv.end.getTime() >= tMid);
+      if (active.length === 0) continue;
+
+      const targetActive = active.filter(iv => iv.orderId === targetOrderId && iv.step === targetStep);
+      if (targetActive.length === 0) continue;
+
+      const subHours = calculateWorkingHours(new Date(tStart).toISOString(), new Date(tEnd).toISOString());
+      if (subHours <= 0) continue;
+
+      const uniqueOrderIds = new Set(active.map(iv => iv.orderId));
+      const concurrency = uniqueOrderIds.size;
+      totalAdjustedHours += subHours / concurrency;
+    }
+
+    return parseFloat(totalAdjustedHours.toFixed(2));
+  }
+
   function buildOrderCostSnapshot(order?: Order) {
     if (!order) {
       return {
@@ -468,7 +533,6 @@ export function FinanceDashboard({
       laborCost = order.customLaborCost;
     } else {
       filteredLogs.forEach((log) => {
-        const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
         const assignees = getAssigneeListForStep(order, log.step);
         const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
         
@@ -476,8 +540,9 @@ export function FinanceDashboard({
           const personOT = overtimeRequests
             .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
             .reduce((sum, req) => sum + (req.hours || 0), 0);
+          const adjustedWorkingHours = getAdjustedHours(name, order.id, log.step, orders);
           const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
-          const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+          const cost = (adjustedWorkingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
           laborCost += cost;
         });
       });
@@ -530,7 +595,6 @@ export function FinanceDashboard({
     
     let laborCost = 0;
     logs.forEach((log) => {
-      const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
       const assignees = getAssigneeListForStep(order, log.step);
       const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
       
@@ -538,8 +602,9 @@ export function FinanceDashboard({
         const personOT = overtimeRequests
           .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
           .reduce((sum, req) => sum + (req.hours || 0), 0);
+        const adjustedWorkingHours = getAdjustedHours(name, order.id, log.step, orders);
         const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
-        const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+        const cost = (adjustedWorkingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
         laborCost += cost;
       });
     });
@@ -567,7 +632,6 @@ export function FinanceDashboard({
     const filteredLogs = (selectedOrder.historyLogs || []).filter((log) => allowedSteps.includes(log.step));
     
     const logsWithTime = filteredLogs.map((log) => {
-      const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
       const assignees = getAssigneeListForStep(selectedOrder, log.step);
       const finalAssignees = assignees.length > 0 ? assignees : [log.assignee].filter(Boolean);
 
@@ -575,14 +639,15 @@ export function FinanceDashboard({
         const personOT = overtimeRequests
           .filter((req) => req.orderCode === selectedOrder.code && req.userDisplayName === name && req.status === "approved")
           .reduce((sum, req) => sum + (req.hours || 0), 0);
-        const totalHours = workingHours + personOT;
+        const adjustedWorkingHours = getAdjustedHours(name, selectedOrder.id, log.step, orders);
+        const totalHours = adjustedWorkingHours + personOT;
         const workdays = parseFloat((totalHours / 8).toFixed(2));
         const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
-        const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+        const cost = (adjustedWorkingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
         
         return {
           name,
-          workingHours,
+          workingHours: adjustedWorkingHours,
           overtimeHours: personOT,
           workdays,
           cost,
@@ -592,6 +657,7 @@ export function FinanceDashboard({
 
       const stepCost = assigneeDetails.reduce((sum, item) => sum + item.cost, 0);
       const stepWorkdays = assigneeDetails.reduce((sum, item) => sum + item.workdays, 0);
+      const totalAdjustedStepHours = assigneeDetails.reduce((sum, item) => sum + item.workingHours, 0);
       
       laborCost += stepCost;
       totalWorkdays += stepWorkdays;
@@ -600,7 +666,7 @@ export function FinanceDashboard({
         step: log.step,
         startedAt: log.startedAt,
         completedAt: log.completedAt,
-        workingHours,
+        workingHours: parseFloat((totalAdjustedStepHours / (assigneeDetails.length || 1)).toFixed(2)),
         workerCount: finalAssignees.length,
         assigneeDetails,
         cost: stepCost,
@@ -777,7 +843,8 @@ export function FinanceDashboard({
           if (log.assignee !== account.displayName) return;
           const monthSource = log.completedAt || log.startedAt;
           if (normalizeMonth(monthSource) !== reportMonth) return;
-          assignedHours += calculateWorkingHours(log.startedAt, log.completedAt);
+          const adjustedHours = getAdjustedHours(account.displayName, order.id, log.step, orders);
+          assignedHours += adjustedHours;
         });
       });
 
@@ -1359,7 +1426,7 @@ export function FinanceDashboard({
                     <h3 className="text-xl font-black text-slate-900">{selectedOrder.code}</h3>
                     <button
                       type="button"
-                      onClick={() => exportOrderToExcel(selectedOrder, accounts, overtimeRequests, cashTransactions)}
+                      onClick={() => exportOrderToExcel(selectedOrder, accounts, overtimeRequests, cashTransactions, orders)}
                       title="Tải toàn bộ dữ liệu đơn hàng (Excel)"
                       className="flex h-7 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[10px] font-black text-slate-700 transition hover:bg-slate-50 hover:text-orange-500 shadow-sm"
                     >

@@ -2,15 +2,132 @@
 
 import { BriefcaseBusiness, Camera, Clock3, Download, FileText, IdCard, Lock, UserRound, Image, CheckSquare, Square, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { UserAccount } from "../accounts";
 import type { LeaveRequest, LeaveType } from "../leave";
 import { leaveStatusLabels, leaveTypeLabels } from "../leave";
 import { canUseOvertime, type Position } from "../roles";
+import type { Order } from "@/modules/orders/orderFlow";
 import { getRequiredApprovals } from "@/modules/attendance/compensationRules";
 
 type Slot = "07:30" | "11:30" | "13:30" | "17:30";
 const slots: Slot[] = ["07:30", "11:30", "13:30", "17:30"];
+
+export function calculateUserAllowances(
+  userId: string,
+  displayName: string,
+  monthDays: Date[],
+  attendance: Record<string, string>,
+  orders: Order[],
+  workerAllowances: Record<string, any>
+) {
+  const now = new Date();
+  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  // 1. Calculate calcFullDays
+  let calcFullDays = 0;
+  monthDays.forEach((day) => {
+    const dayNum = day.getDate();
+    let morningChecked = false;
+    let afternoonChecked = false;
+    
+    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+    slotsForDay.forEach((slot) => {
+      const key = `${userId}-${dayNum}-${slot}`;
+      if (attendance[key] === "normal" || attendance[key] === "compensated") {
+        if (slot === "07:30" || slot === "11:30") morningChecked = true;
+        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+      }
+    });
+
+    if (morningChecked && afternoonChecked) {
+      calcFullDays += 1;
+    }
+  });
+
+  // 2. Calculate calcSiteDays and calcSiteFullDays
+  let calcSiteDays = 0;
+  let calcSiteFullDays = 0;
+
+  monthDays.forEach((day) => {
+    const dayNum = day.getDate();
+    const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+
+    // Has user clocked in at all on this day?
+    let checkedCount = 0;
+    let morningChecked = false;
+    let afternoonChecked = false;
+    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+    slotsForDay.forEach((slot) => {
+      const key = `${userId}-${dayNum}-${slot}`;
+      if (attendance[key] === "normal" || attendance[key] === "compensated") {
+        checkedCount++;
+        if (slot === "07:30" || slot === "11:30") morningChecked = true;
+        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+      }
+    });
+
+    if (checkedCount === 0) return; // Didn't work today
+
+    // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
+    const hasSiteJob = orders.some((order) => {
+      if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
+        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+        const isAssigned = assignees.includes(displayName);
+        if (isAssigned && order.assignedInstallerDate === dateStr) {
+          return true;
+        }
+      }
+
+      return (order.historyLogs || []).some((log: any) => {
+        const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
+        if (!isLắpĐặt) return false;
+
+        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+        const logAssignees = log.assignee ? [log.assignee] : [];
+        const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
+        if (!finalAssignees.includes(displayName)) return false;
+
+        const start = log.acceptedAt || log.startedAt;
+        if (!start) return false;
+        const startDateText = start.substring(0, 10);
+        const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
+
+        return dateStr >= startDateText && dateStr <= endDateText;
+      });
+    });
+
+    if (hasSiteJob) {
+      calcSiteDays += 1;
+      if (morningChecked && afternoonChecked) {
+        calcSiteFullDays += 1;
+      }
+    }
+  });
+
+  // 3. Read overrides from workerAllowances
+  const key = `${userId}-${currentMonthStr}`;
+  const overrides = workerAllowances[key] || {};
+
+  const siteDays = overrides.siteDays !== undefined ? overrides.siteDays : calcSiteDays;
+  const siteFullDays = overrides.siteFullDays !== undefined ? overrides.siteFullDays : calcSiteFullDays;
+  const fullDays = overrides.fullDays !== undefined ? overrides.fullDays : calcFullDays;
+
+  // 4. Calculate allowance money
+  const mealAllowance = fullDays * 30000;
+  const siteAllowance = siteDays * 50000 + siteFullDays * 10000; // xăng xe 40k, nước 10k, ăn thêm 10k
+
+  return {
+    calcFullDays,
+    calcSiteDays,
+    calcSiteFullDays,
+    siteDays,
+    siteFullDays,
+    fullDays,
+    mealAllowance,
+    siteAllowance
+  };
+}
 
 export function ProfileDashboard({ 
   account, 
@@ -20,7 +137,9 @@ export function ProfileDashboard({
   compensationRequests = [],
   onCompensationRequestsChange,
   leaveRequests = [],
-  onLeaveRequestsChange
+  onLeaveRequestsChange,
+  orders = [],
+  workerAllowances = {}
 }: { 
   account: UserAccount; 
   accounts?: UserAccount[]; 
@@ -31,6 +150,8 @@ export function ProfileDashboard({
   onCompensationRequestsChange?: (requests: any[]) => void;
   leaveRequests?: LeaveRequest[];
   onLeaveRequestsChange?: (requests: LeaveRequest[]) => void;
+  orders?: Order[];
+  workerAllowances?: Record<string, any>;
 }) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -47,7 +168,6 @@ export function ProfileDashboard({
   const [message, setMessage] = useState("");
   const today = new Date().getDate();
 
-  // Tính ngày mốc bù công gần nhất của nhân viên này trong tháng
   const latestCompDay = useMemo(() => {
     const now = new Date();
     const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -67,17 +187,14 @@ export function ProfileDashboard({
     return maxDay;
   }, [compensationRequests, account.id]);
 
-  // Số ngày công tối đa trong tháng (Loại trừ Chủ Nhật)
   const maxWorkDays = useMemo(() => {
     return monthDays.filter((day) => day.getDay() !== 0).length;
   }, [monthDays]);
 
-  // Số ngày cần làm việc đến hôm nay (Loại trừ Chủ Nhật)
   const expectedDays = useMemo(() => {
     return monthDays.filter((day) => day.getDay() !== 0 && day.getDate() <= today).length;
   }, [monthDays, today]);
 
-  // Đếm ngày công thực tế từ Database chấm công thật (4 mốc = 1.0 công, 2-3 mốc = 0.5 công, 0-1 mốc = 0 công)
   const workDays = useMemo(() => {
     let total = 0;
     monthDays.forEach((day) => {
@@ -98,7 +215,6 @@ export function ProfileDashboard({
 
   const totalHours = workDays * 8;
   
-  // Tính tổng giờ tăng ca thực tế đã duyệt của tháng này từ Database
   const overtime = useMemo(() => {
     if (!canUseOvertime(position.id)) return 0;
     const now = new Date();
@@ -118,17 +234,31 @@ export function ProfileDashboard({
   const salaryType = account.salaryType ?? "daily";
   const salaryValue = account.salaryValue ?? (position.id === "hr" ? 420000 : position.id === "accountant" ? 400000 : 350000);
 
-  // Thu nhập tạm tính động:
-  // - Lương tháng: Lương tháng / (Số ngày công tối đa) * Số ngày công đã chấm
-  // - Lương ngày: Số ngày công * Lương ngày + Giờ tăng ca * 1.5 * (Lương ngày / 8)
-  const estimatedIncome = useMemo(() => {
+  const isWorker = ["production_worker", "installer"].includes(position.id);
+
+  const allowances = useMemo(() => {
+    if (!isWorker) return { siteDays: 0, siteFullDays: 0, fullDays: 0, mealAllowance: 0, siteAllowance: 0 };
+    return calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances);
+  }, [isWorker, account.id, account.displayName, monthDays, attendance, orders, workerAllowances]);
+
+  const basePay = useMemo(() => {
     if (salaryType === "monthly") {
       return maxWorkDays ? (salaryValue / maxWorkDays) * workDays : 0;
     }
-    const base = workDays * salaryValue;
-    const otPay = overtime * 1.5 * (salaryValue / 8);
-    return base + otPay;
-  }, [salaryType, salaryValue, workDays, overtime, maxWorkDays]);
+    return workDays * salaryValue;
+  }, [salaryType, salaryValue, workDays, maxWorkDays]);
+
+  const otPay = useMemo(() => {
+    return overtime * 1.5 * (salaryValue / 8);
+  }, [overtime, salaryValue]);
+
+  const estimatedIncome = useMemo(() => {
+    let total = basePay + otPay;
+    if (isWorker) {
+      total += allowances.mealAllowance + allowances.siteAllowance;
+    }
+    return total;
+  }, [basePay, otPay, isWorker, allowances]);
 
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
   const myLeaveRequests = useMemo(() => leaveRequests.filter((request) => request.employeeId === account.id), [leaveRequests, account.id]);
@@ -171,17 +301,14 @@ export function ProfileDashboard({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // 1. Background
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Border
     ctx.strokeStyle = "#e2e8f0";
     ctx.lineWidth = 2;
     ctx.strokeRect(5, 5, canvas.width - 10, canvas.height - 10);
 
-    // 2. Title & Header
-    ctx.fillStyle = "#071a38"; // Dark Navy GOMITA
+    ctx.fillStyle = "#071a38";
     ctx.fillRect(5, 5, canvas.width - 10, 80);
 
     ctx.fillStyle = "#ffffff";
@@ -192,33 +319,28 @@ export function ProfileDashboard({
     ctx.font = "bold 14px Arial, sans-serif";
     ctx.fillText(`Nhan vien: ${account.displayName.toUpperCase()}   |   Bo phan: ${account.department || "Xuong"}   |   Vi tri: ${position.name.toUpperCase()}`, 30, 70);
 
-    // 3. Grid Drawing
     const startX = 130;
     const startY = 150;
     const colWidth = 38;
     const rowHeight = 50;
 
-    // Draw Column Headers (Days)
     ctx.fillStyle = "#475569";
     ctx.font = "bold 13px Arial, sans-serif";
     ctx.fillText("Moc gio", 30, startY - 15);
 
     monthDays.forEach((day, index) => {
       const x = startX + index * colWidth;
-      ctx.fillStyle = day.getDay() === 0 ? "#ef4444" : "#475569"; // Red for Sunday
+      ctx.fillStyle = day.getDay() === 0 ? "#ef4444" : "#475569";
       ctx.fillText(String(day.getDate()), x + 10, startY - 15);
     });
 
-    // Draw Grid Lines & Data
     slots.forEach((slot, rowIndex) => {
       const y = startY + rowIndex * rowHeight;
       
-      // Row Name
       ctx.fillStyle = "#0f172a";
       ctx.font = "bold 13px Arial, sans-serif";
       ctx.fillText(slot, 30, y + 6);
 
-      // Horizontal line
       ctx.strokeStyle = "#f1f5f9";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -231,27 +353,24 @@ export function ProfileDashboard({
         const key = `${account.id}-${day.getDate()}-${slot}`;
         const kind = attendance[key];
 
-        // Draw Circle
         ctx.beginPath();
         ctx.arc(x + 15, y, 7, 0, 2 * Math.PI);
         if (kind === "normal") {
-          ctx.fillStyle = "#22c55e"; // Green
+          ctx.fillStyle = "#22c55e";
         } else if (kind === "compensated") {
-          ctx.fillStyle = "#3b82f6"; // Blue
+          ctx.fillStyle = "#3b82f6";
         } else {
-          ctx.fillStyle = "#cbd5e1"; // Gray
+          ctx.fillStyle = "#cbd5e1";
         }
         ctx.fill();
       });
     });
 
-    // 4. Legend at bottom
     const legendY = 380;
     ctx.fillStyle = "#0f172a";
     ctx.font = "bold 13px Arial, sans-serif";
     ctx.fillText("Chu thich:", 30, legendY);
 
-    // Green Dot
     ctx.beginPath();
     ctx.arc(130, legendY - 4, 6, 0, 2 * Math.PI);
     ctx.fillStyle = "#22c55e";
@@ -259,7 +378,6 @@ export function ProfileDashboard({
     ctx.fillStyle = "#475569";
     ctx.fillText("Da cham cong", 145, legendY);
 
-    // Blue Dot
     ctx.beginPath();
     ctx.arc(280, legendY - 4, 6, 0, 2 * Math.PI);
     ctx.fillStyle = "#3b82f6";
@@ -267,7 +385,6 @@ export function ProfileDashboard({
     ctx.fillStyle = "#475569";
     ctx.fillText("Cham cong bu", 295, legendY);
 
-    // Gray Dot
     ctx.beginPath();
     ctx.arc(430, legendY - 4, 6, 0, 2 * Math.PI);
     ctx.fillStyle = "#cbd5e1";
@@ -275,12 +392,10 @@ export function ProfileDashboard({
     ctx.fillStyle = "#475569";
     ctx.fillText("Thieu cong", 445, legendY);
 
-    // Brand mark
     ctx.fillStyle = "#94a3b8";
     ctx.font = "italic 11px Arial, sans-serif";
     ctx.fillText("He thong quan tri doanh nghiep GOMITA - Tu dong dong bo online", canvas.width - 380, legendY);
 
-    // Trigger download
     const url = canvas.toDataURL("image/png");
     const a = document.createElement("a");
     a.href = url;
@@ -324,7 +439,16 @@ export function ProfileDashboard({
         <Metric title="Tổng công trong tháng" value={`${workDays} / ${expectedDays}`} sub={`${workRate}%`} tone="green" />
         <Metric title="Số giờ làm việc" value={totalHours.toString()} sub="giờ" tone="violet" />
         <Metric title="Tăng ca (OT)" value={overtime.toString()} sub="giờ" tone="orange" />
-        <Metric title="Thu nhập tạm tính" value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} sub={salaryType === "monthly" ? "Tạm tính (Lương tháng / ngày công)" : "Tạm tính (Lương ngày + Tăng ca)"} tone="green" />
+        <Metric 
+          title="Thu nhập tạm tính" 
+          value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} 
+          sub={
+            isWorker
+              ? `Lương chính: ${Math.round(basePay).toLocaleString("vi-VN")}đ • Tăng ca: ${Math.round(otPay).toLocaleString("vi-VN")}đ • Ăn trưa (${allowances.fullDays}n): ${allowances.mealAllowance.toLocaleString("vi-VN")}đ • C.trình (${allowances.siteDays}n): ${allowances.siteAllowance.toLocaleString("vi-VN")}đ`
+              : salaryType === "monthly" ? "Tạm tính (Lương tháng / ngày công)" : "Tạm tính (Lương ngày + Tăng ca)"
+          } 
+          tone="green" 
+        />
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -459,7 +583,6 @@ export function ProfileDashboard({
               </button>
             </div>
 
-            {/* Chú thích */}
             <div className="mb-4 flex flex-wrap gap-4 rounded-lg bg-slate-50 p-3 text-xs font-bold text-slate-600 border border-slate-200">
               <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-green-500" /> Đã chấm</span>
               <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded-full bg-blue-500" /> Đã bù công</span>
@@ -468,7 +591,6 @@ export function ProfileDashboard({
               <span className="flex items-center gap-1.5">🔒 Đã khóa kì công</span>
             </div>
 
-            {/* Bảng lưới */}
             <div className="overflow-x-auto select-none rounded-lg border border-slate-200" style={{ WebkitOverflowScrolling: "touch" }}>
               <div className="min-w-[1140px] px-2 py-3 bg-white">
                 <div className="grid border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-600" style={{ gridTemplateColumns: `100px repeat(${monthDays.length}, 32px)` }}>
@@ -489,18 +611,14 @@ export function ProfileDashboard({
                       const key = `${account.id}-${dayNum}-${slot}`;
                       const kind = attendance[key];
                       
-                      // 1. Kiểm tra xem có yêu cầu đang chờ duyệt không
                       const isPending = compensationRequests.some(
                         (req) => req.employeeId === account.id && req.date === dateString && req.slots.includes(slot) && req.status === "pending"
                       );
 
-                      // 2. Kiểm tra xem ngày có bị khóa không (trước hoặc bằng ngày bù gần nhất)
                       const isLocked = dayNum <= latestCompDay;
 
-                      // 3. Kiểm tra xem có phải Chủ Nhật không
                       const isSunday = day.getDay() === 0;
 
-                      // 4. Kiểm tra xem ô này đã được chọn trong lượt này chưa
                       const itemKey = `${dayNum}-${slot}`;
                       const isSelected = compSelectedItems.includes(itemKey);
 
@@ -544,7 +662,6 @@ export function ProfileDashboard({
                         );
                       }
 
-                      // Nếu là mốc thiếu công và chưa bị khóa
                       return (
                         <button
                           key={day.toISOString()}
@@ -571,7 +688,6 @@ export function ProfileDashboard({
               </div>
             </div>
 
-            {/* Lý do & Nút Gửi */}
             <div className="mt-5 grid gap-4">
               <label className="grid gap-1 text-sm font-bold">
                 Lý do xin bù công *
@@ -680,26 +796,57 @@ export function ProfileDashboard({
 export function CompanyPayrollDashboard({ 
   accounts, 
   overtimeRequests = [],
-  attendance = {}
+  attendance = {},
+  orders = [],
+  workerAllowances = {},
+  onWorkerAllowancesChange
 }: { 
   accounts: UserAccount[]; 
   overtimeRequests?: any[]; 
   attendance?: Record<string, string>;
+  orders?: Order[];
+  workerAllowances?: Record<string, any>;
+  onWorkerAllowancesChange?: (allowances: Record<string, any>) => void;
 }) {
   const monthDays = useMemo(() => getCurrentMonthDays(), []);
   const now = new Date();
   const currentMonth = now.getMonth();
   const currentYear = now.getFullYear();
 
-  // Tổng số ngày công tối đa trong tháng (Loại trừ Chủ Nhật)
+  const [editingItem, setEditingItem] = useState<{
+    userId: string;
+    displayName: string;
+    calcFullDays: number;
+    calcSiteDays: number;
+    calcSiteFullDays: number;
+    siteDays: number;
+    siteFullDays: number;
+    fullDays: number;
+  } | null>(null);
+
+  const [siteDaysVal, setSiteDaysVal] = useState<number | "">("");
+  const [siteFullDaysVal, setSiteFullDaysVal] = useState<number | "">("");
+  const [fullDaysVal, setFullDaysVal] = useState<number | "">("");
+
+  useEffect(() => {
+    if (editingItem) {
+      setSiteDaysVal(editingItem.siteDays);
+      setSiteFullDaysVal(editingItem.siteFullDays);
+      setFullDaysVal(editingItem.fullDays);
+    } else {
+      setSiteDaysVal("");
+      setSiteFullDaysVal("");
+      setFullDaysVal("");
+    }
+  }, [editingItem]);
+
   const maxWorkDays = useMemo(() => {
     return monthDays.filter((day) => day.getDay() !== 0).length;
   }, [monthDays]);
 
   const rows = accounts.filter((account) => account.status === "active" && !account.positionIds.includes("director")).map((account) => {
-    // Đọc công thật 100% từ database, loại bỏ hoàn toàn dấu công fake của bản cũ
     const marks = monthDays.map((day) => {
-      if (day.getDay() === 0) return ""; // Chủ Nhật không tính
+      if (day.getDay() === 0) return "";
       
       const dayNum = day.getDate();
       let checkedCount = 0;
@@ -710,14 +857,13 @@ export function CompanyPayrollDashboard({
         }
       });
 
-      if (checkedCount === 4) return "X";  // Đủ 4 mốc = 1 công
-      if (checkedCount >= 2) return "/";   // Chấm 2 hoặc 3 mốc = 0.5 công
-      return "";                           // Thiếu mốc = 0 công
+      if (checkedCount === 4) return "X";
+      if (checkedCount >= 2) return "/";
+      return "";
     });
 
     const work = marks.reduce((total, mark) => total + (mark === "X" ? 1 : mark === "/" ? 0.5 : 0), 0);
     
-    // Giờ tăng ca (OT) trong tháng hiện tại
     const primaryPositionId = account.positionIds[0] || "";
     const otHours = canUseOvertime(primaryPositionId)
       ? overtimeRequests
@@ -733,28 +879,44 @@ export function CompanyPayrollDashboard({
     const salaryType = account.salaryType ?? "daily";
     const salaryValue = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);
     
-    // Thu nhập tạm tính động:
-    // - Lương tháng: Lương tháng / (Số ngày công tối đa) * Số ngày công đã chấm
-    // - Lương ngày: Số ngày công * Lương ngày + Giờ tăng ca * 1.5 * (Lương ngày / 8)
-    let totalIncome = 0;
-    if (salaryType === "monthly") {
-      totalIncome = maxWorkDays ? (salaryValue / maxWorkDays) * work : 0;
-    } else {
-      totalIncome = (work * salaryValue) + (otHours * 1.5 * (salaryValue / 8));
+    const isWorker = account.positionIds.some((id) => ["production_worker", "installer"].includes(id));
+    const allowances = calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances);
+    
+    const basePay = salaryType === "monthly"
+      ? (maxWorkDays ? (salaryValue / maxWorkDays) * work : 0)
+      : (work * salaryValue);
+    
+    const otPay = otHours * 1.5 * (salaryValue / 8);
+
+    let totalIncome = basePay + otPay;
+    if (isWorker) {
+      totalIncome += allowances.mealAllowance + allowances.siteAllowance;
     }
 
-    return { account, marks, work, otHours, salaryType, salaryValue, totalIncome };
+    return { 
+      account, 
+      marks, 
+      work, 
+      otHours, 
+      salaryType, 
+      salaryValue, 
+      totalIncome,
+      isWorker,
+      basePay,
+      otPay,
+      allowances
+    };
   });
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section className="rounded-lg border border-slate-200 bg-white shadow-sm text-slate-900">
       <div className="border-b border-slate-200 px-5 py-4">
         <h2 className="text-xl font-black">Bảng lương công ty</h2>
         <p className="text-sm text-slate-500">Tính toán động từ mốc chấm công thật: Đủ 4 mốc = 1.0 công (X); 2 hoặc 3 mốc = 0.5 công (/); Dưới 2 mốc = 0.0 công.</p>
       </div>
       <div className="overflow-x-auto">
-        <div className="min-w-[1980px]">
-          <div className="grid bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `180px 110px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
+        <div className="min-w-[2080px]">
+          <div className="grid bg-slate-50 px-4 py-3 text-sm font-black text-slate-600" style={{ gridTemplateColumns: `180px 110px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 150px 100px` }}>
             <div>Nhân sự</div>
             <div>Mã NV</div>
             <div>Bộ phận</div>
@@ -764,11 +926,12 @@ export function CompanyPayrollDashboard({
             <div>Hình thức</div>
             <div className="text-right">Mức lương</div>
             <div className="text-right text-orange-600">Tổng thu nhập</div>
+            <div className="text-center">Thao tác</div>
           </div>
-          {rows.map((row) => {
+                              {rows.map((row) => {
             const displayType = row.salaryType === "monthly" ? "Tháng" : "Ngày";
             return (
-              <div key={row.account.id} className="grid items-center border-t border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 transition" style={{ gridTemplateColumns: `180px 110px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 140px` }}>
+              <div key={row.account.id} className="grid items-center border-t border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 transition" style={{ gridTemplateColumns: `180px 110px 140px repeat(${monthDays.length}, 38px) 60px 70px 100px 110px 150px 100px` }}>
                 <div className="font-black">{row.account.displayName}</div>
                 <div className="font-bold text-orange-600">{row.account.employeeCode || "Chưa có"}</div>
                 <div className="text-slate-500">{row.account.department}</div>
@@ -777,17 +940,160 @@ export function CompanyPayrollDashboard({
                 <div className="text-center font-bold text-orange-600">{row.otHours}h</div>
                 <div className="font-bold text-slate-600">{displayType}</div>
                 <div className="text-right font-bold">{row.salaryValue.toLocaleString("vi-VN")} đ</div>
-                <div className="text-right font-black text-green-600">{Math.round(row.totalIncome).toLocaleString("vi-VN")} đ</div>
+                <div className="text-right font-black text-green-600">
+                  <div>{Math.round(row.totalIncome).toLocaleString("vi-VN")} đ</div>
+                  <div className="text-[10px] text-slate-400 font-normal leading-tight">
+                    Lương chính: {Math.round(row.basePay).toLocaleString("vi-VN")} đ
+                    {row.isWorker && (
+                      <>
+                        <br />Ăn trưa ({row.allowances.fullDays}n): {Math.round(row.allowances.mealAllowance).toLocaleString("vi-VN")} đ
+                        <br />Công trình ({row.allowances.siteDays}n): {Math.round(row.allowances.siteAllowance).toLocaleString("vi-VN")} đ
+                      </>
+                    )}
+                    {row.otPay > 0 && (
+                      <>
+                        <br />Tăng ca: {Math.round(row.otPay).toLocaleString("vi-VN")} đ
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="text-center">
+                  {row.isWorker ? (
+                    <button
+                      onClick={() => setEditingItem({
+                        userId: row.account.id,
+                        displayName: row.account.displayName,
+                        calcFullDays: row.allowances.calcFullDays,
+                        calcSiteDays: row.allowances.calcSiteDays,
+                        calcSiteFullDays: row.allowances.calcSiteFullDays,
+                        siteDays: row.allowances.siteDays,
+                        siteFullDays: row.allowances.siteFullDays,
+                        fullDays: row.allowances.fullDays,
+                      })}
+                      className="rounded border border-orange-500 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-600 hover:bg-orange-100 transition animate-pulse"
+                    >
+                      Phụ cấp
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-400">-</span>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
       </div>
+
+      {editingItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl text-slate-900 border border-slate-200">
+            <div className="mb-4 flex items-center justify-between border-b pb-3">
+              <h3 className="text-lg font-black text-slate-800">Điều chỉnh phụ cấp: {editingItem.displayName}</h3>
+              <button onClick={() => setEditingItem(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <div className="grid gap-4 text-sm">
+              <div>
+                <span className="text-xs font-bold text-slate-500 block mb-1">MỐC TỰ ĐỘNG (DỰA TRÊN CHẤM CÔNG & LOGS)</span>
+                <div className="rounded bg-slate-50 p-2 text-xs text-slate-600 leading-relaxed">
+                  • Ngày ăn trưa cả ngày (tự động): {editingItem.calcFullDays} ngày<br />
+                  • Ngày đi công trình (tự động): {editingItem.calcSiteDays} ngày<br />
+                  • Ngày công trình cả ngày (tự động): {editingItem.calcSiteFullDays} ngày
+                </div>
+              </div>
+
+              <label className="grid gap-1">
+                <span className="font-bold text-slate-700">Số ngày hưởng phụ cấp ăn trưa (30k/ngày)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  value={fullDaysVal}
+                  onChange={(e) => setFullDaysVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder={`Mặc định: ${editingItem.calcFullDays}`}
+                />
+              </label>
+
+              <label className="grid gap-1">
+                <span className="font-bold text-slate-700">Số ngày đi công trình (50k/ngày xăng + nước)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={siteDaysVal}
+                  onChange={(e) => setSiteDaysVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder={`Mặc định: ${editingItem.calcSiteDays}`}
+                />
+              </label>
+
+              <label className="grid gap-1">
+                <span className="font-bold text-slate-700">Số ngày công trình cả ngày (ăn thêm +10k/ngày)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={siteFullDaysVal}
+                  onChange={(e) => setSiteFullDaysVal(e.target.value === "" ? "" : Number(e.target.value))}
+                  className="rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none"
+                  placeholder={`Mặc định: ${editingItem.calcSiteFullDays}`}
+                />
+              </label>
+            </div>
+
+            <div className="mt-6 flex items-center justify-between gap-3 border-t pt-4">
+              <button
+                onClick={() => {
+                  setFullDaysVal(editingItem.calcFullDays);
+                  setSiteDaysVal(editingItem.calcSiteDays);
+                  setSiteFullDaysVal(editingItem.calcSiteFullDays);
+                }}
+                className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
+              >
+                Mặc định tự động
+              </button>
+              
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setEditingItem(null)}
+                  className="rounded border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={() => {
+                    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+                    const targetKey = `${editingItem.userId}-${currentMonthStr}`;
+                    
+                    const nextAllowances = {
+                      ...workerAllowances,
+                      [targetKey]: {
+                        fullDays: fullDaysVal === "" ? undefined : fullDaysVal,
+                        siteDays: siteDaysVal === "" ? undefined : siteDaysVal,
+                        siteFullDays: siteFullDaysVal === "" ? undefined : siteFullDaysVal,
+                      }
+                    };
+                    onWorkerAllowancesChange?.(nextAllowances);
+                    setEditingItem(null);
+                  }}
+                  className="rounded bg-orange-500 px-4 py-2 text-xs font-bold text-white hover:bg-orange-600 transition"
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
 
-function AttendanceGrid({ 
+function AttendanceGrid
+({ 
   monthDays, 
   attendance, 
   accountId 

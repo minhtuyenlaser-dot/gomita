@@ -37,6 +37,7 @@ export type Order = {
   productionWorkerNames?: string[];
   installerName: string;
   installerNames?: string[];
+  assignedInstallerDate?: string;
   deadline: string;
   progressPercent: 0 | 10 | 35 | 60 | 90 | 100;
   priority: OrderPriority;
@@ -86,7 +87,7 @@ export type Order = {
   installationCosts?: { transport: number; loader: number };
   materialsList?: Array<{ name: string; price: number }>;
   incurredCosts?: Array<{ note: string; amount: number }>;
-  historyLogs?: Array<{ step: OrderStep; assignee: string; startedAt?: string; completedAt?: string; }>;
+  historyLogs?: Array<{ step: OrderStep; assignee: string; startedAt?: string; completedAt?: string; acceptedAt?: string; }>;
   customLaborCost?: number;
 };
 
@@ -364,7 +365,7 @@ export function moveToNextStep(order: Order): Order {
 
   const nowStr = new Date().toISOString();
   const updatedLogs = (order.historyLogs || []).map(log => 
-    log.step === order.step ? { ...log, completedAt: nowStr } : log
+    log.step === order.step ? { ...log, completedAt: log.completedAt || nowStr } : log
   );
 
   let nextAssignee = order.saleName;
@@ -399,12 +400,17 @@ export function moveToNextStep(order: Order): Order {
 export function requestStepConfirmation(order: Order, requestedBy: string, reason = "Nhân viên báo hoàn thành") {
   const nextStep = orderSteps[getStepIndex(order.step) + 1];
   if (!nextStep) return order;
+  const nowStr = new Date().toISOString();
+  const updatedLogs = (order.historyLogs || []).map(log => 
+    log.step === order.step ? { ...log, completedAt: log.completedAt || nowStr } : log
+  );
   return {
     ...order,
     workStatus: "pending_confirmation" as const,
     pendingStep: nextStep,
     pendingBy: requestedBy,
-    pendingReason: reason
+    pendingReason: reason,
+    historyLogs: updatedLogs
   };
 }
 

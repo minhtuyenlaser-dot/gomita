@@ -1,0 +1,281 @@
+{
+  "metadata": {
+    "generatedAt": "2026-06-01T06:57:41.906Z",
+    "sourceFile": "E:\\Product\\7. Go CNC\\PM\\ok\\gomita_quan_ly_cong_ty\\src\\gomita_db.json",
+    "warnings": [
+      "Attendance cũ chưa đủ ngày đầy đủ (chỉ có day token), cần quy đổi trước khi import vào attendance_records."
+    ],
+    "counts": {
+      "accounts": 2,
+      "orders": 2,
+      "leaveRequests": 0,
+      "cashTransactions": 0,
+      "customerDebts": 0,
+      "unresolvedAttendance": 1
+    }
+  },
+  "departments": [
+    {
+      "id": "dep-quan-tri",
+      "name": "Quản trị"
+    },
+    {
+      "id": "dep-giam-oc",
+      "name": "Giám đốc"
+    },
+    {
+      "id": "dep-phong-sale",
+      "name": "Phòng Sale"
+    },
+    {
+      "id": "dep-phong-thiet-ke",
+      "name": "Phòng Thiết kế"
+    },
+    {
+      "id": "dep-xuong",
+      "name": "Xưởng"
+    },
+    {
+      "id": "dep-giam-sat",
+      "name": "Giám sát"
+    },
+    {
+      "id": "dep-ke-toan",
+      "name": "Kế toán"
+    },
+    {
+      "id": "dep-nhan-su",
+      "name": "Nhân sự"
+    }
+  ],
+  "positions": [
+    {
+      "id": "admin",
+      "department_id": "dep-quan-tri",
+      "title": "Quản trị hệ thống",
+      "level": "admin"
+    },
+    {
+      "id": "director",
+      "department_id": "dep-giam-oc",
+      "title": "Giám đốc",
+      "level": "director"
+    },
+    {
+      "id": "sale_manager",
+      "department_id": "dep-phong-sale",
+      "title": "Quản lý Sale",
+      "level": "department_head"
+    },
+    {
+      "id": "sale",
+      "department_id": "dep-phong-sale",
+      "title": "Nhân viên Sale",
+      "level": "staff"
+    },
+    {
+      "id": "design_manager",
+      "department_id": "dep-phong-thiet-ke",
+      "title": "Trưởng phòng thiết kế",
+      "level": "department_head"
+    },
+    {
+      "id": "designer",
+      "department_id": "dep-phong-thiet-ke",
+      "title": "Thiết kế",
+      "level": "staff"
+    },
+    {
+      "id": "workshop_manager",
+      "department_id": "dep-xuong",
+      "title": "Quản lý xưởng",
+      "level": "department_head"
+    },
+    {
+      "id": "file_operator",
+      "department_id": "dep-xuong",
+      "title": "Ra file",
+      "level": "staff"
+    },
+    {
+      "id": "production_worker",
+      "department_id": "dep-xuong",
+      "title": "Thợ sản xuất",
+      "level": "staff"
+    },
+    {
+      "id": "supervisor_lead",
+      "department_id": "dep-giam-sat",
+      "title": "Trưởng giám sát",
+      "level": "team_lead"
+    },
+    {
+      "id": "installer",
+      "department_id": "dep-giam-sat",
+      "title": "Thợ lắp đặt",
+      "level": "staff"
+    },
+    {
+      "id": "accountant",
+      "department_id": "dep-ke-toan",
+      "title": "Kế toán",
+      "level": "staff"
+    },
+    {
+      "id": "hr",
+      "department_id": "dep-nhan-su",
+      "title": "Nhân sự",
+      "level": "department_head"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "u-1780069801627",
+      "full_name": "Tuyen",
+      "phone": null,
+      "employee_code": null,
+      "active": true,
+      "legacy_username": "tuyen",
+      "legacy_password": "123456",
+      "legacy_department": "Giám sát",
+      "salary_type": "monthly",
+      "salary_value": 10000000,
+      "id_card_number": null,
+      "labor_contract_note": null
+    },
+    {
+      "id": "u-director",
+      "full_name": "Giám đốc GOMITA",
+      "phone": null,
+      "employee_code": null,
+      "active": true,
+      "legacy_username": "giamdoc",
+      "legacy_password": "123456",
+      "legacy_department": "Giám đốc",
+      "salary_type": "monthly",
+      "salary_value": 25000000,
+      "id_card_number": null,
+      "labor_contract_note": null
+    }
+  ],
+  "profile_positions": [
+    {
+      "profile_id": "u-1780069801627",
+      "position_id": "supervisor_lead"
+    },
+    {
+      "profile_id": "u-director",
+      "position_id": "director"
+    }
+  ],
+  "employee_documents": [],
+  "orders": [
+    {
+      "id": "o-1",
+      "code": "TUAN-LECHAN-759",
+      "customer_name": "Anh Tuấn Lê Chân",
+      "customer_phone": "0912***456",
+      "customer_area": "Hải Phòng",
+      "address": "123 Lạch Tray, Ngô Quyền",
+      "step": "production",
+      "assigned_sale_id": null,
+      "progress_percent": 60,
+      "deadline_at": "2026-06-05T00:00:00+07:00",
+      "created_by": null,
+      "legacy_work_status": "working",
+      "customer_request": "",
+      "final_note": ""
+    },
+    {
+      "id": "o-2",
+      "code": "HOA-THUYNGUYEN-258",
+      "customer_name": "Chị Hoa Thủy Nguyên",
+      "customer_phone": "0904***789",
+      "customer_area": "Hải Phòng",
+      "address": "Đường Đà Nẵng, Thủy Nguyên",
+      "step": "installation",
+      "assigned_sale_id": null,
+      "progress_percent": 40,
+      "deadline_at": "2026-06-08T00:00:00+07:00",
+      "created_by": null,
+      "legacy_work_status": "working",
+      "customer_request": "",
+      "final_note": ""
+    }
+  ],
+  "order_assignments": [
+    {
+      "id": "assign-o-1-production-1",
+      "order_id": "o-1",
+      "profile_id": null,
+      "legacy_employee_name": "Tuấn sản xuất",
+      "step": "production",
+      "assigned_note": null,
+      "started_at": null,
+      "finished_at": null
+    },
+    {
+      "id": "assign-o-2-installation-1",
+      "order_id": "o-2",
+      "profile_id": null,
+      "legacy_employee_name": "Hoa lắp đặt",
+      "step": "installation",
+      "assigned_note": null,
+      "started_at": null,
+      "finished_at": null
+    }
+  ],
+  "order_budgets": [
+    {
+      "order_id": "o-1",
+      "quoted_revenue": 0,
+      "budget_material_cost": 0,
+      "budget_labor_cost": 0,
+      "budget_other_cost": 0,
+      "actual_revenue": 0,
+      "actual_material_cost": 0,
+      "actual_labor_cost": 0,
+      "actual_other_cost": 0
+    },
+    {
+      "order_id": "o-2",
+      "quoted_revenue": 0,
+      "budget_material_cost": 0,
+      "budget_labor_cost": 0,
+      "budget_other_cost": 0,
+      "actual_revenue": 0,
+      "actual_material_cost": 0,
+      "actual_labor_cost": 0,
+      "actual_other_cost": 0
+    }
+  ],
+  "leave_requests": [],
+  "cash_accounts": [
+    {
+      "id": "cash-quy-tien-mat",
+      "name": "Quỹ tiền mặt",
+      "account_type": "cash",
+      "bank_name": null,
+      "account_number": null,
+      "opening_balance": 0,
+      "active": true
+    }
+  ],
+  "cash_transactions": [],
+  "order_payment_schedules": [],
+  "customer_payments": [],
+  "unresolved_attendance": [
+    {
+      "key": "u-director-undefined-07:30",
+      "status": "normal",
+      "detail": {
+        "photo": "test",
+        "gps": "20.0,106.0",
+        "gpsAddress": "",
+        "gpsMeta": null,
+        "time": "2026-06-01T07:30:00.000Z"
+      },
+      "reason": "Khóa attendance cũ chỉ có userId-day-slot, chưa đủ work_date đầy đủ để import thẳng."
+    }
+  ]
+}

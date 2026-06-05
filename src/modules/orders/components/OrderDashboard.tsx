@@ -327,6 +327,7 @@ export function OrderDashboard({
             overtimeRequests={overtimeRequests}
             isSyncing={isSyncing}
             cashTransactions={cashTransactions}
+            orders={orders}
           />
         ) : (
           <aside className="border-t border-slate-200 bg-white p-4 text-slate-500 xl:border-l xl:border-t-0">Chưa có đơn phù hợp với quyền.</aside>
@@ -473,7 +474,122 @@ function CanceledOrdersModal({ orders, onClose }: { orders: Order[]; onClose: ()
   );
 }
 
-function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overtimeRequests: any[] = []) {
+function getAdjustedHoursForSingleOrder(
+  workerName: string,
+  targetOrderId: string,
+  targetStep: string,
+  allOrders: Order[]
+): number {
+  const intervals: Array<{ orderId: string; step: string; start: Date; end: Date }> = [];
+  const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
+
+  const getAssigneeListForAnyOrder = (o: Order, step: string): string[] => {
+    switch (step) {
+      case "Tiếp nhận":
+      case "Báo giá":
+        return o.saleName ? o.saleName.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      case "Thiết kế":
+        return ((o.designerNames?.length ? o.designerNames : [o.designerName]) as string[]).filter(Boolean);
+      case "Ra file":
+        return ((o.fileOperatorNames?.length ? o.fileOperatorNames : [o.fileOperatorName]) as string[]).filter(Boolean);
+      case "Sản xuất":
+        return ((o.productionWorkerNames?.length ? o.productionWorkerNames : [o.productionWorkerName]) as string[]).filter(Boolean);
+      case "Lắp đặt":
+        return ((o.installerNames?.length ? o.installerNames : [o.installerName]) as string[]).filter(Boolean);
+      case "Nghiệm thu":
+      case "Hoàn công":
+        return ((o.supervisorNames?.length ? o.supervisorNames : [o.supervisorName]) as string[]).filter(Boolean);
+      default:
+        return [];
+    }
+  };
+
+  function calculateWorkingHours(startStr?: string, endStr?: string): number {
+    if (!startStr) return 0;
+    const start = new Date(startStr);
+    const end = endStr ? new Date(endStr) : new Date();
+    if (end < start) return 0;
+    
+    let totalHours = 0;
+    let d = new Date(start);
+    const stepMinutes = 15;
+    
+    while (d < end) {
+      const day = d.getDay();
+      if (day !== 0) { // Bỏ qua Chủ Nhật
+        const hours = d.getHours();
+        const minutes = d.getMinutes();
+        const timeInMinutes = hours * 60 + minutes;
+        
+        const isMorning = timeInMinutes >= 450 && timeInMinutes < 690;
+        const isAfternoon = timeInMinutes >= 810 && timeInMinutes < 1050;
+        
+        if (isMorning || isAfternoon) {
+          totalHours += stepMinutes / 60;
+        }
+      }
+      d.setMinutes(d.getMinutes() + stepMinutes);
+    }
+    return parseFloat(totalHours.toFixed(1));
+  }
+
+  for (const order of allOrders) {
+    const logs = order.historyLogs || [];
+    for (const log of logs) {
+      if (!allowedSteps.includes(log.step)) continue;
+      
+      const assigneeList = getAssigneeListForAnyOrder(order, log.step);
+      const finalAssignees = assigneeList.length > 0 ? assigneeList : [log.assignee].filter(Boolean);
+      if (!finalAssignees.includes(workerName)) continue;
+
+      let startStr = log.startedAt;
+      if (["Thiết kế", "Ra file"].includes(log.step)) {
+        startStr = log.acceptedAt;
+      }
+      if (!startStr) continue;
+
+      const start = new Date(startStr);
+      const end = log.completedAt ? new Date(log.completedAt) : new Date();
+      if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) continue;
+
+      intervals.push({ orderId: order.id, step: log.step, start, end });
+    }
+  }
+
+  if (intervals.length === 0) return 0;
+
+  const timestampsSet = new Set<number>();
+  for (const iv of intervals) {
+    timestampsSet.add(iv.start.getTime());
+    timestampsSet.add(iv.end.getTime());
+  }
+  const sortedTimes = Array.from(timestampsSet).sort((a, b) => a - b);
+
+  let totalAdjustedHours = 0;
+
+  for (let i = 0; i < sortedTimes.length - 1; i++) {
+    const tStart = sortedTimes[i];
+    const tEnd = sortedTimes[i + 1];
+    const tMid = (tStart + tEnd) / 2;
+
+    const active = intervals.filter(iv => iv.start.getTime() <= tMid && iv.end.getTime() >= tMid);
+    if (active.length === 0) continue;
+
+    const targetActive = active.filter(iv => iv.orderId === targetOrderId && iv.step === targetStep);
+    if (targetActive.length === 0) continue;
+
+    const subHours = calculateWorkingHours(new Date(tStart).toISOString(), new Date(tEnd).toISOString());
+    if (subHours <= 0) continue;
+
+    const uniqueOrderIds = new Set(active.map(iv => iv.orderId));
+    const concurrency = uniqueOrderIds.size;
+    totalAdjustedHours += subHours / concurrency;
+  }
+
+  return parseFloat(totalAdjustedHours.toFixed(2));
+}
+
+function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overtimeRequests: any[] = [], allOrders: Order[] = []) {
   function calculateWorkingHours(startStr?: string, endStr?: string): number {
     if (!startStr) return 0;
     const start = new Date(startStr);
@@ -530,19 +646,19 @@ function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overti
   // 1. Lấy TOÀN BỘ người thực hiện mỗi công đoạn từ order.*Names (chính xác hơn historyLogs.assignee)
   function getAssigneeListForStep(step: string): string[] {
     switch (step) {
-      case "Ti\u1ebfp nh\u1eadn":
-      case "B\u00e1o gi\u00e1":
+      case "Tiếp nhận":
+      case "Báo giá":
         return order.saleName ? order.saleName.split(",").map((s) => s.trim()).filter(Boolean) : [];
-      case "Thi\u1ebft k\u1ebf":
+      case "Thiết kế":
         return ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
       case "Ra file":
         return ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
-      case "S\u1ea3n xu\u1ea5t":
+      case "Sản xuất":
         return ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
-      case "L\u1eafp \u0111\u1eb7t":
+      case "Lắp đặt":
         return ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
-      case "Nghi\u1ec7m thu":
-      case "Ho\u00e0n c\u00f4ng":
+      case "Nghiệm thu":
+      case "Hoàn công":
         return ((order.supervisorNames?.length ? order.supervisorNames : [order.supervisorName]) as string[]).filter(Boolean);
       default:
         return [];
@@ -556,7 +672,6 @@ function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overti
   const logsSummary = (order.historyLogs || [])
     .filter((log) => allowedSteps.includes(log.step))
     .map((log) => {
-    const workingHours = calculateWorkingHours(log.startedAt, log.completedAt);
     const assigneeList = getAssigneeListForStep(log.step);
     // Nếu không tìm được ai từ order fields, dùng log.assignee làm fallback
     const finalAssignees = assigneeList.length > 0 ? assigneeList : [log.assignee].filter(Boolean);
@@ -566,26 +681,31 @@ function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overti
       const personOT = overtimeRequests
         .filter((req) => req.orderCode === order.code && req.userDisplayName === name && req.status === "approved")
         .reduce((sum, req) => sum + (req.hours || 0), 0);
-      const totalHours = workingHours + personOT;
+      const adjustedWorkingHours = getAdjustedHoursForSingleOrder(name, order.id, log.step, allOrders.length > 0 ? allOrders : [order]);
+      const totalHours = adjustedWorkingHours + personOT;
       const workdays = parseFloat((totalHours / 8).toFixed(2));
       const hourlyRate = getHourlyRateForAssignee(name, log.completedAt || log.startedAt);
-      const cost = (workingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
+      const cost = (adjustedWorkingHours * hourlyRate) + (personOT * hourlyRate * 1.5);
       totalWorkdays += workdays;
       totalLaborCost += cost;
-      return { name, overtimeHours: personOT, workdays, cost, hourlyRate };
+      return { name, overtimeHours: personOT, workdays, cost, hourlyRate, adjustedWorkingHours };
     });
+
+    const totalAdjustedStepHours = assigneeDetails.reduce((sum, p) => sum + p.adjustedWorkingHours, 0);
 
     return {
       step: log.step,
       startedAt: log.startedAt,
       completedAt: log.completedAt,
-      workingHours,
+      workingHours: parseFloat((totalAdjustedStepHours / (assigneeDetails.length || 1)).toFixed(2)),
       assignees: assigneeDetails,
     };
   });
 
   // 3. Chi phí vật tư
   const materialCost = (order.materialsList || []).reduce((sum, mat) => sum + mat.price, 0);
+  // Rest of the downloadOrderArchive remains unchanged...
+
 
   // 4. Phụ kiện ngoài
   let accessorySales = 0;
@@ -779,7 +899,8 @@ function OrderSidePanel({
   onCancel,
   overtimeRequests = [],
   isSyncing = false,
-  cashTransactions = []
+  cashTransactions = [],
+  orders = []
 }: {
   accounts: UserAccount[];
   order: Order;
@@ -793,6 +914,7 @@ function OrderSidePanel({
   overtimeRequests?: any[];
   isSyncing?: boolean;
   cashTransactions?: any[];
+  orders?: Order[];
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
   const isSale = position.id === "sale";
@@ -814,7 +936,7 @@ function OrderSidePanel({
   }
 
   function exportOrderToExcel() {
-    exportOrderToExcelShared(order, accounts, overtimeRequests, cashTransactions);
+    exportOrderToExcelShared(order, accounts, overtimeRequests, cashTransactions, orders);
   }
 
 
