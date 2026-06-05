@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CircleDollarSign } from "lucide-react";
 import { attendanceSlots, isSlotOpen } from "@/modules/attendance/compensationRules";
 import type { AttendanceSlot } from "@/modules/attendance/types";
 import type { UserAccount } from "@/modules/hr/accounts";
@@ -13,9 +14,250 @@ type RuntimeData = {
   usernameDirectory?: Array<{ id: string; username: string }>;
   orders?: any[];
   warrantyTasks?: any[];
+  workerAllowances?: Record<string, any>;
+  overtimeRequests?: any[];
+  attendanceCompensationState?: Record<string, any>;
 };
 
 const sessionStorageKey = "gomita_iphone_web_session_v1";
+
+const slots = ["07:30", "11:30", "13:30", "17:30"];
+const overtimeHiddenPositionIds = [
+  "director",
+  "admin",
+  "sale_manager",
+  "design_manager",
+  "hr_manager",
+  "accountant_manager",
+  "supervisor_lead",
+  "workshop_manager"
+];
+
+const defaultAllowanceRates = {
+  lunchDailyRate: 30000,
+  siteFuelDailyRate: 40000,
+  siteWaterDailyRate: 10000,
+  siteLunchDailyRate: 40000,
+  otherAllowance: 0
+};
+
+const siteWorkSteps = ["Lắp đặt", "Nghiệm thu", "Bảo hành"] as const;
+
+const toMonthKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
+
+const toPreviousMonthKey = (monthKey: string) => {
+  const [yearText, monthText] = monthKey.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey;
+  return toMonthKey(new Date(year, month - 2, 1));
+};
+
+const toNumericOrUndefined = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const resolveAllowanceConfig = (userId: string, monthKey: string, workerAllowances: Record<string, any>) => {
+  let cursor = monthKey;
+  for (let index = 0; index < 24; index += 1) {
+    const entry = workerAllowances[`${userId}-${cursor}`];
+    if (entry) {
+      return {
+        sourceMonth: cursor,
+        lunchDailyRate: toNumericOrUndefined(entry.lunchDailyRate) ?? defaultAllowanceRates.lunchDailyRate,
+        siteFuelDailyRate: toNumericOrUndefined(entry.siteFuelDailyRate) ?? defaultAllowanceRates.siteFuelDailyRate,
+        siteWaterDailyRate: toNumericOrUndefined(entry.siteWaterDailyRate) ?? defaultAllowanceRates.siteWaterDailyRate,
+        siteLunchDailyRate: toNumericOrUndefined(entry.siteLunchDailyRate) ?? defaultAllowanceRates.siteLunchDailyRate,
+        otherAllowance: toNumericOrUndefined(entry.otherAllowance) ?? toNumericOrUndefined(entry.responsibilityAllowanceOverride) ?? defaultAllowanceRates.otherAllowance
+      };
+    }
+    cursor = toPreviousMonthKey(cursor);
+  }
+
+  return {
+    sourceMonth: null as string | null,
+    ...defaultAllowanceRates
+  };
+};
+
+const getOrderAssigneesForStep = (order: any, step: string) => {
+  if (["Lắp đặt", "Nghiệm thu", "Bảo hành"].includes(step)) {
+    return ((order.installerNames?.length ? order.installerNames : [order.installerName]) as string[]).filter(Boolean);
+  }
+  if (step === "Sản xuất") {
+    return ((order.productionWorkerNames?.length ? order.productionWorkerNames : [order.productionWorkerName]) as string[]).filter(Boolean);
+  }
+  if (step === "Ra file") {
+    return ((order.fileOperatorNames?.length ? order.fileOperatorNames : [order.fileOperatorName]) as string[]).filter(Boolean);
+  }
+  if (step === "Thiết kế") {
+    return ((order.designerNames?.length ? order.designerNames : [order.designerName]) as string[]).filter(Boolean);
+  }
+  return (order.saleName || "").split(",").map((item: string) => item.trim()).filter(Boolean);
+};
+
+const calculateUserAllowances = (
+  userId: string,
+  displayName: string,
+  monthDays: Date[],
+  attendance: Record<string, string>,
+  orders: any[],
+  warrantyTasks: any[],
+  workerAllowances: Record<string, any>,
+  isWorker: boolean
+) => {
+  const currentMonthStr = toMonthKey(monthDays[0] ?? new Date());
+  let calcFullDays = 0;
+  if (isWorker) {
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      let morningChecked = false;
+      let afternoonChecked = false;
+      slots.forEach((slot) => {
+        const key = `${userId}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          if (slot === "07:30" || slot === "11:30") morningChecked = true;
+          if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+        }
+      });
+      if (morningChecked && afternoonChecked) {
+        calcFullDays += 1;
+      }
+    });
+  }
+
+  let calcSiteDays = 0;
+  let calcSiteFullDays = 0;
+  const siteDayDetails: Array<{
+    date: string;
+    label: string;
+    workedSlots: number;
+    isFullDay: boolean;
+    isSiteFullDay: boolean;
+    orders: string[];
+    steps: string[];
+  }> = [];
+
+  if (isWorker) {
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+      let checkedCount = 0;
+      let morningChecked = false;
+      let afternoonChecked = false;
+      slots.forEach((slot) => {
+        const key = `${userId}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          checkedCount += 1;
+          if (slot === "07:30" || slot === "11:30") morningChecked = true;
+          if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+        }
+      });
+      if (checkedCount === 0) return;
+
+      const matchedAssignments = orders.reduce<Array<{ code: string; step: string }>>((list, order) => {
+        const currentStepIsSiteWork = siteWorkSteps.includes(order.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
+        if (currentStepIsSiteWork) {
+          const currentAssignees = getOrderAssigneesForStep(order, order.step);
+          const assignedDate = order.assignedInstallerDate || order.deploymentStartTime?.slice(0, 10);
+          const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
+          if (currentAssignees.includes(displayName) && assignedDate === dateStr && !isFuture) {
+            list.push({ code: order.code, step: order.step });
+          }
+        }
+
+        (order.historyLogs || []).forEach((log: any) => {
+          const logIsSiteWork = siteWorkSteps.includes(log.step as (typeof siteWorkSteps)[number]) || !!order.isFieldWork;
+          if (!logIsSiteWork) return;
+          const assignees = getOrderAssigneesForStep(order, log.step);
+          const finalAssignees = assignees.length ? assignees : [log.assignee].filter(Boolean);
+          if (!finalAssignees.includes(displayName)) return;
+          const start = log.acceptedAt || log.startedAt;
+          if (!start) return;
+          if (new Date(start) > new Date()) return;
+          const startDateText = start.substring(0, 10);
+          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : startDateText;
+          if (dateStr >= startDateText && dateStr <= endDateText) {
+            list.push({ code: order.code, step: log.step });
+          }
+        });
+
+        return list;
+      }, []);
+
+      const matchedWarrantyTasks = warrantyTasks.filter((task: any) => {
+        if (task.assigneeId !== userId && task.assigneeName !== displayName) return false;
+        if (task.startAt && new Date(task.startAt) > new Date()) return false;
+        return (task.startAt || "").slice(0, 10) === dateStr;
+      });
+
+      if (matchedAssignments.length === 0 && matchedWarrantyTasks.length === 0) return;
+
+      const isSiteFullDay = morningChecked && afternoonChecked;
+      calcSiteDays += 1;
+      if (isSiteFullDay) {
+        calcSiteFullDays += 1;
+      }
+      siteDayDetails.push({
+        date: dateStr,
+        label: `Ngày ${dayNum}/${day.getMonth() + 1}`,
+        workedSlots: checkedCount,
+        isFullDay: morningChecked && afternoonChecked,
+        isSiteFullDay,
+        orders: Array.from(new Set([
+          ...matchedAssignments.map((item) => item.code),
+          ...matchedWarrantyTasks.map((item: any) => item.code)
+        ])),
+        steps: Array.from(new Set([
+          ...matchedAssignments.map((item) => item.step),
+          ...matchedWarrantyTasks.map(() => "Bảo hành")
+        ]))
+      });
+    });
+  }
+
+  const key = `${userId}-${currentMonthStr}`;
+  const overrides = workerAllowances[key] || {};
+  const resolvedConfig = resolveAllowanceConfig(userId, currentMonthStr, workerAllowances);
+  const lunchDailyRate = toNumericOrUndefined(overrides.lunchDailyRate) ?? resolvedConfig.lunchDailyRate;
+  const siteFuelDailyRate = toNumericOrUndefined(overrides.siteFuelDailyRate) ?? resolvedConfig.siteFuelDailyRate;
+  const siteWaterDailyRate = toNumericOrUndefined(overrides.siteWaterDailyRate) ?? resolvedConfig.siteWaterDailyRate;
+  const siteLunchDailyRate = toNumericOrUndefined(overrides.siteLunchDailyRate) ?? resolvedConfig.siteLunchDailyRate;
+  const otherAllowance = toNumericOrUndefined(overrides.otherAllowance)
+    ?? toNumericOrUndefined(overrides.responsibilityAllowanceOverride)
+    ?? resolvedConfig.otherAllowance;
+
+  const calcSiteHalfDays = Math.max(0, calcSiteDays - calcSiteFullDays);
+  const calcMealAllowance = ((calcFullDays - calcSiteFullDays) * lunchDailyRate) + (calcSiteFullDays * siteLunchDailyRate);
+  const siteFuelAllowance = calcSiteDays * siteFuelDailyRate;
+  const siteWaterAllowance = calcSiteDays * siteWaterDailyRate;
+  const mealAllowance = overrides.mealAllowanceOverride !== undefined ? Number(overrides.mealAllowanceOverride) : calcMealAllowance;
+  const siteAllowance = overrides.siteAllowanceOverride !== undefined ? Number(overrides.siteAllowanceOverride) : (siteFuelAllowance + siteWaterAllowance);
+
+  return {
+    calcFullDays,
+    calcSiteDays,
+    calcSiteFullDays,
+    calcSiteHalfDays,
+    siteDays: calcSiteDays,
+    siteFullDays: calcSiteFullDays,
+    siteHalfDays: calcSiteHalfDays,
+    fullDays: calcFullDays,
+    siteDayDetails,
+    lunchDailyRate,
+    siteFuelDailyRate,
+    siteWaterDailyRate,
+    siteLunchDailyRate,
+    mealAllowance,
+    siteFuelAllowance,
+    siteWaterAllowance,
+    siteAllowance,
+    otherAllowance,
+    responsibilityAllowance: otherAllowance,
+    totalAllowance: mealAllowance + siteAllowance + otherAllowance,
+    configSourceMonth: resolvedConfig.sourceMonth,
+    hasMealOverride: overrides.mealAllowanceOverride !== undefined,
+    hasSiteOverride: overrides.siteAllowanceOverride !== undefined
+  };
+};
 
 function base64UrlToUint8Array(base64Url: string) {
   const padding = "=".repeat((4 - (base64Url.length % 4)) % 4);
@@ -46,6 +288,10 @@ export default function IphoneClockinPage() {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
 
+  const [workerAllowances, setWorkerAllowances] = useState<Record<string, any>>({});
+  const [overtimeRequests, setOvertimeRequests] = useState<any[]>([]);
+  const [attendanceCompensationState, setAttendanceCompensationState] = useState<Record<string, any>>({});
+
   const currentDateKey = useMemo(() => {
     const year = currentTime.getFullYear();
     const month = String(currentTime.getMonth() + 1).padStart(2, "0");
@@ -58,6 +304,13 @@ export default function IphoneClockinPage() {
     const month = currentTime.getMonth();
     const count = new Date(year, month + 1, 0).getDate();
     return Array.from({ length: count }, (_, index) => index + 1);
+  }, [currentTime]);
+
+  const monthDates = useMemo(() => {
+    const year = currentTime.getFullYear();
+    const month = currentTime.getMonth();
+    const count = new Date(year, month + 1, 0).getDate();
+    return Array.from({ length: count }, (_, index) => new Date(year, month, index + 1));
   }, [currentTime]);
 
   const activeSlot = useMemo(
@@ -79,6 +332,9 @@ export default function IphoneClockinPage() {
     setUsernameDirectory(Array.isArray(data.usernameDirectory) ? data.usernameDirectory : []);
     setOrders(data.orders || []);
     setWarrantyTasks(data.warrantyTasks || []);
+    setWorkerAllowances(data.workerAllowances || {});
+    setOvertimeRequests(data.overtimeRequests || []);
+    setAttendanceCompensationState(data.attendanceCompensationState || {});
     if (data.account) {
       setCurrentAccount(data.account);
     }
@@ -147,6 +403,99 @@ export default function IphoneClockinPage() {
     }, 0);
     return { workedSlots, totalSlots: monthDays.length * attendanceSlots.length };
   }, [attendance, currentAccount, monthDays]);
+
+  const isWorker = useMemo(() => {
+    if (!currentAccount) return false;
+    return (currentAccount.positionIds || []).some((p: string) => ["production_worker", "installer"].includes(p));
+  }, [currentAccount]);
+
+  const allowances = useMemo(() => {
+    if (!currentAccount) return null;
+    return calculateUserAllowances(
+      currentAccount.id,
+      currentAccount.displayName,
+      monthDates,
+      attendance,
+      orders,
+      warrantyTasks,
+      workerAllowances,
+      isWorker
+    );
+  }, [currentAccount, monthDates, attendance, orders, warrantyTasks, workerAllowances, isWorker]);
+
+  const todayNum = useMemo(() => {
+    return currentTime.getDate();
+  }, [currentTime]);
+
+  const workDays = useMemo(() => {
+    if (!currentAccount) return 0;
+    let total = 0;
+    monthDates.forEach((day) => {
+      if (day.getDay() === 0 || day.getDate() > todayNum) return;
+      const dayNum = day.getDate();
+      let checkedCount = 0;
+      attendanceSlots.forEach((slot) => {
+        const key = `${currentAccount.id}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          checkedCount++;
+        }
+      });
+      if (checkedCount === 4) total += 1.0;
+      else if (checkedCount >= 2) total += 0.5;
+    });
+    return total;
+  }, [currentAccount, monthDates, attendance, todayNum]);
+
+  const salaryType = currentAccount?.salaryType ?? "daily";
+  const salaryValue = currentAccount?.salaryValue ?? (currentAccount?.positionIds?.includes("hr") ? 420000 : currentAccount?.positionIds?.includes("accountant") ? 400000 : 350000);
+
+  const maxWorkDays = useMemo(() => {
+    return monthDates.filter((day) => day.getDay() !== 0).length;
+  }, [monthDates]);
+
+  const basePay = useMemo(() => {
+    if (salaryType === "monthly") {
+      return maxWorkDays ? (salaryValue / maxWorkDays) * workDays : 0;
+    }
+    return workDays * salaryValue;
+  }, [salaryType, salaryValue, workDays, maxWorkDays]);
+
+  const hourlySalaryRate = useMemo(() => {
+    if (salaryType === "monthly") {
+      return maxWorkDays ? salaryValue / maxWorkDays / 8 : 0;
+    }
+    return salaryValue / 8;
+  }, [maxWorkDays, salaryType, salaryValue]);
+
+  const otHours = useMemo(() => {
+    if (!currentAccount || !overtimeRequests) return 0;
+    const nowMonth = currentTime.getMonth();
+    const nowYear = currentTime.getFullYear();
+    const primaryPositionId = currentAccount.positionIds?.[0] || "";
+    const canUseOvertimeCurrent = !overtimeHiddenPositionIds.includes(primaryPositionId);
+    if (!canUseOvertimeCurrent) return 0;
+
+    return overtimeRequests
+      .filter((req: any) => {
+        const reqDate = new Date(req.createdAt);
+        return (
+          req.userId === currentAccount.id &&
+          req.status === "approved" &&
+          reqDate.getMonth() === nowMonth &&
+          reqDate.getFullYear() === nowYear
+        );
+      })
+      .reduce((sum: number, req: any) => sum + (Number(req.hours) || 0), 0);
+  }, [currentAccount, overtimeRequests, currentTime]);
+
+  const otPay = useMemo(() => {
+    return otHours * 1.5 * hourlySalaryRate;
+  }, [hourlySalaryRate, otHours]);
+
+  const estimatedIncome = useMemo(() => {
+    if (!allowances) return 0;
+    return basePay + otPay + allowances.totalAllowance;
+  }, [basePay, otPay, allowances]);
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -865,6 +1214,98 @@ export default function IphoneClockinPage() {
                 </p>
               </div>
               <p className="mt-3 text-sm font-semibold text-slate-500">{message}</p>
+            </section>
+
+            {/* THU NHẬP DỰ TÍNH TRONG THÁNG */}
+            <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+                <CircleDollarSign className="h-5 w-5 text-orange-500" />
+                <h2 className="text-lg font-black text-slate-800">Thu nhập dự tính trong tháng</h2>
+              </div>
+
+              <div className="mt-4 text-center">
+                <div className="text-3xl font-black text-slate-900">
+                  {Math.round(estimatedIncome).toLocaleString("vi-VN")} đ
+                </div>
+                <div className="mt-1 text-xs font-semibold text-slate-400">
+                  {salaryType === "monthly" ? "Lương tháng cố định" : "Cập nhật tăng tiền ngay lập tức khi chấm công thành công"}
+                </div>
+              </div>
+
+              <div className="mt-5 space-y-3 text-sm border-t border-slate-50 pt-3">
+                <div className="flex justify-between font-semibold">
+                  <span className="text-slate-500">Lương cứng ({workDays} ngày):</span>
+                  <span className="text-slate-800">{Math.round(basePay).toLocaleString("vi-VN")} đ</span>
+                </div>
+
+                {allowances && (
+                  <>
+                    {allowances.hasMealOverride ? (
+                      <div className="flex justify-between font-semibold">
+                        <span className="text-slate-500">Phụ cấp ăn trưa (Nhân sự điều chỉnh):</span>
+                        <span className="text-slate-800">{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</span>
+                      </div>
+                    ) : (
+                      <>
+                        {allowances.calcFullDays - allowances.calcSiteFullDays > 0 && (
+                          <div className="flex justify-between font-semibold">
+                            <span className="text-slate-500">Ăn trưa tại xưởng ({allowances.calcFullDays - allowances.calcSiteFullDays} ngày):</span>
+                            <span className="text-slate-800">{Math.round((allowances.calcFullDays - allowances.calcSiteFullDays) * allowances.lunchDailyRate).toLocaleString("vi-VN")} đ</span>
+                          </div>
+                        )}
+                        {allowances.calcSiteFullDays > 0 && (
+                          <div className="flex justify-between font-semibold">
+                            <span className="text-slate-500">Ăn trưa công trình ({allowances.calcSiteFullDays} ngày):</span>
+                            <span className="text-slate-800">{Math.round(allowances.calcSiteFullDays * allowances.siteLunchDailyRate).toLocaleString("vi-VN")} đ</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {allowances.hasSiteOverride ? (
+                      <div className="flex justify-between font-semibold">
+                        <span className="text-slate-500">Phụ cấp đi công trình (Nhân sự điều chỉnh):</span>
+                        <span className="text-slate-800">{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</span>
+                      </div>
+                    ) : (
+                      <>
+                        {allowances.calcSiteDays > 0 && (
+                          <div className="space-y-2 rounded-xl bg-slate-50 p-3">
+                            <div className="flex justify-between text-xs font-bold text-slate-500">
+                              <span>Chi tiết đi công trình:</span>
+                              <span>
+                                {allowances.calcSiteFullDays} ngày cả ca | {allowances.calcSiteHalfDays} ngày nửa ca
+                              </span>
+                            </div>
+                            <div className="flex justify-between font-semibold text-xs text-slate-600">
+                              <span>Xăng xe công trình ({allowances.calcSiteDays} ngày):</span>
+                              <span>{Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ</span>
+                            </div>
+                            <div className="flex justify-between font-semibold text-xs text-slate-600">
+                              <span>Nước uống công trình ({allowances.calcSiteDays} ngày):</span>
+                              <span>{Math.round(allowances.calcSiteDays * allowances.siteWaterDailyRate).toLocaleString("vi-VN")} đ</span>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {allowances.otherAllowance > 0 && (
+                      <div className="flex justify-between font-semibold">
+                        <span className="text-slate-500">Phụ cấp trách nhiệm / Khác:</span>
+                        <span className="text-slate-800">{Math.round(allowances.otherAllowance).toLocaleString("vi-VN")} đ</span>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {otPay > 0 && (
+                  <div className="flex justify-between font-semibold">
+                    <span className="text-slate-500">Tăng ca ({otHours} giờ):</span>
+                    <span className="text-slate-800">{Math.round(otPay).toLocaleString("vi-VN")} đ</span>
+                  </div>
+                )}
+              </div>
             </section>
 
             <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm">

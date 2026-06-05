@@ -34,7 +34,7 @@ export function FinanceDashboard({
   customerDebts?: CustomerDebt[];
   onCustomerDebtsChange?: React.Dispatch<React.SetStateAction<CustomerDebt[]>>;
 }) {
-  const canExportFinance = ["accountant", "director"].includes(currentPosition?.id || "");
+  const canExportFinance = ["accountant", "accountant_manager", "director", "admin"].includes(currentPosition?.id || "");
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id ?? "");
   const selectedOrder = useMemo(() => orders.find(o => o.id === selectedOrderId) ?? orders[0], [orders, selectedOrderId]);
   const [mainTab, setMainTab] = useState<"overview" | "efficiency" | "profit">("overview");

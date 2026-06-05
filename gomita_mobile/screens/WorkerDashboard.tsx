@@ -1536,7 +1536,8 @@ export function WorkerDashboard({
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+    <View style={styles.container}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent}>
       {/* Header */}
       <View style={styles.header}>
         <View>
@@ -1714,6 +1715,12 @@ export function WorkerDashboard({
               <>
                 {allowances.calcSiteDays > 0 && (
                   <>
+                    <View style={[styles.breakdownRow, { backgroundColor: "#f1f5f9", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginBottom: 4 }]}>
+                      <Text style={[styles.breakdownLabel, { color: "#475569", fontSize: 11 }]}>Chi tiết đi công trình:</Text>
+                      <Text style={[styles.breakdownValue, { color: "#475569", fontSize: 11 }]}>
+                        {allowances.calcSiteFullDays} ngày cả ca | {allowances.calcSiteHalfDays} ngày nửa ca
+                      </Text>
+                    </View>
                     <View style={styles.breakdownRow}>
                       <Text style={styles.breakdownLabel}>Xăng xe công trình ({allowances.calcSiteDays} ngày × {allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ):</Text>
                       <Text style={styles.breakdownValue}>{Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ</Text>
@@ -1984,8 +1991,8 @@ export function WorkerDashboard({
               </View>
             ) : (
               <View style={styles.gridTableBorder}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View style={styles.modalTable}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  <View style={[styles.modalTable, { width: 70 + uniqueMissingDays.length * 80 }]}>
                     {/* Header Row */}
                     <View style={styles.modalTableHeader}>
                       <View style={styles.colHeaderSlot}>
@@ -2145,6 +2152,8 @@ export function WorkerDashboard({
         </View>
       )}
 
+      </ScrollView>
+
       {/* SCREEN CAMERA NATIVE HIỂN THỊ KHI CHẤM CÔNG */}
       {showCamera && (
         <View style={styles.cameraOverlay}>
@@ -2186,7 +2195,7 @@ export function WorkerDashboard({
           </View>
         </View>
       )}
-    </ScrollView>
+    </View>
   );
 }
 
@@ -2775,10 +2784,10 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: "#071a38",
     zIndex: 200,
-    justifyContent: "space-between",
+    justifyContent: "space-around",
     paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 12,
+    paddingTop: 48,
+    paddingBottom: 24,
   },
   cameraHeader: {
     alignItems: "center",
@@ -2797,16 +2806,14 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   cameraFrame: {
-    flex: 1,
-    maxHeight: screenWidth * 0.88,
-    aspectRatio: 3 / 4,
-    borderRadius: 16,
+    width: screenWidth * 0.82,
+    height: screenWidth * 0.82 * 1.33,
+    borderRadius: 24,
     overflow: "hidden",
     borderWidth: 3,
     borderColor: "#f97316",
     alignSelf: "center",
-    marginVertical: 12,
-    width: "100%",
+    marginVertical: 16,
   },
   cameraNative: {
     flex: 1,
@@ -2967,7 +2974,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   colHeaderDay: {
-    flex: 1,
+    width: 80,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2993,7 +3000,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   cellWrapper: {
-    flex: 1,
+    width: 80,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,

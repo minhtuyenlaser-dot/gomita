@@ -215,8 +215,8 @@ export function calculateUserAllowances(
 
   const calcSiteHalfDays = Math.max(0, calcSiteDays - calcSiteFullDays);
   const calcMealAllowance = ((calcFullDays - calcSiteFullDays) * lunchDailyRate) + (calcSiteFullDays * siteLunchDailyRate);
-  const siteFuelAllowance = (calcSiteFullDays * siteFuelDailyRate) + (calcSiteHalfDays * siteFuelDailyRate / 2);
-  const siteWaterAllowance = (calcSiteFullDays * siteWaterDailyRate) + (calcSiteHalfDays * siteWaterDailyRate / 2);
+  const siteFuelAllowance = calcSiteDays * siteFuelDailyRate;
+  const siteWaterAllowance = calcSiteDays * siteWaterDailyRate;
   const mealAllowance = overrides.mealAllowanceOverride !== undefined ? Number(overrides.mealAllowanceOverride) : calcMealAllowance;
   const siteAllowance = overrides.siteAllowanceOverride !== undefined ? Number(overrides.siteAllowanceOverride) : (siteFuelAllowance + siteWaterAllowance);
   const totalAllowance = mealAllowance + siteAllowance + otherAllowance;
@@ -589,6 +589,7 @@ export function ProfileDashboard({
                 parts.push(`Phụ cấp công trình (Nhân sự điều chỉnh): ${Math.round(allowances.siteAllowance).toLocaleString("vi-VN")}đ`);
               } else {
                 if (allowances.calcSiteDays > 0) {
+                  parts.push(`Đi công trình: ${allowances.calcSiteFullDays} ngày cả ca, ${allowances.calcSiteHalfDays} ngày nửa ca`);
                   parts.push(`Xăng xe (${allowances.calcSiteDays}n × ${allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ): ${Math.round(allowances.calcSiteDays * allowances.siteFuelDailyRate).toLocaleString("vi-VN")}đ`);
                   parts.push(`Nước uống (${allowances.calcSiteDays}n × ${allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ): ${Math.round(allowances.calcSiteDays * allowances.siteWaterDailyRate).toLocaleString("vi-VN")}đ`);
                 }
@@ -1136,6 +1137,7 @@ export function CompanyPayrollDashboard({
                       <>
                         {row.allowances.calcSiteDays > 0 && (
                           <>
+                            <br />Đi công trình: {row.allowances.calcSiteFullDays} ngày cả ca | {row.allowances.calcSiteHalfDays} ngày nửa ca
                             <br />Xăng xe ({row.allowances.calcSiteDays}n × {row.allowances.siteFuelDailyRate.toLocaleString("vi-VN")}đ): {Math.round(row.allowances.calcSiteDays * row.allowances.siteFuelDailyRate).toLocaleString("vi-VN")} đ
                             <br />Nước uống ({row.allowances.calcSiteDays}n × {row.allowances.siteWaterDailyRate.toLocaleString("vi-VN")}đ): {Math.round(row.allowances.calcSiteDays * row.allowances.siteWaterDailyRate).toLocaleString("vi-VN")} đ
                           </>
