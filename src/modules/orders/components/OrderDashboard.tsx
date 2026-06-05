@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   User,
+  Wrench,
   X
 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
@@ -170,7 +171,7 @@ export function OrderDashboard({
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [assignOrder, setAssignOrder] = useState<Order | null>(null);
   const [moveOrder, setMoveOrder] = useState<Order | null>(null);
-  const [warrantyOrder, setWarrantyOrder] = useState<Order | null>(null);
+  const [warrantyOpen, setWarrantyOpen] = useState(false);
   const [pricingOrder, setPricingOrder] = useState<Order | null>(null);
   const [showCanceled, setShowCanceled] = useState(false);
   const [draggingOrderId, setDraggingOrderId] = useState("");
@@ -252,6 +253,12 @@ export function OrderDashboard({
               <input className="h-11 w-full rounded-lg border border-slate-200 pl-10 pr-3 text-sm outline-none focus:border-orange-400" placeholder="Tìm kiếm đơn hàng, khách hàng, SĐT..." onChange={(event) => showNotice("success", `Đã lọc theo từ khóa: ${event.target.value || "trống"}`)} />
             </div>
             <button className="h-11 rounded-lg border border-slate-200 px-4 text-sm font-bold" onClick={() => showNotice("success", "Đang xem các đơn theo quyền của vị trí hiện tại.")} type="button">Theo quyền</button>
+            {["supervisor_lead", "director", "admin"].includes(position.id) ? (
+              <button className="flex h-11 items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-5 font-bold text-violet-700" onClick={() => setWarrantyOpen(true)} type="button">
+                <Wrench className="h-4 w-4" />
+                Bảo hành
+              </button>
+            ) : null}
             {["sale", "sale_manager", "director", "admin"].includes(position.id) ? (
               <button className="flex h-11 items-center gap-2 rounded-lg bg-orange-500 px-5 font-bold text-white" onClick={() => setCreateOpen(true)} type="button">
                 <Plus className="h-4 w-4" />
@@ -336,7 +343,6 @@ export function OrderDashboard({
             cashTransactions={cashTransactions}
             orders={orders}
             onOpenPricing={() => setPricingOrder(selectedOrder)}
-            onOpenWarranty={() => setWarrantyOrder(selectedOrder)}
           />
         ) : (
           <aside className="border-t border-slate-200 bg-white p-4 text-slate-500 xl:border-l xl:border-t-0">Chưa có đơn phù hợp với quyền.</aside>
@@ -449,25 +455,32 @@ export function OrderDashboard({
         />
       ) : null}
 
-      {warrantyOrder ? (
+            {warrantyOpen ? (
         <WarrantyTaskModal
-          order={warrantyOrder}
           accounts={accounts}
           currentUserName={currentUserName}
-          onClose={() => setWarrantyOrder(null)}
-          onSubmit={async (payload) => {
-            const response = await fetch("/api/warranty-tasks", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
-            const result = await response.json();
-            if (!response.ok || !result?.success) {
-              throw new Error(result?.error || "Không tạo được công việc bảo hành.");
+          onClose={() => setWarrantyOpen(false)}
+          onSubmit={async (payloads) => {
+            const createdTasks: WarrantyTask[] = [];
+            for (const payload of payloads) {
+              const response = await fetch("/api/warranty-tasks", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+              const result = await response.json();
+              if (!response.ok || !result?.success) {
+                throw new Error(result?.error || "Không tạo được công việc bảo hành.");
+              }
+              if (result.task) {
+                createdTasks.push(result.task);
+              }
             }
-            onWarrantyTasksChange?.((current) => [result.task, ...current]);
-            setWarrantyOrder(null);
-            showNotice("success", `Đã giao việc bảo hành ${result.task?.code ?? ""}.`);
+            if (createdTasks.length) {
+              onWarrantyTasksChange?.((current) => [...createdTasks, ...current]);
+            }
+            setWarrantyOpen(false);
+            showNotice("success", `Đã giao ${createdTasks.length} công việc bảo hành.`);
           }}
         />
       ) : null}
@@ -952,8 +965,7 @@ function OrderSidePanel({
   isSyncing = false,
   cashTransactions = [],
   orders = [],
-  onOpenPricing,
-  onOpenWarranty
+  onOpenPricing
 }: {
   accounts: UserAccount[];
   order: Order;
@@ -969,7 +981,6 @@ function OrderSidePanel({
   cashTransactions?: any[];
   orders?: Order[];
   onOpenPricing?: () => void;
-  onOpenWarranty?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState("Thông tin");
   const isSale = position.id === "sale";
@@ -1194,16 +1205,6 @@ function OrderSidePanel({
                 Giao việc
               </button>
             ) : null}
-            {["supervisor_lead", "director", "admin"].includes(position.id) ? (
-              <button
-                className="min-h-11 rounded-lg border border-violet-200 bg-violet-50 font-black text-violet-700 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400"
-                onClick={onOpenWarranty}
-                type="button"
-                disabled={isSyncing}
-              >
-                Bảo hành
-              </button>
-            ) : null}
             <button 
               className="min-h-11 rounded-lg border border-slate-200 font-bold disabled:bg-slate-100 disabled:text-slate-400" 
               onClick={() => onPatch({ finalNote: `${order.finalNote} (Đã tạo yêu cầu trả đơn/tách đơn)` })} 
@@ -1322,17 +1323,15 @@ function PricingEditModal({
 }
 
 function WarrantyTaskModal({
-  order,
   accounts,
   currentUserName,
   onClose,
   onSubmit
 }: {
-  order: Order;
   accounts: UserAccount[];
   currentUserName: string;
   onClose: () => void;
-  onSubmit: (payload: {
+  onSubmit: (payloads: Array<{
     customerName: string;
     address: string;
     supervisorName: string;
@@ -1342,34 +1341,44 @@ function WarrantyTaskModal({
     assigneePositionId: string;
     startAt: string;
     note?: string;
-  }) => Promise<void>;
+  }>) => Promise<void>;
 }) {
   const assignees = accounts.filter((account) => account.positionIds.some((positionId) => ["production_worker", "installer"].includes(positionId)));
-  const [assigneeId, setAssigneeId] = useState(assignees[0]?.id ?? "");
+  const [customerName, setCustomerName] = useState("");
+  const [address, setAddress] = useState("");
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([]);
   const [startAt, setStartAt] = useState(() => new Date().toISOString().slice(0, 16));
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const selectedAssignee = assignees.find((account) => account.id === assigneeId);
+  function toggleAssignee(accountId: string) {
+    setSelectedAssigneeIds((current) =>
+      current.includes(accountId)
+        ? current.filter((item) => item !== accountId)
+        : [...current, accountId]
+    );
+  }
 
   return (
-    <Modal title={`Giao việc bảo hành ${order.customerName}`} onClose={onClose}>
+    <Modal title="Giao việc bảo hành" onClose={onClose}>
       <div className="grid gap-3 text-slate-900">
-        <InfoBlock label="Khách hàng" value={order.customerName} />
-        <InfoBlock label="Địa chỉ" value={order.address} />
+        <TextInput label="Khách hàng *" value={customerName} onChange={setCustomerName} />
+        <TextInput label="Địa chỉ *" value={address} onChange={setAddress} />
         <label className="grid gap-2 text-sm font-bold text-slate-700">
           Nhân sự thực hiện
-          <select
-            className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-bold outline-none focus:border-orange-400"
-            value={assigneeId}
-            onChange={(event) => setAssigneeId(event.target.value)}
-          >
-            {assignees.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.displayName} - {positions.find((position) => position.id === account.positionIds[0])?.name ?? account.positionIds[0]}
-              </option>
-            ))}
-          </select>
+          {assignees.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-sm text-slate-500">Chưa có thợ sản xuất hoặc lắp đặt để giao việc.</div>
+          ) : (
+            <div className="grid max-h-56 gap-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+              {assignees.map((account) => (
+                <label key={account.id} className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 px-3 text-sm font-bold cursor-pointer hover:bg-slate-50">
+                  <input checked={selectedAssigneeIds.includes(account.id)} type="checkbox" onChange={() => toggleAssignee(account.id)} />
+                  <span className="min-w-0 flex-1">{account.displayName}</span>
+                  <span className="text-xs text-slate-500">{account.positionIds.map((id) => positions.find((position) => position.id === id)?.name ?? id).join(", ")}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </label>
         <label className="grid gap-2 text-sm font-bold text-slate-700">
           Thời gian bắt đầu
@@ -1391,22 +1400,25 @@ function WarrantyTaskModal({
         </label>
         <button
           type="button"
-          disabled={!selectedAssignee || !startAt || submitting}
+          disabled={!customerName.trim() || !address.trim() || selectedAssigneeIds.length === 0 || !startAt || submitting}
           onClick={async () => {
-            if (!selectedAssignee) return;
+            const selectedAssignees = assignees.filter((account) => selectedAssigneeIds.includes(account.id));
+            if (!selectedAssignees.length) return;
             setSubmitting(true);
             try {
-              await onSubmit({
-                customerName: order.customerName,
-                address: order.address,
-                supervisorName: currentUserName,
-                supervisorId: "",
-                assigneeId: selectedAssignee.id,
-                assigneeName: selectedAssignee.displayName,
-                assigneePositionId: selectedAssignee.positionIds[0] ?? "",
-                startAt: new Date(startAt).toISOString(),
-                note: note.trim() || undefined
-              });
+              await onSubmit(
+                selectedAssignees.map((account) => ({
+                  customerName: customerName.trim(),
+                  address: address.trim(),
+                  supervisorName: currentUserName,
+                  supervisorId: "",
+                  assigneeId: account.id,
+                  assigneeName: account.displayName,
+                  assigneePositionId: account.positionIds[0] ?? "",
+                  startAt: new Date(startAt).toISOString(),
+                  note: note.trim() || undefined
+                }))
+              );
             } finally {
               setSubmitting(false);
             }
@@ -2418,7 +2430,6 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
   }, [accounts]);
 
   const [input, setInput] = useState({ customerName: "", area: "", phone: "", address: "" });
-  const [isWarranty, setIsWarranty] = useState(false);
   const [selectedSales, setSelectedSales] = useState<string[]>(() => {
     if (positionId === "sale") {
       const isCurrentSaleActive = sales.some(s => s.displayName === currentUserName);
@@ -2445,10 +2456,6 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
       return;
     }
     const order = buildOrder(nextInput, existingCodes);
-    if (isWarranty) {
-      order.isWarranty = true;
-      order.code = `BH-${order.code}`;
-    }
     onCreate(order);
   }
 
@@ -2459,17 +2466,6 @@ function CreateOrderModal({ accounts, currentUserName, positionId, existingCodes
         <TextInput label="Khu vực" value={input.area} onChange={(value) => setInput({ ...input, area: value })} />
         <TextInput label="Số điện thoại *" value={input.phone} onChange={(value) => setInput({ ...input, phone: value })} />
         <TextInput label="Địa chỉ *" value={input.address} onChange={(value) => setInput({ ...input, address: value })} />
-        
-        <label className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 px-3 text-sm font-bold text-slate-700 cursor-pointer hover:bg-slate-50 transition">
-          <input
-            checked={isWarranty}
-            type="checkbox"
-            onChange={(e) => setIsWarranty(e.target.checked)}
-            className="rounded border-slate-300 text-orange-500 focus:ring-orange-500 h-4 w-4"
-          />
-          <span>Đây là đơn hàng bảo hành</span>
-        </label>
-        
         <div className="grid gap-1">
           <span className="text-sm font-bold text-slate-700">Sale phụ trách *</span>
           <div className="grid max-h-40 gap-2 overflow-y-auto rounded-lg border border-slate-200 p-3 bg-white">
