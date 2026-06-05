@@ -613,10 +613,17 @@ function getAdjustedHoursForSingleOrder(
     return parseFloat(totalHours.toFixed(1));
   }
 
+  const isFutureScheduledCurrentStep = (o: Order, step: string) => {
+    if (o.step !== step || o.workStatus !== "scheduled" || !o.deploymentStartTime) return false;
+    const scheduledAt = new Date(o.deploymentStartTime);
+    return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.getTime() > Date.now();
+  };
+
   for (const order of allOrders) {
     const logs = order.historyLogs || [];
     for (const log of logs) {
       if (!allowedSteps.includes(log.step)) continue;
+      if (isFutureScheduledCurrentStep(order, log.step)) continue;
       
       const assigneeList = getAssigneeListForAnyOrder(order, log.step);
       const finalAssignees = assigneeList.length > 0 ? assigneeList : [log.assignee].filter(Boolean);
@@ -749,8 +756,13 @@ function downloadOrderArchive(order: Order, accounts: UserAccount[] = [], overti
   let totalLaborCost = 0;
   let totalWorkdays = 0;
   const allowedSteps = ["Thiết kế", "Ra file", "Sản xuất", "Lắp đặt"];
+  const isFutureScheduledCurrentStep = (step: string) => {
+    if (order.step !== step || order.workStatus !== "scheduled" || !order.deploymentStartTime) return false;
+    const scheduledAt = new Date(order.deploymentStartTime);
+    return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.getTime() > Date.now();
+  };
   const logsSummary = (order.historyLogs || [])
-    .filter((log) => allowedSteps.includes(log.step))
+    .filter((log) => allowedSteps.includes(log.step) && !isFutureScheduledCurrentStep(log.step))
     .map((log) => {
     const assigneeList = getAssigneeListForStep(log.step);
     // Nếu không tìm được ai từ order fields, dùng log.assignee làm fallback
