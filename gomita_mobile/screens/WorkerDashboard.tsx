@@ -297,7 +297,7 @@ const calculateUserAllowances = (
     calcSiteHalfDays,
     siteDays: calcSiteDays,
     siteFullDays: calcSiteFullDays,
-    siteHalfDays,
+    siteHalfDays: calcSiteHalfDays,
     fullDays: calcFullDays,
     siteDayDetails,
     lunchDailyRate,
@@ -1401,7 +1401,7 @@ export function WorkerDashboard({
     }
   };
 
-  const captureAndClockinLean = async () => {
+  const captureAndClockinLean = useCallback(async () => {
     if (!cameraRef) return;
     setLoading(true);
 

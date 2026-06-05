@@ -1028,7 +1028,7 @@ function OrderSidePanel({
   const canApprove = canApproveStep(position.id, order);
   const canCancel = canCancelOrder(position.id, order);
   const status = getWorkStatusMeta(order);
-  const isFuture = order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date();
+  const isFuture = !!(order.deploymentStartTime && new Date(order.deploymentStartTime) > new Date());
   
   // Tự động nhận việc cho Thợ sản xuất & Thợ lắp đặt (không hiển thị nút Tiếp nhận công việc cho họ)
   const isWorker = position.id === "production_worker" || position.id === "installer";
