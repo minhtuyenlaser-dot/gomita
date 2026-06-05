@@ -19,91 +19,96 @@ export function calculateUserAllowances(
   monthDays: Date[],
   attendance: Record<string, string>,
   orders: Order[],
-  workerAllowances: Record<string, any>
+  workerAllowances: Record<string, any>,
+  isWorker: boolean
 ) {
   const now = new Date();
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   // 1. Calculate calcFullDays
   let calcFullDays = 0;
-  monthDays.forEach((day) => {
-    const dayNum = day.getDate();
-    let morningChecked = false;
-    let afternoonChecked = false;
-    
-    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-    slotsForDay.forEach((slot) => {
-      const key = `${userId}-${dayNum}-${slot}`;
-      if (attendance[key] === "normal" || attendance[key] === "compensated") {
-        if (slot === "07:30" || slot === "11:30") morningChecked = true;
-        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+  if (isWorker) {
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      let morningChecked = false;
+      let afternoonChecked = false;
+      
+      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+      slotsForDay.forEach((slot) => {
+        const key = `${userId}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          if (slot === "07:30" || slot === "11:30") morningChecked = true;
+          if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+        }
+      });
+
+      if (morningChecked && afternoonChecked) {
+        calcFullDays += 1;
       }
     });
-
-    if (morningChecked && afternoonChecked) {
-      calcFullDays += 1;
-    }
-  });
+  }
 
   // 2. Calculate calcSiteDays and calcSiteFullDays
   let calcSiteDays = 0;
   let calcSiteFullDays = 0;
 
-  monthDays.forEach((day) => {
-    const dayNum = day.getDate();
-    const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+  if (isWorker) {
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
 
-    // Has user clocked in at all on this day?
-    let checkedCount = 0;
-    let morningChecked = false;
-    let afternoonChecked = false;
-    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-    slotsForDay.forEach((slot) => {
-      const key = `${userId}-${dayNum}-${slot}`;
-      if (attendance[key] === "normal" || attendance[key] === "compensated") {
-        checkedCount++;
-        if (slot === "07:30" || slot === "11:30") morningChecked = true;
-        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
-      }
-    });
+      // Has user clocked in at all on this day?
+      let checkedCount = 0;
+      let morningChecked = false;
+      let afternoonChecked = false;
+      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+      slotsForDay.forEach((slot) => {
+        const key = `${userId}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          checkedCount++;
+          if (slot === "07:30" || slot === "11:30") morningChecked = true;
+          if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+        }
+      });
 
-    if (checkedCount === 0) return; // Didn't work today
+      if (checkedCount === 0) return; // Didn't work today
 
-    // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
-    const hasSiteJob = orders.some((order) => {
-      if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
-        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-        const isAssigned = assignees.includes(displayName);
-        if (isAssigned && order.assignedInstallerDate === dateStr) {
-          return true;
+      // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
+      const hasSiteJob = orders.some((order) => {
+        if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
+          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+          const isAssigned = assignees.includes(displayName);
+          if (isAssigned && order.assignedInstallerDate === dateStr) {
+            return true;
+          }
+        }
+
+        return (order.historyLogs || []).some((log: any) => {
+          const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
+          if (!isLắpĐặt) return false;
+
+          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+          const logAssignees = log.assignee ? [log.assignee] : [];
+          const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
+          if (!finalAssignees.includes(displayName)) return false;
+
+          const start = log.acceptedAt || log.startedAt;
+          if (!start) return false;
+          const startDateText = start.substring(0, 10);
+          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
+
+          return dateStr >= startDateText && dateStr <= endDateText;
+        });
+      });
+
+      if (hasSiteJob) {
+        calcSiteDays += 1;
+        if (morningChecked && afternoonChecked) {
+          calcSiteFullDays += 1;
         }
       }
-
-      return (order.historyLogs || []).some((log: any) => {
-        const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
-        if (!isLắpĐặt) return false;
-
-        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-        const logAssignees = log.assignee ? [log.assignee] : [];
-        const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
-        if (!finalAssignees.includes(displayName)) return false;
-
-        const start = log.acceptedAt || log.startedAt;
-        if (!start) return false;
-        const startDateText = start.substring(0, 10);
-        const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
-
-        return dateStr >= startDateText && dateStr <= endDateText;
-      });
     });
-
-    if (hasSiteJob) {
-      calcSiteDays += 1;
-      if (morningChecked && afternoonChecked) {
-        calcSiteFullDays += 1;
-      }
-    }
-  });
+  }
 
   // 3. Read overrides from workerAllowances
   const key = `${userId}-${currentMonthStr}`;
@@ -117,6 +122,10 @@ export function calculateUserAllowances(
     ? overrides.siteAllowanceOverride 
     : (calcSiteDays * 50000 + calcSiteFullDays * 10000);
 
+  const responsibilityAllowance = overrides.responsibilityAllowanceOverride !== undefined
+    ? overrides.responsibilityAllowanceOverride
+    : 0;
+
   return {
     calcFullDays,
     calcSiteDays,
@@ -126,8 +135,10 @@ export function calculateUserAllowances(
     siteFullDays: calcSiteFullDays,
     mealAllowance,
     siteAllowance,
+    responsibilityAllowance,
     isMealOverridden: overrides.mealAllowanceOverride !== undefined,
-    isSiteOverridden: overrides.siteAllowanceOverride !== undefined
+    isSiteOverridden: overrides.siteAllowanceOverride !== undefined,
+    isResponsibilityOverridden: overrides.responsibilityAllowanceOverride !== undefined
   };
 }
 
@@ -239,8 +250,7 @@ export function ProfileDashboard({
   const isWorker = ["production_worker", "installer"].includes(position.id);
 
   const allowances = useMemo(() => {
-    if (!isWorker) return { siteDays: 0, siteFullDays: 0, fullDays: 0, mealAllowance: 0, siteAllowance: 0 };
-    return calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances);
+    return calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances, isWorker);
   }, [isWorker, account.id, account.displayName, monthDays, attendance, orders, workerAllowances]);
 
   const basePay = useMemo(() => {
@@ -255,12 +265,8 @@ export function ProfileDashboard({
   }, [overtime, salaryValue]);
 
   const estimatedIncome = useMemo(() => {
-    let total = basePay + otPay;
-    if (isWorker) {
-      total += allowances.mealAllowance + allowances.siteAllowance;
-    }
-    return total;
-  }, [basePay, otPay, isWorker, allowances]);
+    return basePay + otPay + allowances.mealAllowance + allowances.siteAllowance + (allowances.responsibilityAllowance || 0);
+  }, [basePay, otPay, allowances]);
 
   const workRate = expectedDays ? Math.round((workDays / expectedDays) * 100) : 0;
   const myLeaveRequests = useMemo(() => leaveRequests.filter((request) => request.employeeId === account.id), [leaveRequests, account.id]);
@@ -445,9 +451,24 @@ export function ProfileDashboard({
           title="Thu nhập tạm tính" 
           value={`${Math.round(estimatedIncome).toLocaleString("vi-VN")} đ`} 
           sub={
-            isWorker
-              ? `Lương chính: ${Math.round(basePay).toLocaleString("vi-VN")}đ • Tăng ca: ${Math.round(otPay).toLocaleString("vi-VN")}đ • Ăn trưa (${allowances.fullDays}n): ${allowances.mealAllowance.toLocaleString("vi-VN")}đ • C.trình (${allowances.siteDays}n): ${allowances.siteAllowance.toLocaleString("vi-VN")}đ`
-              : salaryType === "monthly" ? "Tạm tính (Lương tháng / ngày công)" : "Tạm tính (Lương ngày + Tăng ca)"
+            (() => {
+              const parts = [
+                `Lương chính: ${Math.round(basePay).toLocaleString("vi-VN")}đ`
+              ];
+              if (otPay > 0) {
+                parts.push(`Tăng ca: ${Math.round(otPay).toLocaleString("vi-VN")}đ`);
+              }
+              if (allowances.mealAllowance > 0) {
+                parts.push(`Ăn trưa (${allowances.fullDays}n): ${Math.round(allowances.mealAllowance).toLocaleString("vi-VN")}đ`);
+              }
+              if (allowances.siteAllowance > 0) {
+                parts.push(`C.trình (${allowances.siteDays}n): ${Math.round(allowances.siteAllowance).toLocaleString("vi-VN")}đ`);
+              }
+              if (allowances.responsibilityAllowance > 0) {
+                parts.push(`Trách nhiệm: ${Math.round(allowances.responsibilityAllowance).toLocaleString("vi-VN")}đ`);
+              }
+              return parts.join(" • ");
+            })()
           } 
           tone="green" 
         />
@@ -823,26 +844,34 @@ export function CompanyPayrollDashboard({
     calcSiteFullDays: number;
     mealAllowance: number;
     siteAllowance: number;
+    responsibilityAllowance: number;
     isMealOverridden: boolean;
     isSiteOverridden: boolean;
+    isResponsibilityOverridden: boolean;
   } | null>(null);
 
   const [mealAllowanceVal, setMealAllowanceVal] = useState<number | "">("");
   const [siteAllowanceVal, setSiteAllowanceVal] = useState<number | "">("");
+  const [responsibilityAllowanceVal, setResponsibilityAllowanceVal] = useState<number | "">("");
   const [isMealEditable, setIsMealEditable] = useState<boolean>(false);
   const [isSiteEditable, setIsSiteEditable] = useState<boolean>(false);
+  const [isResponsibilityEditable, setIsResponsibilityEditable] = useState<boolean>(false);
 
   useEffect(() => {
     if (editingItem) {
       setMealAllowanceVal(editingItem.mealAllowance);
       setSiteAllowanceVal(editingItem.siteAllowance);
+      setResponsibilityAllowanceVal(editingItem.responsibilityAllowance);
       setIsMealEditable(editingItem.isMealOverridden);
       setIsSiteEditable(editingItem.isSiteOverridden);
+      setIsResponsibilityEditable(editingItem.isResponsibilityOverridden);
     } else {
       setMealAllowanceVal("");
       setSiteAllowanceVal("");
+      setResponsibilityAllowanceVal("");
       setIsMealEditable(false);
       setIsSiteEditable(false);
+      setIsResponsibilityEditable(false);
     }
   }, [editingItem]);
 
@@ -886,7 +915,7 @@ export function CompanyPayrollDashboard({
     const salaryValue = account.salaryValue ?? (account.positionIds.includes("hr") ? 420000 : account.positionIds.includes("accountant") ? 400000 : 350000);
     
     const isWorker = account.positionIds.some((id) => ["production_worker", "installer"].includes(id));
-    const allowances = calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances);
+    const allowances = calculateUserAllowances(account.id, account.displayName, monthDays, attendance, orders, workerAllowances, isWorker);
     
     const basePay = salaryType === "monthly"
       ? (maxWorkDays ? (salaryValue / maxWorkDays) * work : 0)
@@ -894,10 +923,7 @@ export function CompanyPayrollDashboard({
     
     const otPay = otHours * 1.5 * (salaryValue / 8);
 
-    let totalIncome = basePay + otPay;
-    if (isWorker) {
-      totalIncome += allowances.mealAllowance + allowances.siteAllowance;
-    }
+    let totalIncome = basePay + otPay + allowances.mealAllowance + allowances.siteAllowance + (allowances.responsibilityAllowance || 0);
 
     return { 
       account, 
@@ -950,10 +976,19 @@ export function CompanyPayrollDashboard({
                   <div>{Math.round(row.totalIncome).toLocaleString("vi-VN")} đ</div>
                   <div className="text-[10px] text-slate-400 font-normal leading-tight">
                     Lương chính: {Math.round(row.basePay).toLocaleString("vi-VN")} đ
-                    {row.isWorker && (
+                    {row.allowances.mealAllowance > 0 && (
                       <>
                         <br />Ăn trưa ({row.allowances.fullDays}n): {Math.round(row.allowances.mealAllowance).toLocaleString("vi-VN")} đ
+                      </>
+                    )}
+                    {row.allowances.siteAllowance > 0 && (
+                      <>
                         <br />Công trình ({row.allowances.siteDays}n): {Math.round(row.allowances.siteAllowance).toLocaleString("vi-VN")} đ
+                      </>
+                    )}
+                    {row.allowances.responsibilityAllowance > 0 && (
+                      <>
+                        <br />Trách nhiệm: {Math.round(row.allowances.responsibilityAllowance).toLocaleString("vi-VN")} đ
                       </>
                     )}
                     {row.otPay > 0 && (
@@ -964,26 +999,24 @@ export function CompanyPayrollDashboard({
                   </div>
                 </div>
                 <div className="text-center">
-                  {row.isWorker ? (
-                    <button
-                      onClick={() => setEditingItem({
-                        userId: row.account.id,
-                        displayName: row.account.displayName,
-                        calcFullDays: row.allowances.calcFullDays,
-                        calcSiteDays: row.allowances.calcSiteDays,
-                        calcSiteFullDays: row.allowances.calcSiteFullDays,
-                        mealAllowance: row.allowances.mealAllowance,
-                        siteAllowance: row.allowances.siteAllowance,
-                        isMealOverridden: row.allowances.isMealOverridden,
-                        isSiteOverridden: row.allowances.isSiteOverridden,
-                      })}
-                      className="rounded border border-orange-500 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-600 hover:bg-orange-100 transition animate-pulse"
-                    >
-                      Phụ cấp
-                    </button>
-                  ) : (
-                    <span className="text-xs text-slate-400">-</span>
-                  )}
+                  <button
+                    onClick={() => setEditingItem({
+                      userId: row.account.id,
+                      displayName: row.account.displayName,
+                      calcFullDays: row.allowances.calcFullDays,
+                      calcSiteDays: row.allowances.calcSiteDays,
+                      calcSiteFullDays: row.allowances.calcSiteFullDays,
+                      mealAllowance: row.allowances.mealAllowance,
+                      siteAllowance: row.allowances.siteAllowance,
+                      responsibilityAllowance: row.allowances.responsibilityAllowance,
+                      isMealOverridden: row.allowances.isMealOverridden,
+                      isSiteOverridden: row.allowances.isSiteOverridden,
+                      isResponsibilityOverridden: row.allowances.isResponsibilityOverridden,
+                    })}
+                    className="rounded border border-orange-500 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-600 hover:bg-orange-100 transition animate-pulse"
+                  >
+                    Phụ cấp
+                  </button>
                 </div>
               </div>
             );
@@ -1081,6 +1114,42 @@ export function CompanyPayrollDashboard({
                   )}
                 </div>
               </div>
+
+              <div className="grid gap-1">
+                <span className="font-bold text-slate-700">Phụ cấp trách nhiệm (VNĐ)</span>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="10000"
+                    disabled={!isResponsibilityEditable}
+                    value={responsibilityAllowanceVal}
+                    onChange={(e) => setResponsibilityAllowanceVal(e.target.value === "" ? "" : Number(e.target.value))}
+                    className="flex-1 rounded border border-slate-200 px-3 py-2 focus:border-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
+                    placeholder="Mặc định: 0 đ"
+                  />
+                  {!isResponsibilityEditable ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsResponsibilityEditable(true)}
+                      className="rounded border border-orange-500 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-600 hover:bg-orange-100 transition whitespace-nowrap"
+                    >
+                      Sửa
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsResponsibilityEditable(false);
+                        setResponsibilityAllowanceVal(0);
+                      }}
+                      className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
+                    >
+                      Tự động
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="mt-6 flex items-center justify-between gap-3 border-t pt-4">
@@ -1089,8 +1158,10 @@ export function CompanyPayrollDashboard({
                 onClick={() => {
                   setMealAllowanceVal(editingItem.calcFullDays * 30000);
                   setSiteAllowanceVal(editingItem.calcSiteDays * 50000 + editingItem.calcSiteFullDays * 10000);
+                  setResponsibilityAllowanceVal(0);
                   setIsMealEditable(false);
                   setIsSiteEditable(false);
+                  setIsResponsibilityEditable(false);
                 }}
                 className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
               >
@@ -1116,6 +1187,7 @@ export function CompanyPayrollDashboard({
                       [targetKey]: {
                         mealAllowanceOverride: isMealEditable && mealAllowanceVal !== "" ? Number(mealAllowanceVal) : undefined,
                         siteAllowanceOverride: isSiteEditable && siteAllowanceVal !== "" ? Number(siteAllowanceVal) : undefined,
+                        responsibilityAllowanceOverride: isResponsibilityEditable && responsibilityAllowanceVal !== "" ? Number(responsibilityAllowanceVal) : undefined,
                       }
                     };
                     onWorkerAllowancesChange?.(nextAllowances);

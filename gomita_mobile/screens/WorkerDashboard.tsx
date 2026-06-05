@@ -96,91 +96,96 @@ const calculateUserAllowances = (
   monthDays: Date[],
   attendance: Record<string, string>,
   orders: any[],
-  workerAllowances: Record<string, any>
+  workerAllowances: Record<string, any>,
+  isWorker: boolean
 ) => {
   const now = new Date();
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   // 1. Calculate calcFullDays
   let calcFullDays = 0;
-  monthDays.forEach((day) => {
-    const dayNum = day.getDate();
-    let morningChecked = false;
-    let afternoonChecked = false;
-    
-    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-    slotsForDay.forEach((slot) => {
-      const key = `${userId}-${dayNum}-${slot}`;
-      if (attendance[key] === "normal" || attendance[key] === "compensated") {
-        if (slot === "07:30" || slot === "11:30") morningChecked = true;
-        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+  if (isWorker) {
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      let morningChecked = false;
+      let afternoonChecked = false;
+      
+      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+      slotsForDay.forEach((slot) => {
+        const key = `${userId}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          if (slot === "07:30" || slot === "11:30") morningChecked = true;
+          if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+        }
+      });
+
+      if (morningChecked && afternoonChecked) {
+        calcFullDays += 1;
       }
     });
-
-    if (morningChecked && afternoonChecked) {
-      calcFullDays += 1;
-    }
-  });
+  }
 
   // 2. Calculate calcSiteDays and calcSiteFullDays
   let calcSiteDays = 0;
   let calcSiteFullDays = 0;
 
-  monthDays.forEach((day) => {
-    const dayNum = day.getDate();
-    const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+  if (isWorker) {
+    monthDays.forEach((day) => {
+      const dayNum = day.getDate();
+      const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
 
-    // Has user clocked in at all on this day?
-    let checkedCount = 0;
-    let morningChecked = false;
-    let afternoonChecked = false;
-    const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
-    slotsForDay.forEach((slot) => {
-      const key = `${userId}-${dayNum}-${slot}`;
-      if (attendance[key] === "normal" || attendance[key] === "compensated") {
-        checkedCount++;
-        if (slot === "07:30" || slot === "11:30") morningChecked = true;
-        if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
-      }
-    });
+      // Has user clocked in at all on this day?
+      let checkedCount = 0;
+      let morningChecked = false;
+      let afternoonChecked = false;
+      const slotsForDay = ["07:30", "11:30", "13:30", "17:30"];
+      slotsForDay.forEach((slot) => {
+        const key = `${userId}-${dayNum}-${slot}`;
+        if (attendance[key] === "normal" || attendance[key] === "compensated") {
+          checkedCount++;
+          if (slot === "07:30" || slot === "11:30") morningChecked = true;
+          if (slot === "13:30" || slot === "17:30") afternoonChecked = true;
+        }
+      });
 
-    if (checkedCount === 0) return; // Didn't work today
+      if (checkedCount === 0) return; // Didn't work today
 
-    // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
-    const hasSiteJob = orders.some((order) => {
-      if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
-        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-        const isAssigned = assignees.includes(displayName);
-        if (isAssigned && order.assignedInstallerDate === dateStr) {
-          return true;
+      // Was user assigned to "Lắp đặt" or "Nghiệm thu" of any active order on this day?
+      const hasSiteJob = orders.some((order) => {
+        if (["Lắp đặt", "Nghiệm thu"].includes(order.step)) {
+          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+          const isAssigned = assignees.includes(displayName);
+          if (isAssigned && order.assignedInstallerDate === dateStr) {
+            return true;
+          }
+        }
+
+        return (order.historyLogs || []).some((log: any) => {
+          const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
+          if (!isLắpĐặt) return false;
+
+          const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
+          const logAssignees = log.assignee ? [log.assignee] : [];
+          const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
+          if (!finalAssignees.includes(displayName)) return false;
+
+          const start = log.acceptedAt || log.startedAt;
+          if (!start) return false;
+          const startDateText = start.substring(0, 10);
+          const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
+
+          return dateStr >= startDateText && dateStr <= endDateText;
+        });
+      });
+
+      if (hasSiteJob) {
+        calcSiteDays += 1;
+        if (morningChecked && afternoonChecked) {
+          calcSiteFullDays += 1;
         }
       }
-
-      return (order.historyLogs || []).some((log: any) => {
-        const isLắpĐặt = ["Lắp đặt", "Nghiệm thu"].includes(log.step);
-        if (!isLắpĐặt) return false;
-
-        const assignees = (order.installerNames?.length ? order.installerNames : [order.installerName].filter(Boolean)) as string[];
-        const logAssignees = log.assignee ? [log.assignee] : [];
-        const finalAssignees = assignees.includes(displayName) ? assignees : logAssignees;
-        if (!finalAssignees.includes(displayName)) return false;
-
-        const start = log.acceptedAt || log.startedAt;
-        if (!start) return false;
-        const startDateText = start.substring(0, 10);
-        const endDateText = log.completedAt ? log.completedAt.substring(0, 10) : new Date().toISOString().substring(0, 10);
-
-        return dateStr >= startDateText && dateStr <= endDateText;
-      });
     });
-
-    if (hasSiteJob) {
-      calcSiteDays += 1;
-      if (morningChecked && afternoonChecked) {
-        calcSiteFullDays += 1;
-      }
-    }
-  });
+  }
 
   // 3. Read overrides from workerAllowances
   const key = `${userId}-${currentMonthStr}`;
@@ -194,6 +199,10 @@ const calculateUserAllowances = (
     ? overrides.siteAllowanceOverride 
     : (calcSiteDays * 50000 + calcSiteFullDays * 10000);
 
+  const responsibilityAllowance = overrides.responsibilityAllowanceOverride !== undefined
+    ? overrides.responsibilityAllowanceOverride
+    : 0;
+
   return {
     calcFullDays,
     calcSiteDays,
@@ -202,7 +211,8 @@ const calculateUserAllowances = (
     siteFullDays: calcSiteFullDays,
     fullDays: calcFullDays,
     mealAllowance,
-    siteAllowance
+    siteAllowance,
+    responsibilityAllowance
   };
 };
 
@@ -650,14 +660,14 @@ export function WorkerDashboard({
   }, [user.positionIds]);
 
   const allowances = useMemo(() => {
-    if (!isWorker) return { siteDays: 0, siteFullDays: 0, fullDays: 0, mealAllowance: 0, siteAllowance: 0 };
     return calculateUserAllowances(
       user.id, 
       user.displayName, 
       monthDays, 
       effectiveAttendance, 
       apiData?.orders || [], 
-      apiData?.workerAllowances || {}
+      apiData?.workerAllowances || {},
+      isWorker
     );
   }, [isWorker, user.id, user.displayName, monthDays, effectiveAttendance, apiData?.orders, apiData?.workerAllowances]);
 
@@ -673,12 +683,8 @@ export function WorkerDashboard({
   }, [otHours, salaryValue]);
 
   const estimatedIncome = useMemo(() => {
-    let total = basePay + otPay;
-    if (isWorker) {
-      total += allowances.mealAllowance + allowances.siteAllowance;
-    }
-    return total;
-  }, [basePay, otPay, isWorker, allowances]);
+    return basePay + otPay + allowances.mealAllowance + allowances.siteAllowance + (allowances.responsibilityAllowance || 0);
+  }, [basePay, otPay, allowances]);
 
   // Lọc công việc đang được giao của thợ hôm nay
   const activeJobs = useMemo(() => {
@@ -1531,22 +1537,30 @@ export function WorkerDashboard({
               <Text style={styles.breakdownLabel}>Lương chính ({workDays} ngày):</Text>
               <Text style={styles.breakdownValue}>{Math.round(basePay).toLocaleString("vi-VN")} đ</Text>
             </View>
-            {isWorker && (
-              <>
-                <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownLabel}>Phụ cấp ăn ({allowances.fullDays} ngày):</Text>
-                  <Text style={styles.breakdownValue}>{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</Text>
-                </View>
-                <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownLabel}>Phụ cấp công trình ({allowances.siteDays} ngày):</Text>
-                  <Text style={styles.breakdownValue}>{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</Text>
-                </View>
-              </>
+            {allowances.mealAllowance > 0 && (
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Phụ cấp ăn ({allowances.fullDays} ngày):</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.mealAllowance).toLocaleString("vi-VN")} đ</Text>
+              </View>
             )}
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Tăng ca ({otHours} giờ):</Text>
-              <Text style={styles.breakdownValue}>{Math.round(otPay).toLocaleString("vi-VN")} đ</Text>
-            </View>
+            {allowances.siteAllowance > 0 && (
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Phụ cấp công trình ({allowances.siteDays} ngày):</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.siteAllowance).toLocaleString("vi-VN")} đ</Text>
+              </View>
+            )}
+            {allowances.responsibilityAllowance > 0 && (
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Phụ cấp trách nhiệm:</Text>
+                <Text style={styles.breakdownValue}>{Math.round(allowances.responsibilityAllowance).toLocaleString("vi-VN")} đ</Text>
+              </View>
+            )}
+            {otPay > 0 && (
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Tăng ca ({otHours} giờ):</Text>
+                <Text style={styles.breakdownValue}>{Math.round(otPay).toLocaleString("vi-VN")} đ</Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.salaryMetrics}>
