@@ -1046,7 +1046,7 @@ export default function IphoneClockinPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: currentAccount.id,
-          date: currentDateKey,
+          date: String(currentTime.getDate()),
           slot: activeSlot,
           gps,
           time: new Date().toISOString()
@@ -1063,7 +1063,7 @@ export default function IphoneClockinPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: currentAccount.id,
-          date: currentDateKey,
+          date: String(currentTime.getDate()),
           slot: activeSlot,
           photo
         })

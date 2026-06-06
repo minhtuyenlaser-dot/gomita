@@ -687,7 +687,7 @@ export async function applyClockIn(payload: {
     throw new Error("Hôm nay là ngày nghỉ hoặc ngày lễ, không được chấm công.");
   }
 
-  const key = `${payload.userId}-${payload.date}-${payload.slot}`;
+  const key = toAttendanceKey(payload.userId, { date: payload.date, slot: payload.slot });
   state.attendance[key] = "normal";
 
   if (payload.photo || payload.gps) {
@@ -738,7 +738,7 @@ export async function attachAttendancePhoto(payload: {
   photo: string;
 }) {
   const state = await loadRuntimeState();
-  const key = `${payload.userId}-${payload.date}-${payload.slot}`;
+  const key = toAttendanceKey(payload.userId, { date: payload.date, slot: payload.slot });
   const current = state.attendanceDetails[key] || {
     gps: "",
     gpsAddress: "",
